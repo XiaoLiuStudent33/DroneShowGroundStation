@@ -42,3 +42,6 @@ Desktop.ini
 # Local backups and build logs
 Backups/
 BuildLogs/
+
+# Cesium cache
+*.sqlite
