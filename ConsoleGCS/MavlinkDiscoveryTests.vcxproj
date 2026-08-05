@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32"><Configuration>Debug</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32"><Configuration>Release</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{2E6AF099-1E31-4D82-9F2F-08C45197A511}</ProjectGuid>
+    <RootNamespace>MavlinkDiscoveryTests</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <IntDir>$(Platform)\$(Configuration)\MavlinkDiscoveryTests\</IntDir>
+    <OutDir>$(Platform)\$(Configuration)\</OutDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <AdditionalDependencies>%(AdditionalDependencies);ws2_32.lib</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="tests\MavlinkDiscoveryTests.cpp" />
+    <ClCompile Include="CommandManager.cpp" />
+    <ClCompile Include="MavlinkDiscoveryService.cpp" />
+    <ClCompile Include="MavlinkReadOnlyIngress.cpp" />
+    <ClCompile Include="MavlinkUdpReceiver.cpp" />
+    <ClCompile Include="ConsoleDSPGCSLoopbackTransport.cpp" />
+    <ClCompile Include="DSPGCSProductionTelemetryProvider.cpp" />
+    <ClCompile Include="DSPGCSTransportFactory.cpp" />
+    <ClCompile Include="DroneManager.cpp" />
+    <ClCompile Include="DroneSession.cpp" />
+    <ClCompile Include="CommandDispatcher.cpp" />
+    <ClCompile Include="ConsoleUI.cpp" />
+    <ClCompile Include="DataManager.cpp" />
+    <ClCompile Include="DroneCommandRequest.cpp" />
+    <ClCompile Include="FlightControl.cpp" />
+    <ClCompile Include="FlightData.cpp" />
+    <ClCompile Include="HoverTest.cpp" />
+    <ClCompile Include="MavlinkCommand.cpp" />
+    <ClCompile Include="MavlinkParser.cpp" />
+    <ClCompile Include="UdpClient.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="DroneDiscovery.h" />
+    <ClInclude Include="DroneManager.h" />
+    <ClInclude Include="DroneSession.h" />
+    <ClInclude Include="MavlinkDiscoveryService.h" />
+    <ClInclude Include="MavlinkDatagramSender.h" />
+    <ClInclude Include="MavlinkReadOnlyIngress.h" />
+    <ClInclude Include="MavlinkUdpReceiver.h" />
+    <ClInclude Include="ConsoleDSPGCSLoopbackTransport.h" />
+    <ClInclude Include="DSPGCSProductionTelemetryProvider.h" />
+    <ClInclude Include="SafetyConfig.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

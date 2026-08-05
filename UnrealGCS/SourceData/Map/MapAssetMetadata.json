@@ -1,0 +1,37 @@
+{
+  "assetName": "T_GCS_VenueMap",
+  "center": {
+    "latitude": 31.932471,
+    "longitude": 118.638531,
+    "heightMeters": 0.0
+  },
+  "groundCoverageMeters": {
+    "eastWest": 2000.0,
+    "northSouth": 2000.0
+  },
+  "projection": "EPSG:3857",
+  "projectedBounds": {
+    "xmin": 13205602.5479547,
+    "ymin": 3753271.34558791,
+    "xmax": 13207959.1708093,
+    "ymax": 3755627.96844241
+  },
+  "image": {
+    "widthPixels": 2048,
+    "heightPixels": 2048,
+    "groundMetersPerPixel": 0.9765625
+  },
+  "source": {
+    "service": "Esri ArcGIS World Imagery",
+    "endpoint": "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer",
+    "attributionRequirement": "Display the attribution supplied by the map service in the final product."
+  },
+  "runtime": {
+    "generatedByCode": false,
+    "textureAsset": "/Game/Map/Textures/T_GCS_VenueMap",
+    "materialAsset": "/Game/Map/Materials/M_GCS_2DMap",
+    "materialInstanceAsset": "/Game/Map/Materials/MI_GCS_2DMap",
+    "groundBlueprintAsset": "/Game/Blueprints/BP_GCS_2DMapGround",
+    "georeference": "CesiumGeoreference in /Game/Maps/DroneShowPlatform1"
+  }
+}

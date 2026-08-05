@@ -1,0 +1,88 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "DSPGCSProductionCommandTypes.generated.h"
+
+UENUM(BlueprintType)
+enum class EGCSProductionCommandType : uint8
+{
+	Arm,
+	Disarm,
+	Takeoff,
+	Land,
+	RTL,
+	SetMode,
+	HoverTest
+};
+
+/** Ground-station workflow mode; intentionally independent of APM flight mode. */
+UENUM(BlueprintType)
+enum class EGCSGroundStationControlMode : uint8
+{
+	Manual,
+	Autonomous
+};
+
+USTRUCT(BlueprintType)
+struct DRONESHOWPLATFORM1_API FGCSProductionCommandParameters
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	float TakeoffAltitudeMeters = 0.0f;
+
+	/** Target altitude used by the Phase 5.3 HoverTest state machine. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	float HoverAltitudeMeters = 0.0f;
+
+	/** Retained for protocol compatibility; Phase 5.3 does not use a duration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	float HoverDurationSeconds = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	int32 CustomMode = -1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	FString ModeName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	bool bStart = true;
+};
+
+USTRUCT(BlueprintType)
+struct DRONESHOWPLATFORM1_API FGCSProductionCommandResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone GCS|Command")
+	FString CommandID;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone GCS|Command")
+	FString DroneID;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone GCS|Command")
+	EGCSProductionCommandType CommandType = EGCSProductionCommandType::Arm;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone GCS|Command")
+	FString Source;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone GCS|Command")
+	FString AckState;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone GCS|Command")
+	FString ErrorCode;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone GCS|Command")
+	FString Detail;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone GCS|Command")
+	bool bSimulated = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone GCS|Command")
+	bool bFinal = false;
+};
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+	FGCSProductionCommandResultEvent,
+	const FGCSProductionCommandResult&,
+	Result);

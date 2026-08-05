@@ -1,0 +1,44 @@
+# Visual Studio
+.vs/
+Debug/
+Release/
+x64/
+x86/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# Unreal Engine generated files
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vscode/
+
+# Build artifacts
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.lib
+*.exp
+*.log
+
+# Local settings and secrets
+.env
+.env.*
+*.local
+*.key
+*.pem
+gcs-config.ini
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Local backups and build logs
+Backups/
+BuildLogs/

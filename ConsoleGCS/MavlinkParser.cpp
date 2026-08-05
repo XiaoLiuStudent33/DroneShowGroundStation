@@ -1,0 +1,269 @@
+﻿#include "MavlinkParser.h"
+
+#include <chrono>
+#include <cmath>
+#include <string>
+
+//==================================================
+// ArduPilot Copter 飞行模式转换
+//==================================================
+std::string MavlinkParser::GetModeName(int mode)
+{
+    switch (mode)
+    {
+    case 0:  return "STABILIZE";
+    case 1:  return "ACRO";
+    case 2:  return "ALT_HOLD";
+    case 3:  return "AUTO";
+    case 4:  return "GUIDED";
+    case 5:  return "LOITER";
+    case 6:  return "RTL";
+    case 7:  return "CIRCLE";
+    case 9:  return "LAND";
+    case 13: return "SPORT";
+    case 16: return "POSHOLD";
+    case 17: return "BRAKE";
+
+    default:
+        return "UNKNOWN";
+    }
+}
+
+//==================================================
+// 飞控类型
+//==================================================
+std::string MavlinkParser::GetAutopilotName(int type)
+{
+    switch (type)
+    {
+    case MAV_AUTOPILOT_ARDUPILOTMEGA:
+        return "ArduPilot";
+
+    case MAV_AUTOPILOT_PX4:
+        return "PX4";
+
+    default:
+        return "Unknown";
+    }
+}
+
+//==================================================
+// 飞机类型
+//==================================================
+std::string MavlinkParser::GetVehicleName(int type)
+{
+    switch (type)
+    {
+    case MAV_TYPE_QUADROTOR:
+        return "Quadrotor";
+
+    case MAV_TYPE_HEXAROTOR:
+        return "Hexarotor";
+
+    case MAV_TYPE_OCTOROTOR:
+        return "Octorotor";
+
+    case MAV_TYPE_FIXED_WING:
+        return "Plane";
+
+    default:
+        return "Unknown";
+    }
+}
+
+//==================================================
+// 飞控状态
+//==================================================
+std::string MavlinkParser::GetSystemStatusName(int status)
+{
+    switch (status)
+    {
+    case MAV_STATE_UNINIT:
+        return "UNINIT";
+
+    case MAV_STATE_BOOT:
+        return "BOOT";
+
+    case MAV_STATE_CALIBRATING:
+        return "CALIBRATING";
+
+    case MAV_STATE_STANDBY:
+        return "STANDBY";
+
+    case MAV_STATE_ACTIVE:
+        return "ACTIVE";
+
+    case MAV_STATE_CRITICAL:
+        return "CRITICAL";
+
+    case MAV_STATE_EMERGENCY:
+        return "EMERGENCY";
+
+    case MAV_STATE_POWEROFF:
+        return "POWEROFF";
+
+    default:
+        return "UNKNOWN";
+    }
+}
+
+//==================================================
+// MAVLink 数据解析
+//==================================================
+void MavlinkParser::Parse(
+    const mavlink_message_t& msg,
+    FlightData& data)
+{
+    switch (msg.msgid)
+    {
+        //--------------------------------------------------
+        // HEARTBEAT
+        //--------------------------------------------------
+    case MAVLINK_MSG_ID_HEARTBEAT:
+    {
+        mavlink_heartbeat_t hb;
+
+        mavlink_msg_heartbeat_decode(&msg, &hb);
+
+        data.systemID = msg.sysid;
+        data.componentID = msg.compid;
+
+        data.armed =
+            (hb.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)
+            != 0;
+
+        data.mode = hb.custom_mode;
+        data.modeName = GetModeName(hb.custom_mode);
+
+        data.online = true;
+        data.lastHeartbeat =
+            std::chrono::steady_clock::now();
+
+        data.autopilot = hb.autopilot;
+        data.autopilotName = GetAutopilotName(hb.autopilot);
+
+        data.vehicleType = hb.type;
+        data.vehicleName = GetVehicleName(hb.type);
+
+        data.systemStatus = hb.system_status;
+        data.systemStatusName = GetSystemStatusName(hb.system_status);
+
+        break;
+    }
+
+    //--------------------------------------------------
+    // ATTITUDE
+    //--------------------------------------------------
+    case MAVLINK_MSG_ID_ATTITUDE:
+    {
+        mavlink_attitude_t att;
+
+        mavlink_msg_attitude_decode(&msg, &att);
+
+        data.roll = att.roll;
+        data.pitch = att.pitch;
+        data.yaw = att.yaw;
+        data.attitudeValid = true;
+
+        break;
+    }
+
+    //--------------------------------------------------
+    // GPS
+    //--------------------------------------------------
+    case MAVLINK_MSG_ID_GLOBAL_POSITION_INT:
+    {
+        mavlink_global_position_int_t gps;
+
+
+        mavlink_msg_global_position_int_decode(
+            &msg,
+            &gps
+        );
+
+
+        data.latitude =
+            gps.lat / 1e7;
+
+
+        data.longitude =
+            gps.lon / 1e7;
+
+
+        // 海拔高度 AMSL
+        data.altitude =
+            gps.alt / 1000.0;
+
+
+        // 相对起飞点高度（飞控控制使用）
+        data.relativeAltitude =
+            gps.relative_alt / 1000.0;
+
+        const float velocityNorth =
+            gps.vx / 100.0f;
+        const float velocityEast =
+            gps.vy / 100.0f;
+        data.groundSpeed = std::sqrt(
+            velocityNorth * velocityNorth +
+            velocityEast * velocityEast);
+
+        data.altitudeValid = true;
+
+        break;
+    }
+
+    //--------------------------------------------------
+    // GPS质量
+    //--------------------------------------------------
+    case MAVLINK_MSG_ID_GPS_RAW_INT:
+    {
+        mavlink_gps_raw_int_t gps;
+
+        mavlink_msg_gps_raw_int_decode(&msg, &gps);
+
+        data.gpsFixType = gps.fix_type;
+        data.satellitesVisible = gps.satellites_visible;
+        data.gpsValid = gps.fix_type >= 3;
+
+        break;
+    }
+
+    //--------------------------------------------------
+    // 电池
+    //--------------------------------------------------
+    case MAVLINK_MSG_ID_SYS_STATUS:
+    {
+        mavlink_sys_status_t status;
+
+        mavlink_msg_sys_status_decode(&msg, &status);
+
+        data.batteryRemaining = status.battery_remaining;
+
+        break;
+    }
+
+    //--------------------------------------------------
+    // 命令确认
+    //--------------------------------------------------
+    case MAVLINK_MSG_ID_COMMAND_ACK:
+    {
+        mavlink_command_ack_t ack;
+
+        mavlink_msg_command_ack_decode(&msg, &ack);
+
+        data.commandAckValid = true;
+        data.lastAckCommand = ack.command;
+        data.lastAckResult = ack.result;
+        data.lastAckTime =
+            std::chrono::steady_clock::now();
+
+        break;
+    }
+
+    //--------------------------------------------------
+    // 默认
+    //--------------------------------------------------
+    default:
+        break;
+    }
+}

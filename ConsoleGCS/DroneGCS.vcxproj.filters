@@ -1,0 +1,195 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="源文件">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="头文件">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="资源文件">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Core">
+      <UniqueIdentifier>{c1a04dcd-2add-4615-9b1a-276741c30f49}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Protocol">
+      <UniqueIdentifier>{8d6f167f-bf3a-431b-a5af-8f38df3042ac}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="UI">
+      <UniqueIdentifier>{dfe39e07-a00f-4d07-a458-5618438829c6}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="AppConfig.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="ConsoleGCSApplication.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="ConsoleDSPGCSLoopbackTransport.cpp">
+      <Filter>Protocol</Filter>
+    </ClCompile>
+    <ClCompile Include="CommandDispatcher.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="CommandManager.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="CommandProtocol.cpp">
+      <Filter>Protocol</Filter>
+    </ClCompile>
+    <ClCompile Include="DroneControlService.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="DroneCommandRequest.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="DroneManager.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="DroneSession.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="MavlinkDiscoveryService.cpp">
+      <Filter>Protocol</Filter>
+    </ClCompile>
+    <ClCompile Include="MavlinkReadOnlyIngress.cpp">
+      <Filter>Protocol</Filter>
+    </ClCompile>
+    <ClCompile Include="MavlinkUdpReceiver.cpp">
+      <Filter>Protocol</Filter>
+    </ClCompile>
+    <ClCompile Include="DSPGCSProductionTelemetryProvider.cpp">
+      <Filter>Protocol</Filter>
+    </ClCompile>
+    <ClCompile Include="DSPGCSProductionCommandReceiver.cpp">
+      <Filter>Protocol</Filter>
+    </ClCompile>
+    <ClCompile Include="DSPGCSTransportConfigLoader.cpp">
+      <Filter>Protocol</Filter>
+    </ClCompile>
+    <ClCompile Include="DSPGCSTransportFactory.cpp">
+      <Filter>Protocol</Filter>
+    </ClCompile>
+    <ClCompile Include="UdpCommandServer.cpp">
+      <Filter>Protocol</Filter>
+    </ClCompile>
+    <ClCompile Include="main.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="UdpClient.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="FlightData.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="MavlinkParser.cpp">
+      <Filter>Protocol</Filter>
+    </ClCompile>
+    <ClCompile Include="DataManager.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="ConsoleUI.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="HoverTest.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="FlightControl.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="MavlinkCommand.cpp">
+      <Filter>Protocol</Filter>
+    </ClCompile>
+    <ClCompile Include="test.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="AppConfig.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="ConsoleGCSApplication.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="ConsoleDSPGCSLoopbackTransport.h">
+      <Filter>Protocol</Filter>
+    </ClInclude>
+    <ClInclude Include="CommandDispatcher.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="CommandManager.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="CommandProtocol.h">
+      <Filter>Protocol</Filter>
+    </ClInclude>
+    <ClInclude Include="DroneControlService.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="DroneCommandRequest.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="DroneManager.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="DroneSession.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="DroneDiscovery.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="MavlinkDiscoveryService.h">
+      <Filter>Protocol</Filter>
+    </ClInclude>
+    <ClInclude Include="MavlinkReadOnlyIngress.h">
+      <Filter>Protocol</Filter>
+    </ClInclude>
+    <ClInclude Include="MavlinkUdpReceiver.h">
+      <Filter>Protocol</Filter>
+    </ClInclude>
+    <ClInclude Include="DSPGCSProductionTelemetryProvider.h">
+      <Filter>Protocol</Filter>
+    </ClInclude>
+    <ClInclude Include="DSPGCSProductionCommandReceiver.h">
+      <Filter>Protocol</Filter>
+    </ClInclude>
+    <ClInclude Include="DSPGCSTransportConfigLoader.h">
+      <Filter>Protocol</Filter>
+    </ClInclude>
+    <ClInclude Include="SafetyConfig.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="UdpCommandServer.h">
+      <Filter>Protocol</Filter>
+    </ClInclude>
+    <ClInclude Include="UdpClient.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="FlightData.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="MavlinkParser.h">
+      <Filter>Protocol</Filter>
+    </ClInclude>
+    <ClInclude Include="DataManager.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="ConsoleUI.h">
+      <Filter>UI</Filter>
+    </ClInclude>
+    <ClInclude Include="HoverTest.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="FlightControl.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="MavlinkCommand.h">
+      <Filter>Protocol</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
