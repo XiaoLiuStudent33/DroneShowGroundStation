@@ -9,7 +9,7 @@ void UFleetManagerSubsystem::Deinitialize()
 {
 	DronesByID.Reset();
 	DroneOrder.Reset();
-	SelectedDroneID.Reset();
+	CurrentSelectedDroneID.Reset();
 	FleetRevision = 0;
 	Super::Deinitialize();
 }
@@ -35,9 +35,9 @@ bool UFleetManagerSubsystem::RemoveDrone(const FString& DroneID)
 	}
 
 	DroneOrder.RemoveSingle(DroneID);
-	if (SelectedDroneID.Equals(DroneID, ESearchCase::IgnoreCase))
+	if (CurrentSelectedDroneID.Equals(DroneID, ESearchCase::IgnoreCase))
 	{
-		SelectedDroneID.Reset();
+		CurrentSelectedDroneID.Reset();
 	}
 	OnFleetChanged.Broadcast();
 	return true;
@@ -66,15 +66,23 @@ bool UFleetManagerSubsystem::SelectDrone(const FString& DroneID)
 		return false;
 	}
 
-	if (FDroneData* PreviousSelection = DronesByID.Find(SelectedDroneID))
+	if (CurrentSelectedDroneID.Equals(DroneID, ESearchCase::IgnoreCase))
+	{
+		NewSelection->bSelected = true;
+		OnDroneSelected.Broadcast(CurrentSelectedDroneID);
+		return true;
+	}
+
+	if (FDroneData* PreviousSelection = DronesByID.Find(CurrentSelectedDroneID))
 	{
 		PreviousSelection->bSelected = false;
 		OnDroneUpdated.Broadcast(*PreviousSelection);
 	}
 
-	SelectedDroneID = DroneID;
+	CurrentSelectedDroneID = DroneID;
 	NewSelection->bSelected = true;
 	OnDroneUpdated.Broadcast(*NewSelection);
+	OnDroneSelected.Broadcast(CurrentSelectedDroneID);
 	return true;
 }
 
@@ -111,9 +119,9 @@ bool UFleetManagerSubsystem::ApplySnapshot(const FGCSFleetSnapshot& Snapshot)
 	}
 
 	FString NewSelectedDroneID;
-	if (NewDronesByID.Contains(SelectedDroneID))
+	if (NewDronesByID.Contains(CurrentSelectedDroneID))
 	{
-		NewSelectedDroneID = SelectedDroneID;
+		NewSelectedDroneID = CurrentSelectedDroneID;
 	}
 	else if (NewDronesByID.Contains(SnapshotSelectedDroneID))
 	{
@@ -122,8 +130,8 @@ bool UFleetManagerSubsystem::ApplySnapshot(const FGCSFleetSnapshot& Snapshot)
 
 	DronesByID = MoveTemp(NewDronesByID);
 	DroneOrder = MoveTemp(NewDroneOrder);
-	SelectedDroneID = MoveTemp(NewSelectedDroneID);
-	if (FDroneData* SelectedDrone = DronesByID.Find(SelectedDroneID))
+	CurrentSelectedDroneID = MoveTemp(NewSelectedDroneID);
+	if (FDroneData* SelectedDrone = DronesByID.Find(CurrentSelectedDroneID))
 	{
 		SelectedDrone->bSelected = true;
 	}
@@ -230,7 +238,7 @@ bool UFleetManagerSubsystem::GetDroneByID(
 
 bool UFleetManagerSubsystem::GetSelectedDrone(FDroneData& OutDroneData) const
 {
-	const FDroneData* SelectedDrone = DronesByID.Find(SelectedDroneID);
+	const FDroneData* SelectedDrone = DronesByID.Find(CurrentSelectedDroneID);
 
 	if (!SelectedDrone)
 	{

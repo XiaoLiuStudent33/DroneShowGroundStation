@@ -281,16 +281,22 @@ DroneSessionCommandSubmission DroneSession::SubmitCommand(
         return submission;
 
     case DroneCommandType::SetMode:
-        if (request.parameters.customMode != 4)
+        if (!ArduCopterCustomMode::IsSupported(request.parameters.customMode))
         {
-            submission.error = "only GUIDED mode is allowed in Phase 7.1 real-command mode";
+            submission.error = "unsupported ArduPilot Copter flight mode";
             return submission;
         }
 
-        ConsoleUI::AddLog(requestPrefix + "SET_MODE GUIDED Command");
-        submission.dispatchRequestIds.push_back(dispatcher.QueueGuided(
+        ConsoleUI::AddLog(
+            requestPrefix + "SET_MODE " +
+            ArduCopterCustomMode::Name(request.parameters.customMode) +
+            " target_system=" + std::to_string(commandTarget.systemID) +
+            " base_mode=" + std::to_string(MAV_MODE_FLAG_CUSTOM_MODE_ENABLED) +
+            " custom_mode=" + std::to_string(request.parameters.customMode));
+        submission.dispatchRequestIds.push_back(dispatcher.QueueSetMode(
             commandTarget.systemID,
-            commandTarget.componentID));
+            commandTarget.componentID,
+            static_cast<std::uint8_t>(request.parameters.customMode)));
         submission.accepted = true;
         return submission;
 
@@ -422,9 +428,20 @@ bool DroneSession::ApplyDiscoveredHeartbeat(
         return false;
     }
 
+    const int previousMode = workingData.mode;
+    const std::string previousModeName = workingData.modeName;
     parser.Parse(message, workingData);
     dataManager.Update(workingData);
     SetState(DroneSessionState::Online);
+    if (previousMode != workingData.mode || previousModeName != workingData.modeName)
+    {
+        ConsoleUI::AddLog(
+            "[HEARTBEAT] " + config.droneId +
+            " Mode=" + workingData.modeName +
+            " custom_mode=" + std::to_string(workingData.mode) +
+            " endpoint=" + config.targetIp + ":" +
+            std::to_string(config.targetPort));
+    }
     return true;
 }
 
@@ -533,11 +550,21 @@ void DroneSession::SetState(DroneSessionState newState)
         return;
     }
 
+    const DroneSessionState previousState = state;
     state = newState;
-    ConsoleUI::AddLog(
-        SessionPrefix(config.droneId) +
-        "Session state=" + DroneSessionStateName(state) +
-        " SYSID=" + std::to_string(GetSysId()));
+
+    if (state == DroneSessionState::Online)
+    {
+        ConsoleUI::AddLog(config.droneId + " ONLINE");
+    }
+    else if (previousState == DroneSessionState::Online)
+    {
+        ConsoleUI::AddLog(config.droneId + " OFFLINE");
+    }
+    else if (state == DroneSessionState::Error)
+    {
+        ConsoleUI::AddLog(config.droneId + " ERROR");
+    }
 }
 
 void DroneSession::SendHeartbeat()
@@ -557,14 +584,7 @@ void DroneSession::SendHeartbeat()
 
     const std::uint16_t length =
         mavlink_msg_to_send_buffer(buffer, &message);
-    const bool sent = udp.Send(buffer, length);
-    ConsoleUI::AddLog(
-        "[GCS_HEARTBEAT] " + config.droneId +
-        " source=" + config.localIp + ":" +
-        std::to_string(config.localPort) +
-        " target=" + config.targetIp + ":" +
-        std::to_string(config.targetPort) +
-        " result=" + (sent ? "true" : "false"));
+    (void)udp.Send(buffer, length);
 }
 
 void DroneSession::RequestDataStream(

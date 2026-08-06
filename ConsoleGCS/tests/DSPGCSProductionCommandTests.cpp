@@ -217,6 +217,32 @@ int main()
         DSPGCSProductionCommandReceiver::ValidateRealCommand(multiDroneHover).allowed,
         "real eight-drone 5m HOVER_TEST accepted by safety policy");
 
+    for (const int customMode :
+        { ArduCopterCustomMode::Stabilize,
+          ArduCopterCustomMode::Auto,
+          ArduCopterCustomMode::Guided })
+    {
+        dspgcs::CommandRequestDTO modeRequest;
+        modeRequest.commandType = dspgcs::CommandType::SetMode;
+        modeRequest.targetDroneIds = fiveTargets;
+        modeRequest.parameters.customMode = customMode;
+        const std::string validationMessage =
+            std::string("real five-drone ") +
+            ArduCopterCustomMode::Name(customMode) +
+            " accepted by safety policy";
+        passed &= Check(
+            DSPGCSProductionCommandReceiver::ValidateRealCommand(modeRequest).allowed,
+            validationMessage.c_str());
+    }
+
+    dspgcs::CommandRequestDTO invalidModeRequest;
+    invalidModeRequest.commandType = dspgcs::CommandType::SetMode;
+    invalidModeRequest.targetDroneIds = fiveTargets;
+    invalidModeRequest.parameters.customMode = 42;
+    passed &= Check(
+        !DSPGCSProductionCommandReceiver::ValidateRealCommand(invalidModeRequest).allowed,
+        "unsupported Copter custom mode rejected by safety policy");
+
     passed &= Check(
         ueTransport->Send(MakeCommandFrame(
             "UE-TEST-ARM-5",
@@ -239,6 +265,26 @@ int main()
             0.0f,
             4)),
         "multi GUIDED frame sent");
+    passed &= Check(
+        ueTransport->Send(MakeCommandFrame(
+            "UE-TEST-STABILIZE-5",
+            dspgcs::CommandType::SetMode,
+            fiveTargets,
+            0.0f,
+            0.0f,
+            0.0f,
+            0)),
+        "multi STABILIZE frame sent");
+    passed &= Check(
+        ueTransport->Send(MakeCommandFrame(
+            "UE-TEST-AUTO-3",
+            dspgcs::CommandType::SetMode,
+            threeTargets,
+            0.0f,
+            0.0f,
+            0.0f,
+            3)),
+        "multi AUTO frame sent");
     passed &= Check(
         ueTransport->Send(MakeCommandFrame(
             "UE-TEST-TAKEOFF-5",
@@ -285,7 +331,7 @@ int main()
             });
         {
             std::lock_guard<std::mutex> lock(resultMutex);
-            if (results.size() >= 7) break;
+            if (results.size() >= 9) break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -307,6 +353,8 @@ int main()
         { "UE-TEST-ARM-5", fiveTargets },
         { "UE-TEST-DISARM-3", threeTargets },
         { "UE-TEST-GUIDED-8", eightTargets },
+        { "UE-TEST-STABILIZE-5", fiveTargets },
+        { "UE-TEST-AUTO-3", threeTargets },
         { "UE-TEST-TAKEOFF-5", fiveTargets },
         { "UE-TEST-RTL-8", eightTargets },
         { "UE-TEST-STOP-3", threeTargets, false },
@@ -411,7 +459,7 @@ int main()
             "manual LAND ended the selected Session hover state");
     }
     passed &= Check(
-        commandReceiver.GetReceivedCommandCount() == 8,
+        commandReceiver.GetReceivedCommandCount() == 10,
         "HoverTest generated no automatic LAND/RTL command");
 
     ueTransport->Stop();
@@ -422,9 +470,9 @@ int main()
     std::cout
         << "DSP-GCS COMMAND PASS\n"
         << "targetSizes=N3,N5,N8 dynamicTaskExpansion=PASS\n"
-        << "multiArm=5 multiDisarm=3 multiGuided=8 multiTakeoff=5\n"
+        << "multiArm=5 multiDisarm=3 multiStabilize=5 multiAuto=3 multiGuided=8 multiTakeoff=5\n"
         << "multiLand=5 multiRTL=8 multiStop=3 multiHover=5\n"
-        << "commandBatches=8 resultsMatchTargetCount=PASS\n"
+        << "commandBatches=10 resultsMatchTargetCount=PASS\n"
         << "N5 Hovering=5 WaitingCommand=5 manualLand=5 "
            "automaticLand=0 automaticRTL=0\n"
         << "realMultiTarget=ALLOWED realTakeoff5m=ALLOWED_BY_POLICY "

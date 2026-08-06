@@ -52,6 +52,11 @@ public:
         std::uint8_t system,
         std::uint8_t component);
 
+    std::uint64_t QueueSetMode(
+        std::uint8_t system,
+        std::uint8_t component,
+        std::uint8_t customMode);
+
     std::uint64_t QueueTakeoff(
         std::uint8_t system,
         std::uint8_t component,
@@ -82,7 +87,7 @@ private:
     {
         Arm,
         Disarm,
-        Guided,
+        SetMode,
         Takeoff,
         Land,
         RTL,
@@ -97,6 +102,7 @@ private:
         std::uint8_t component = 0;
         std::uint16_t expectedAckCommand = 0;
         float altitude = 0.0f;
+        std::uint8_t customMode = 0;
         int attempts = 0;
         bool sent = false;
         std::chrono::steady_clock::time_point sentAt{};
@@ -108,7 +114,8 @@ private:
         std::uint8_t component,
         std::uint16_t expectedAckCommand,
         float altitude,
-        bool safetyPriority);
+        bool safetyPriority,
+        std::uint8_t customMode = 0);
 
     bool Send(const Request& request);
 

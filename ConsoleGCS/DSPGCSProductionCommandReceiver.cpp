@@ -173,11 +173,11 @@ DSPGCSProductionCommandReceiver::ValidateRealCommand(
         return validation;
     }
     if (request.commandType == dspgcs::CommandType::SetMode &&
-        request.parameters.customMode != 4)
+        !ArduCopterCustomMode::IsSupported(request.parameters.customMode))
     {
-        validation.errorCode = "REAL_COMMAND_GUIDED_ONLY";
+        validation.errorCode = "REAL_COMMAND_MODE_NOT_ALLOWED";
         validation.errorMessage =
-            "Phase 7.1 real SET_MODE only permits GUIDED (customMode=4)";
+            "Real SET_MODE permits ArduPilot Copter STABILIZE(0), AUTO(3), or GUIDED(4)";
         return validation;
     }
 

@@ -11,6 +11,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 	FDroneDataUpdatedEvent,
 	const FDroneData&,
 	DroneData);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+	FDroneSelectedEvent,
+	const FString&,
+	DroneID);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FFleetDataBatchAppliedEvent,
 	int64,
@@ -67,11 +71,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Fleet")
 	bool GetSelectedDrone(FDroneData& OutDroneData) const;
 
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|Fleet")
+	FString GetCurrentSelectedDroneID() const { return CurrentSelectedDroneID; }
+
 	UPROPERTY(BlueprintAssignable, Category = "Drone GCS|Fleet")
 	FFleetChangedEvent OnFleetChanged;
 
 	UPROPERTY(BlueprintAssignable, Category = "Drone GCS|Fleet")
 	FDroneDataUpdatedEvent OnDroneUpdated;
+
+	UPROPERTY(BlueprintAssignable, Category = "Drone GCS|Fleet")
+	FDroneSelectedEvent OnDroneSelected;
 
 	UPROPERTY(BlueprintAssignable, Category = "Drone GCS|Fleet")
 	FFleetDataBatchAppliedEvent OnDataBatchApplied;
@@ -84,7 +94,7 @@ private:
 	TArray<FString> DroneOrder;
 
 	UPROPERTY()
-	FString SelectedDroneID;
+	FString CurrentSelectedDroneID;
 
 	UPROPERTY()
 	int64 FleetRevision = 0;

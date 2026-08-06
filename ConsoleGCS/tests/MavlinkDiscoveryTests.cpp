@@ -36,7 +36,8 @@ namespace
 
     std::vector<std::uint8_t> MakeHeartbeatDatagram(
         const std::uint8_t systemId,
-        const std::uint8_t componentId = MAV_COMP_ID_AUTOPILOT1)
+        const std::uint8_t componentId = MAV_COMP_ID_AUTOPILOT1,
+        const std::uint32_t customMode = 5)
     {
         mavlink_message_t message{};
         mavlink_msg_heartbeat_pack(
@@ -46,7 +47,7 @@ namespace
             MAV_TYPE_QUADROTOR,
             MAV_AUTOPILOT_ARDUPILOTMEGA,
             MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-            5,
+            customMode,
             MAV_STATE_STANDBY);
 
         std::vector<std::uint8_t> bytes(MAVLINK_MAX_PACKET_LEN);
@@ -81,10 +82,11 @@ namespace
         MavlinkDiscoveryService& discovery,
         const std::uint8_t systemId,
         const std::string& sourceIp,
-        const std::uint16_t sourcePort = 10005)
+        const std::uint16_t sourcePort = 10005,
+        const std::uint32_t customMode = 5)
     {
         const std::vector<std::uint8_t> bytes =
-            MakeHeartbeatDatagram(systemId);
+            MakeHeartbeatDatagram(systemId, MAV_COMP_ID_AUTOPILOT1, customMode);
         return discovery.IngestDatagram(
             bytes.data(),
             bytes.size(),
@@ -637,6 +639,38 @@ int main()
         Expect(telemetry.batteryRemaining == 87, "Drone001 battery failed");
         Expect(telemetry.modeName == "LOITER", "Drone001 mode failed");
         std::cout << "Drone001 telemetry GPS/Altitude/Battery/Mode applied\n";
+
+        struct ExpectedHeartbeatMode
+        {
+            std::uint32_t customMode;
+            const char* name;
+        };
+        const ExpectedHeartbeatMode expectedHeartbeatModes[] =
+        {
+            { 0, "STABILIZE" },
+            { 3, "AUTO" },
+            { 4, "GUIDED" }
+        };
+        for (const ExpectedHeartbeatMode& expected : expectedHeartbeatModes)
+        {
+            Expect(
+                SendHeartbeat(
+                    discovery,
+                    1,
+                    "192.168.1.145",
+                    10005,
+                    expected.customMode) == MavlinkDiscoveryResult::Refreshed,
+                std::string(expected.name) + " heartbeat was not routed");
+            const FlightData modeTelemetry = drone001->GetFlightData();
+            Expect(
+                modeTelemetry.mode == static_cast<int>(expected.customMode) &&
+                modeTelemetry.modeName == expected.name,
+                std::string(expected.name) + " heartbeat mode was not applied");
+            std::cout
+                << "HEARTBEAT MODE " << expected.name
+                << " custom_mode=" << expected.customMode
+                << " applied to Drone001\n";
+        }
 
         dspgcs::DSPGCSTransportConfig receiverConfig;
         receiverConfig.type = dspgcs::TransportType::Loopback;

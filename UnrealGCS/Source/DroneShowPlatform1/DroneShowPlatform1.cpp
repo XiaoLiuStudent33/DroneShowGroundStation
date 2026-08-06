@@ -34,6 +34,20 @@ public:
 	}
 
 private:
+	static void ConfigureGroundStationInput(APlayerController* PlayerController)
+	{
+		if (!PlayerController)
+		{
+			return;
+		}
+
+		PlayerController->bShowMouseCursor = true;
+		FInputModeGameAndUI InputMode;
+		InputMode.SetHideCursorDuringCapture(false);
+		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		PlayerController->SetInputMode(InputMode);
+	}
+
 	static void CreatePrototypeUI(const TWeakObjectPtr<UWorld> WeakWorld)
 	{
 		UWorld* World = WeakWorld.Get();
@@ -47,6 +61,7 @@ private:
 		{
 			return;
 		}
+		ConfigureGroundStationInput(PlayerController);
 
 		const TSubclassOf<UUserWidget> MainWidgetClass = LoadClass<UUserWidget>(
 			nullptr,
@@ -99,11 +114,6 @@ private:
 			}
 		}
 
-		PlayerController->bShowMouseCursor = true;
-		FInputModeGameAndUI InputMode;
-		InputMode.SetHideCursorDuringCapture(false);
-		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-		PlayerController->SetInputMode(InputMode);
 	}
 
 	void HandleWorldInitialized(UWorld* World, const UWorld::InitializationValues)

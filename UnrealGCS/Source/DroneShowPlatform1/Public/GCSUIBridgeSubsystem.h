@@ -7,8 +7,12 @@
 #include "GCSUIBridgeSubsystem.generated.h"
 
 class UButton;
+class UGCSDroneRowView;
 class UTextBlock;
 class UUserWidget;
+struct FGeometry;
+struct FPointerEvent;
+class FReply;
 
 enum class EGCSMainPage : uint8
 {
@@ -27,6 +31,17 @@ class DRONESHOWPLATFORM1_API UGCSUIBridgeSubsystem final : public UGameInstanceS
 public:
 	void BindMainWidget(UUserWidget* MainWidget);
 	virtual void Deinitialize() override;
+
+	// Detail presentation interface. The authoritative state remains in
+	// FleetManager; this method only copies one selected snapshot into UMG.
+	UFUNCTION(BlueprintCallable, Category = "Drone GCS|UI")
+	void UpdateDroneInfo(const FDroneData& DroneData);
+
+	UFUNCTION(BlueprintCallable, Category = "Drone GCS|UI")
+	void SetCommandDroneSelected(const FString& DroneID, bool bSelected);
+
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|UI")
+	TArray<FString> GetSelectedCommandDroneIDs() const;
 
 private:
 	UFUNCTION()
@@ -115,6 +130,9 @@ private:
 	void HandleDroneDataUpdated(const FDroneData& DroneData);
 
 	UFUNCTION()
+	void HandleSelectedDroneChanged(const FString& DroneID);
+
+	UFUNCTION()
 	void HandleFleetDataBatchApplied(int64 FleetRevision, int32 UpdatedDroneCount);
 
 	UUserWidget* ResolveDroneDetail(UUserWidget* MainWidget) const;
@@ -129,9 +147,21 @@ private:
 	void SetFleetText(const FName Name, const FString& Value) const;
 	void SetTopBarText(const FName Name, const FString& Value) const;
 	void RefreshFromFleet();
-	void RefreshFleetRows(const TArray<FDroneData>& Drones, int32 TotalCount);
+	void RefreshFleetRows(
+		const TArray<FDroneData>& Drones,
+		int32 TotalCount,
+		const FString& CurrentSelectedDroneID);
+	FReply HandleFleetRowMouseButtonDown(
+		const FGeometry& Geometry,
+		const FPointerEvent& MouseEvent,
+		int32 RowIndex);
+	void HandleFleetRowDetailClicked(int32 RowIndex);
 	void HandleFleetRowSelectionClicked(int32 RowIndex);
-	void ApplyDroneData(const FDroneData& DroneData);
+	void InitializeFleetRowViews();
+	void UpdateFleetRowView(
+		int32 RowIndex,
+		const FString& DroneID,
+		const FString& CurrentSelectedDroneID);
 	void SubmitSelectedProductionCommand(
 		EGCSProductionCommandType CommandType,
 		const FGCSProductionCommandParameters& Parameters = {});
@@ -164,6 +194,10 @@ private:
 	FString LastCommandResultText;
 	TSet<FString> SelectedCommandDroneIDs;
 	TArray<FString> CurrentFleetPageDroneIDs;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UGCSDroneRowView>> FleetRowViews;
+
 	int32 FleetPageOffset = 0;
 	static constexpr int32 FleetPageSize = 5;
 	float HoverAltitudeMeters = 5.0f;

@@ -39,13 +39,22 @@ std::uint64_t CommandDispatcher::QueueGuided(
     std::uint8_t system,
     std::uint8_t component)
 {
+    return QueueSetMode(system, component, 4);
+}
+
+std::uint64_t CommandDispatcher::QueueSetMode(
+    std::uint8_t system,
+    std::uint8_t component,
+    std::uint8_t customMode)
+{
     return Queue(
-        Action::Guided,
+        Action::SetMode,
         system,
         component,
         0,
         0.0f,
-        false);
+        false,
+        customMode);
 }
 
 std::uint64_t CommandDispatcher::QueueTakeoff(
@@ -107,7 +116,8 @@ std::uint64_t CommandDispatcher::Queue(
     std::uint8_t component,
     std::uint16_t expectedAckCommand,
     float altitude,
-    bool safetyPriority)
+    bool safetyPriority,
+    std::uint8_t customMode)
 {
     std::lock_guard<std::mutex> lock(mutex);
 
@@ -118,6 +128,7 @@ std::uint64_t CommandDispatcher::Queue(
     request.component = component;
     request.expectedAckCommand = expectedAckCommand;
     request.altitude = altitude;
+    request.customMode = customMode;
 
     if (system == 0 ||
         component == 0 ||
@@ -274,11 +285,11 @@ bool CommandDispatcher::Send(
             request.system,
             request.component);
 
-    case Action::Guided:
-        return MavlinkCommand::Guided(
+    case Action::SetMode:
+        return MavlinkCommand::SetMode(
             udp,
             request.system,
-            request.component);
+            request.customMode);
 
     case Action::Takeoff:
         return MavlinkCommand::Takeoff(

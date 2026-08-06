@@ -16,6 +16,31 @@ enum class DroneCommandType
     HoverTest
 };
 
+// ArduPilot Copter custom_mode values used by the current GCS mode controls.
+// These are intentionally kept separate from PX4 main/sub-mode encodings.
+namespace ArduCopterCustomMode
+{
+    inline constexpr int Stabilize = 0;
+    inline constexpr int Auto = 3;
+    inline constexpr int Guided = 4;
+
+    inline bool IsSupported(const int mode)
+    {
+        return mode == Stabilize || mode == Auto || mode == Guided;
+    }
+
+    inline const char* Name(const int mode)
+    {
+        switch (mode)
+        {
+        case Stabilize: return "STABILIZE";
+        case Auto: return "AUTO";
+        case Guided: return "GUIDED";
+        default: return "UNKNOWN";
+        }
+    }
+}
+
 const char* DroneCommandTypeName(DroneCommandType type);
 
 struct DroneCommandParameters

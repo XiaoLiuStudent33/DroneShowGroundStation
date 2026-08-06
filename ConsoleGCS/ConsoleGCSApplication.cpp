@@ -18,12 +18,43 @@
 
 #include <algorithm>
 #include <chrono>
-#include <conio.h>
 #include <iostream>
-#include <limits>
 #include <string>
 #include <unordered_set>
 #include <utility>
+#include <vector>
+
+namespace
+{
+    std::vector<ConsoleDroneStatus> BuildConsoleFleetStatus(
+        const std::vector<DroneSession*>& sessions)
+    {
+        std::vector<ConsoleDroneStatus> statusRows;
+        statusRows.reserve(sessions.size());
+
+        for (const DroneSession* session : sessions)
+        {
+            if (session == nullptr)
+            {
+                continue;
+            }
+
+            statusRows.push_back(ConsoleDroneStatus{
+                session->GetDroneId(),
+                session->GetFlightData().online });
+        }
+
+        std::sort(
+            statusRows.begin(),
+            statusRows.end(),
+            [](const ConsoleDroneStatus& left, const ConsoleDroneStatus& right)
+            {
+                return left.droneId < right.droneId;
+            });
+
+        return statusRows;
+    }
+}
 
 int ConsoleGCSApplication::Run(int argc, char* argv[])
 {
@@ -85,7 +116,7 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
         (appConfig.mavlinkNetworkEnabled || mavlinkControlEnabled
             ? "true"
             : "false"));
-    ConsoleUI::AddLog("ConnectedDroneCount=0");
+    ConsoleUI::UpdateFleet({});
 
     return appConfig.mavlinkNetworkEnabled
         ? RunReadOnlyMavlink(appConfig)
@@ -141,9 +172,6 @@ int ConsoleGCSApplication::RunReadOnlyMavlink(
         discoveredSessionDefaults);
     MavlinkReadOnlyIngress ingress(droneManager, discovery);
     std::unordered_set<std::string> announcedDroneIds;
-    std::size_t lastConnectedDroneCount =
-        (std::numeric_limits<std::size_t>::max)();
-
     DSPGCSProductionTelemetryProvider telemetryProvider;
     if (appConfig.dspgcsCommandEnabled)
     {
@@ -259,41 +287,11 @@ int ConsoleGCSApplication::RunReadOnlyMavlink(
             }
         }
 
-        if (_kbhit())
-        {
-            (void)_getch();
-            ConsoleUI::AddLog(
-                "Control key ignored: production commands must use DSP-GCS");
-        }
-
         if (now - lastRefresh >= std::chrono::seconds(1))
         {
             const std::vector<DroneSession*> sessions =
                 droneManager.GetAllDrones();
-            const std::size_t connectedDroneCount =
-                static_cast<std::size_t>(std::count_if(
-                    sessions.begin(),
-                    sessions.end(),
-                    [](const DroneSession* session)
-                    {
-                        return session != nullptr &&
-                            session->GetFlightData().online;
-                    }));
-            if (connectedDroneCount != lastConnectedDroneCount)
-            {
-                ConsoleUI::AddLog(
-                    "ConnectedDroneCount=" +
-                    std::to_string(connectedDroneCount));
-                lastConnectedDroneCount = connectedDroneCount;
-            }
-            if (!sessions.empty())
-            {
-                DroneSession* displayedSession = sessions.front();
-                ConsoleUI::Update(
-                    displayedSession->GetDroneId(),
-                    displayedSession->GetFlightData(),
-                    displayedSession->GetHoverTest());
-            }
+            ConsoleUI::UpdateFleet(BuildConsoleFleetStatus(sessions));
             lastRefresh = now;
         }
 
@@ -339,8 +337,6 @@ int ConsoleGCSApplication::RunLegacySingleSession(
         " Session=" + DroneSessionStateName(activeSession->GetState()));
 
     auto lastRefresh = std::chrono::steady_clock::now();
-    std::size_t lastConnectedDroneCount =
-        (std::numeric_limits<std::size_t>::max)();
 
     while (true)
     {
@@ -348,28 +344,10 @@ int ConsoleGCSApplication::RunLegacySingleSession(
         droneManager.TickAll(now);
         commandManager.Tick();
 
-        if (_kbhit())
-        {
-            commandManager.HandleConsoleKey(
-                _getch(),
-                activeSession->GetDroneId());
-        }
-
         if (now - lastRefresh >= std::chrono::seconds(1))
         {
-            const std::size_t connectedDroneCount =
-                activeSession->GetFlightData().online ? 1u : 0u;
-            if (connectedDroneCount != lastConnectedDroneCount)
-            {
-                ConsoleUI::AddLog(
-                    "ConnectedDroneCount=" +
-                    std::to_string(connectedDroneCount));
-                lastConnectedDroneCount = connectedDroneCount;
-            }
-            ConsoleUI::Update(
-                activeSession->GetDroneId(),
-                activeSession->GetFlightData(),
-                activeSession->GetHoverTest());
+            ConsoleUI::UpdateFleet(
+                BuildConsoleFleetStatus(droneManager.GetAllDrones()));
             lastRefresh = now;
         }
 

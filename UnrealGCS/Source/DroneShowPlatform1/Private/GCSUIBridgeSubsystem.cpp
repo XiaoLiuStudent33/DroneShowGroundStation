@@ -8,6 +8,10 @@
 #include "Components/Widget.h"
 #include "DSPGCSProductionCommandProviderSubsystem.h"
 #include "FleetManagerSubsystem.h"
+#include "GCSDroneRowView.h"
+#include "Input/Events.h"
+#include "InputCoreTypes.h"
+#include "Widgets/SWidget.h"
 
 void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 {
@@ -70,6 +74,8 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 		Fleet->OnFleetChanged.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetChanged);
 		Fleet->OnDroneUpdated.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleDroneDataUpdated);
 		Fleet->OnDroneUpdated.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleDroneDataUpdated);
+		Fleet->OnDroneSelected.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleSelectedDroneChanged);
+		Fleet->OnDroneSelected.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleSelectedDroneChanged);
 		Fleet->OnDataBatchApplied.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetDataBatchApplied);
 		Fleet->OnDataBatchApplied.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetDataBatchApplied);
 		RefreshFromFleet();
@@ -85,6 +91,14 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 			this,
 			&UGCSUIBridgeSubsystem::HandleProductionCommandResult);
 	}
+	if (UFleetManagerSubsystem* Fleet =
+		GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>())
+	{
+		Fleet->OnFleetChanged.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetChanged);
+		Fleet->OnDroneUpdated.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleDroneDataUpdated);
+		Fleet->OnDroneSelected.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleSelectedDroneChanged);
+		Fleet->OnDataBatchApplied.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetDataBatchApplied);
+	}
 	ResetNavigationPages();
 	MainWidgetRef.Reset();
 	TopBarWidget.Reset();
@@ -94,6 +108,7 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 	LastCommandResultText.Reset();
 	SelectedCommandDroneIDs.Reset();
 	CurrentFleetPageDroneIDs.Reset();
+	FleetRowViews.Reset();
 	FleetPageOffset = 0;
 
 	Super::Deinitialize();
@@ -142,6 +157,13 @@ void UGCSUIBridgeSubsystem::HandleDisarmClicked()
 
 void UGCSUIBridgeSubsystem::HandleGuidedClicked()
 {
+	const TArray<FString> Targets = GetCommandTargetDroneIDs();
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[UI] BTN_Guided Click Targets=%d [%s] Mode=GUIDED custom_mode=4"),
+		Targets.Num(),
+		*FString::Join(Targets, TEXT(",")));
 	FGCSProductionCommandParameters Parameters;
 	Parameters.CustomMode = 4;
 	Parameters.ModeName = TEXT("GUIDED");
@@ -242,6 +264,17 @@ void UGCSUIBridgeSubsystem::HandleManualModeClicked()
 	{
 		Commands->SetControlMode(EGCSGroundStationControlMode::Manual);
 	}
+	const TArray<FString> Targets = GetCommandTargetDroneIDs();
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[UI] BTN_ModeManual Click Targets=%d [%s] Mode=STABILIZE custom_mode=0"),
+		Targets.Num(),
+		*FString::Join(Targets, TEXT(",")));
+	FGCSProductionCommandParameters Parameters;
+	Parameters.CustomMode = 0;
+	Parameters.ModeName = TEXT("STABILIZE");
+	SubmitSelectedProductionCommand(EGCSProductionCommandType::SetMode, Parameters);
 	RefreshHoverMVPControls();
 }
 
@@ -252,6 +285,17 @@ void UGCSUIBridgeSubsystem::HandleAutonomousModeClicked()
 	{
 		Commands->SetControlMode(EGCSGroundStationControlMode::Autonomous);
 	}
+	const TArray<FString> Targets = GetCommandTargetDroneIDs();
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[UI] BTN_ModeAutonomous Click Targets=%d [%s] Mode=AUTO custom_mode=3"),
+		Targets.Num(),
+		*FString::Join(Targets, TEXT(",")));
+	FGCSProductionCommandParameters Parameters;
+	Parameters.CustomMode = 3;
+	Parameters.ModeName = TEXT("AUTO");
+	SubmitSelectedProductionCommand(EGCSProductionCommandType::SetMode, Parameters);
 	RefreshHoverMVPControls();
 }
 
@@ -315,15 +359,83 @@ void UGCSUIBridgeSubsystem::HandleFleetRowSelectionClicked(const int32 RowIndex)
 	}
 
 	const FString& DroneID = CurrentFleetPageDroneIDs[RowIndex];
-	if (SelectedCommandDroneIDs.Contains(DroneID))
+	SetCommandDroneSelected(DroneID, !SelectedCommandDroneIDs.Contains(DroneID));
+	RefreshFromFleet();
+}
+
+void UGCSUIBridgeSubsystem::SetCommandDroneSelected(
+	const FString& DroneID,
+	const bool bSelected)
+{
+	if (DroneID.IsEmpty())
 	{
-		SelectedCommandDroneIDs.Remove(DroneID);
+		return;
 	}
-	else
+
+	if (bSelected)
 	{
 		SelectedCommandDroneIDs.Add(DroneID);
 	}
-	RefreshFromFleet();
+	else
+	{
+		SelectedCommandDroneIDs.Remove(DroneID);
+	}
+
+	const UFleetManagerSubsystem* Fleet = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>()
+		: nullptr;
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[GCS_COMMAND_SELECTION] DroneID=%s Checked=%s Targets=[%s] CurrentSelectedDroneID=%s"),
+		*DroneID,
+		bSelected ? TEXT("true") : TEXT("false"),
+		*FString::Join(GetCommandTargetDroneIDs(), TEXT(",")),
+		Fleet ? *Fleet->GetCurrentSelectedDroneID() : TEXT(""));
+}
+
+TArray<FString> UGCSUIBridgeSubsystem::GetSelectedCommandDroneIDs() const
+{
+	return GetCommandTargetDroneIDs();
+}
+
+FReply UGCSUIBridgeSubsystem::HandleFleetRowMouseButtonDown(
+	const FGeometry& Geometry,
+	const FPointerEvent& MouseEvent,
+	const int32 RowIndex)
+{
+	(void)Geometry;
+	if (MouseEvent.GetEffectingButton() != EKeys::LeftMouseButton)
+	{
+		return FReply::Unhandled();
+	}
+
+	HandleFleetRowDetailClicked(RowIndex);
+	// The row is a UI-only detail-selection hit target. Explicitly release any
+	// viewport capture so a handled mouse-down can never hide the GCS cursor.
+	return FReply::Handled().ReleaseMouseCapture();
+}
+
+void UGCSUIBridgeSubsystem::HandleFleetRowDetailClicked(const int32 RowIndex)
+{
+	if (!CurrentFleetPageDroneIDs.IsValidIndex(RowIndex)
+		|| CurrentFleetPageDroneIDs[RowIndex].IsEmpty())
+	{
+		return;
+	}
+
+	const FString& DroneID = CurrentFleetPageDroneIDs[RowIndex];
+	UFleetManagerSubsystem* Fleet =
+		GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>();
+	if (!Fleet || !Fleet->SelectDrone(DroneID))
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("GCS detail selection rejected: Row=%d DroneID=%s"),
+			RowIndex,
+			*DroneID);
+	}
 }
 
 TArray<FString> UGCSUIBridgeSubsystem::GetCommandTargetDroneIDs() const
@@ -413,8 +525,39 @@ void UGCSUIBridgeSubsystem::HandleDroneDataUpdated(const FDroneData& DroneData)
 {
 	if (DroneData.bSelected)
 	{
-		ApplyDroneData(DroneData);
+		UpdateDroneInfo(DroneData);
 	}
+}
+
+void UGCSUIBridgeSubsystem::HandleSelectedDroneChanged(const FString& DroneID)
+{
+	const UFleetManagerSubsystem* Fleet =
+		GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>();
+	FDroneData SelectedDrone;
+	if (!Fleet || !Fleet->GetDroneByID(DroneID, SelectedDrone))
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("GCS detail update rejected: selected DroneID not found: %s"),
+			*DroneID);
+		return;
+	}
+
+	// The selected drone affects the detail data and the Fleet row highlight.
+	// Refreshing the authored widgets keeps this strictly in the presentation layer.
+	RefreshFromFleet();
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[GCS_SELECTION] SelectedDroneID=%s DetailUpdated Mode=%s GPS=(%.7f,%.7f) BAT=%.0f ALT=%.2f RSSI=%d"),
+		*SelectedDrone.DroneID,
+		*SelectedDrone.Mode,
+		SelectedDrone.GPSLat,
+		SelectedDrone.GPSLon,
+		SelectedDrone.Battery,
+		SelectedDrone.Altitude,
+		SelectedDrone.RSSI);
 }
 
 void UGCSUIBridgeSubsystem::HandleFleetDataBatchApplied(
@@ -451,18 +594,22 @@ void UGCSUIBridgeSubsystem::RefreshFromFleet()
 
 	const TArray<FDroneData> VisibleDrones =
 		Fleet->GetDronePage(FleetPageOffset, FleetPageSize);
-	RefreshFleetRows(VisibleDrones, TotalCount);
+	RefreshFleetRows(
+		VisibleDrones,
+		TotalCount,
+		Fleet->GetCurrentSelectedDroneID());
 
 	FDroneData SelectedDrone;
 	if (Fleet->GetSelectedDrone(SelectedDrone))
 	{
-		ApplyDroneData(SelectedDrone);
+		UpdateDroneInfo(SelectedDrone);
 	}
 }
 
 void UGCSUIBridgeSubsystem::RefreshFleetRows(
 	const TArray<FDroneData>& Drones,
-	const int32 TotalCount)
+	const int32 TotalCount,
+	const FString& CurrentSelectedDroneID)
 {
 	const int32 PageCount = FMath::Max(1, FMath::DivideAndRoundUp(TotalCount, FleetPageSize));
 	const int32 PageIndex = TotalCount == 0 ? 1 : FleetPageOffset / FleetPageSize + 1;
@@ -487,6 +634,7 @@ void UGCSUIBridgeSubsystem::RefreshFleetRows(
 		{
 			SetFleetText(RowName, FString());
 			SetFleetButtonLabel(SelectorName, TEXT("[ ]"));
+			UpdateFleetRowView(Index, FString(), CurrentSelectedDroneID);
 			if (Selector)
 			{
 				Selector->SetVisibility(ESlateVisibility::Collapsed);
@@ -498,7 +646,7 @@ void UGCSUIBridgeSubsystem::RefreshFleetRows(
 		CurrentFleetPageDroneIDs[Index] = Drone.DroneID;
 		SetFleetButtonLabel(
 			SelectorName,
-			SelectedCommandDroneIDs.Contains(Drone.DroneID) ? TEXT("[X]") : TEXT("[ ]"));
+			SelectedCommandDroneIDs.Contains(Drone.DroneID) ? TEXT("✓") : TEXT("X"));
 		if (Selector)
 		{
 			Selector->SetVisibility(ESlateVisibility::Visible);
@@ -516,10 +664,47 @@ void UGCSUIBridgeSubsystem::RefreshFleetRows(
 				Drone.Battery,
 				Drone.Altitude,
 				Drone.RSSI));
+		UpdateFleetRowView(Index, Drone.DroneID, CurrentSelectedDroneID);
 	}
 }
 
-void UGCSUIBridgeSubsystem::ApplyDroneData(const FDroneData& DroneData)
+void UGCSUIBridgeSubsystem::InitializeFleetRowViews()
+{
+	FleetRowViews.Reset();
+	FleetRowViews.Reserve(FleetPageSize);
+	UUserWidget* FleetPanel = FleetPanelWidget.Get();
+	for (int32 Index = 0; Index < FleetPageSize; ++Index)
+	{
+		UGCSDroneRowView* RowView = NewObject<UGCSDroneRowView>(this);
+		if (!RowView->Initialize(FleetPanel, Index))
+		{
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT("Fleet row %d is missing authored SelectedOverlay_Row%d Border."),
+				Index + 1,
+				Index + 1);
+		}
+		FleetRowViews.Add(RowView);
+	}
+}
+
+void UGCSUIBridgeSubsystem::UpdateFleetRowView(
+	const int32 RowIndex,
+	const FString& DroneID,
+	const FString& CurrentSelectedDroneID)
+{
+	if (!FleetRowViews.IsValidIndex(RowIndex) || !FleetRowViews[RowIndex])
+	{
+		return;
+	}
+
+	UGCSDroneRowView* RowView = FleetRowViews[RowIndex];
+	RowView->SetDroneID(DroneID);
+	RowView->NotifyCurrentSelectedDroneID(CurrentSelectedDroneID);
+}
+
+void UGCSUIBridgeSubsystem::UpdateDroneInfo(const FDroneData& DroneData)
 {
 	SetTopBarText(
 		TEXT("LINK"),
@@ -722,6 +907,9 @@ void UGCSUIBridgeSubsystem::BindExistingButtons()
 
 	if (UButton* Button = FindButton(TEXT("BTN_Guided")))
 	{
+		Button->OnClicked.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleGuidedClicked);
 		Button->OnClicked.AddDynamic(
 			this,
 			&UGCSUIBridgeSubsystem::HandleGuidedClicked);
@@ -805,6 +993,8 @@ void UGCSUIBridgeSubsystem::BindExistingButtons()
 
 void UGCSUIBridgeSubsystem::BindFleetPanelButtons()
 {
+	InitializeFleetRowViews();
+
 	if (UButton* Button = FindFleetButton(TEXT("BTN_FleetSelectRow1")))
 	{
 		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetRow1SelectionClicked);
@@ -840,6 +1030,23 @@ void UGCSUIBridgeSubsystem::BindFleetPanelButtons()
 	{
 		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetNextPageClicked);
 		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetNextPageClicked);
+	}
+
+	// The authored FleetPanel has separate checkbox buttons and row text.
+	// Reuse the row text hit area for the single detail selection without
+	// adding or rearranging any UMG widgets.
+	for (int32 Index = 0; Index < FleetPageSize; ++Index)
+	{
+		const FName RowName(*FString::Printf(TEXT("Row%d"), Index + 1));
+		if (UTextBlock* Row = FindFleetText(RowName))
+		{
+			Row->SetVisibility(ESlateVisibility::Visible);
+			Row->TakeWidget()->SetOnMouseButtonDown(
+				FPointerEventHandler::CreateUObject(
+					this,
+					&UGCSUIBridgeSubsystem::HandleFleetRowMouseButtonDown,
+					Index));
+		}
 	}
 }
 

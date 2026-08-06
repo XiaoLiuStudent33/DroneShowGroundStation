@@ -172,6 +172,54 @@ int main()
         results.front().outcome == CommandOutcome::Accepted,
         "matching ACK completes ARM");
 
+    struct ExpectedMode
+    {
+        std::uint8_t customMode;
+        const char* name;
+    };
+    const ExpectedMode expectedModes[] =
+    {
+        { 0, "STABILIZE" },
+        { 3, "AUTO" },
+        { 4, "GUIDED" }
+    };
+    for (std::size_t index = 0; index < std::size(expectedModes); ++index)
+    {
+        const ExpectedMode& expected = expectedModes[index];
+        dispatcher.QueueSetMode(1, 1, expected.customMode);
+        dispatcher.Tick(now + std::chrono::milliseconds(index + 1));
+
+        passed &= Check(
+            ReceiveMessage(receiver, received),
+            std::string(expected.name) + " SET_MODE packet is emitted");
+        passed &= Check(
+            received.msgid == MAVLINK_MSG_ID_SET_MODE,
+            std::string(expected.name) + " uses MAVLink SET_MODE");
+
+        mavlink_set_mode_t setMode{};
+        mavlink_msg_set_mode_decode(&received, &setMode);
+        passed &= Check(
+            setMode.target_system == 1,
+            std::string(expected.name) + " target_system is correct");
+        passed &= Check(
+            setMode.base_mode == MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+            std::string(expected.name) + " enables custom mode");
+        passed &= Check(
+            setMode.custom_mode == expected.customMode,
+            std::string(expected.name) + " custom_mode is correct");
+        std::cout
+            << "SET_MODE PACKET " << expected.name
+            << " target_system=" << static_cast<int>(setMode.target_system)
+            << " base_mode=" << static_cast<int>(setMode.base_mode)
+            << " custom_mode=" << setMode.custom_mode << '\n';
+
+        results = dispatcher.ConsumeResults();
+        passed &= Check(
+            results.size() == 1 &&
+            results.front().outcome == CommandOutcome::Sent,
+            std::string(expected.name) + " SET_MODE is marked sent");
+    }
+
     dispatcher.QueueTakeoff(1, 1, 1.0f);
     dispatcher.QueueLand(1, 1);
     results = dispatcher.ConsumeResults();

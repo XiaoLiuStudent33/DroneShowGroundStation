@@ -11,6 +11,7 @@
 //--------------------------------------------------
 
 #include <string>
+#include <vector>
 
 //--------------------------------------------------
 // 工程
@@ -20,18 +21,14 @@
 #include "HoverTest.h"
 
 //==================================================
-// Drone GCS V6.1 Final
-//
-// ConsoleUI
-//
-// 控制台界面管理
-//
-// 负责：
-// 1. 初始化控制台
-// 2. 绘制固定界面
-// 3. 更新飞行数据显示
-// 4. 输出运行日志
+// Console backend fleet status row.
 //==================================================
+
+struct ConsoleDroneStatus
+{
+    std::string droneId;
+    bool online = false;
+};
 
 class ConsoleUI
 {
@@ -44,7 +41,15 @@ public:
     static void Init();
 
     //--------------------------------------------------
-    // 更新整个界面
+    // Update backend fleet overview and drone list.
+    //--------------------------------------------------
+
+    static void UpdateFleet(
+        const std::vector<ConsoleDroneStatus>& drones);
+
+    //--------------------------------------------------
+    // Compatibility adapters for legacy callers. They no longer display
+    // single-drone telemetry and should not be used by the backend service.
     //--------------------------------------------------
 
     static void Update(
@@ -72,54 +77,6 @@ private:
     static void DrawFrame();
 
     //--------------------------------------------------
-    // 更新连接状态
-    //--------------------------------------------------
-
-    static void UpdateConnection(
-        const FlightData& data);
-
-    //--------------------------------------------------
-    // 更新飞控信息
-    //--------------------------------------------------
-
-    static void UpdateFlightInfo(
-        const FlightData& data);
-
-    //--------------------------------------------------
-    // 更新姿态
-    //--------------------------------------------------
-
-    static void UpdateAttitude(
-        const FlightData& data);
-
-    //--------------------------------------------------
-    // 更新GPS
-    //--------------------------------------------------
-
-    static void UpdateGPS(
-        const FlightData& data);
-
-    //--------------------------------------------------
-    // 更新电池
-    //--------------------------------------------------
-
-    static void UpdateBattery(
-        const FlightData& data);
-
-    //--------------------------------------------------
-    // 更新悬停测试
-    //--------------------------------------------------
-
-    static void UpdateHoverTest(
-        const HoverTest& test);
-
-    //--------------------------------------------------
-    // 清空数据显示区域
-    //--------------------------------------------------
-
-    static void ClearValues();
-
-    //--------------------------------------------------
     // 指定位置输出文本
     //--------------------------------------------------
 
@@ -127,28 +84,6 @@ private:
         short x,
         short y,
         const std::string& text,
-        WORD color = 7);
-
-    //--------------------------------------------------
-    // 指定位置输出整数
-    //--------------------------------------------------
-
-    static void PrintInt(
-        short x,
-        short y,
-        int value,
-        WORD color = 7);
-
-    //--------------------------------------------------
-    // 指定位置输出浮点数
-    //--------------------------------------------------
-
-    static void PrintDouble(
-        short x,
-        short y,
-        double value,
-        int precision = 2,
-        const std::string& suffix = "",
         WORD color = 7);
 
     //--------------------------------------------------
