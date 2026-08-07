@@ -71,7 +71,8 @@ namespace
         MavlinkReadOnlyIngress& ingress,
         const mavlink_message_t& message,
         const std::string& sourceIp,
-        const std::uint16_t sourcePort = 10005)
+        const std::uint16_t sourcePort = 10001
+    )
     {
         const std::vector<std::uint8_t> bytes = SerializeMessage(message);
         return ingress.SubmitDatagram(
@@ -82,7 +83,7 @@ namespace
         MavlinkDiscoveryService& discovery,
         const std::uint8_t systemId,
         const std::string& sourceIp,
-        const std::uint16_t sourcePort = 10005,
+        const std::uint16_t sourcePort = 10001,
         const std::uint32_t customMode = 5)
     {
         const std::vector<std::uint8_t> bytes =
@@ -342,12 +343,12 @@ namespace
 
     void VerifySharedMavlinkEndpoint()
     {
-        constexpr std::uint16_t sharedPort = 10005;
+        constexpr std::uint16_t sharedPort = 10001;
         MavlinkUdpReceiver endpoint;
         std::string error;
         Expect(
             endpoint.Start("127.0.0.1", sharedPort, error),
-            "shared endpoint failed to bind 127.0.0.1:10005: " + error);
+            "shared endpoint failed to bind 127.0.0.1:10001: " + error);
 
         DroneSessionConfig sessionDefaults;
         sessionDefaults.localIp = "127.0.0.1";
@@ -435,7 +436,7 @@ namespace
                 "simulated drone did not receive GCS heartbeat");
             Expect(
                 heartbeatSourcePort == sharedPort,
-                "GCS heartbeat source port was not 10005");
+                "GCS heartbeat source port was not 10001");
 
             std::uint16_t commandSourcePort = 0;
             Expect(
@@ -445,7 +446,7 @@ namespace
                 "simulated drone did not receive COMMAND_LONG");
             Expect(
                 commandSourcePort == sharedPort,
-                "COMMAND_LONG source port was not 10005");
+                "COMMAND_LONG source port was not 10001");
 
             mavlink_message_t ack{};
             mavlink_msg_command_ack_pack(
@@ -486,7 +487,7 @@ namespace
         std::cout
             << "Shared endpoint PASS: three registrations, telemetry routes, ACK routes; "
             << "one multi-target ARM expanded to three Sessions; "
-            << "GCS heartbeat and COMMAND_LONG source port=10005\n";
+            << "GCS heartbeat and COMMAND_LONG source port=10001\n";
     }
 }
 
@@ -658,7 +659,7 @@ int main()
                     discovery,
                     1,
                     "192.168.1.145",
-                    10005,
+                    10001,
                     expected.customMode) == MavlinkDiscoveryResult::Refreshed,
                 std::string(expected.name) + " heartbeat was not routed");
             const FlightData modeTelemetry = drone001->GetFlightData();

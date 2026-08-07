@@ -19,10 +19,10 @@ namespace SafetyConfig
     }
 
     inline constexpr const char* MAVLINK_LOCAL_IP = "192.168.1.254";
-    inline constexpr int MAVLINK_LOCAL_PORT = 10005;
+    inline constexpr int MAVLINK_LOCAL_PORT = 10001;
 
     inline constexpr const char* MAVLINK_TARGET_IP = "192.168.1.145";
-    inline constexpr int MAVLINK_TARGET_PORT = 10005;
+    inline constexpr int MAVLINK_TARGET_PORT = 10001;
 
     inline constexpr const char* COMMAND_BIND_IP = "192.168.1.254";
     inline constexpr int COMMAND_BIND_PORT = 10006;
