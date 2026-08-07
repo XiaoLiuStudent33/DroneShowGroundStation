@@ -34,6 +34,7 @@ bool MavlinkCommand::SendCommandLong(
 
 )
 {
+    // MAVLink #76 COMMAND_LONG：承载当前 ARM/DISARM/TAKEOFF/LAND/RTL 的 MAV_CMD。
 
     mavlink_message_t msg;
 
@@ -115,6 +116,7 @@ bool MavlinkCommand::Arm(
     uint8_t targetComponent
 )
 {
+    // MAV_CMD #400 COMPONENT_ARM_DISARM：param1=1，param2=0，保留飞控安全检查。
 
     return SendCommandLong(
 
@@ -153,6 +155,7 @@ bool MavlinkCommand::Disarm(
 
 )
 {
+    // MAV_CMD #400 COMPONENT_ARM_DISARM：param1=0 上锁。
 
     return SendCommandLong(
 
@@ -187,6 +190,7 @@ bool MavlinkCommand::SetMode(
 
 )
 {
+    // MAVLink #11 SET_MODE：ArduCopter custom_mode 由调用方传入。
 
     mavlink_message_t msg;
 
@@ -272,6 +276,7 @@ bool MavlinkCommand::Takeoff(
 
 )
 {
+    // MAV_CMD #22 NAV_TAKEOFF：param7 为目标高度。
 
     return SendCommandLong(
 
@@ -313,6 +318,7 @@ bool MavlinkCommand::Land(
 
 )
 {
+    // MAV_CMD #21 NAV_LAND：当前参数均使用默认值 0。
 
     return SendCommandLong(
 
@@ -340,6 +346,7 @@ bool MavlinkCommand::RTL(
 
 )
 {
+    // MAV_CMD #20 NAV_RETURN_TO_LAUNCH：当前参数均使用默认值 0。
 
     return SendCommandLong(
 
@@ -360,6 +367,7 @@ bool MavlinkCommand::Loiter(
     uint8_t system,
     uint8_t component)
 {
+    // MAVLink #11 SET_MODE：ArduCopter LOITER custom_mode=5。
     (void)component;
 
     return SetMode(

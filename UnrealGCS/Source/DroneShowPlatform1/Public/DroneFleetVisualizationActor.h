@@ -1,0 +1,106 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "DroneData.h"
+#include "GameFramework/Actor.h"
+#include "DroneFleetVisualizationActor.generated.h"
+
+class ACesiumGeoreference;
+class UFleetManagerSubsystem;
+class UNiagaraComponent;
+class UNiagaraSystem;
+class USceneComponent;
+struct FFleetGeoOrigin;
+
+/**
+ * Fleet 到 Niagara 的轻量数据桥。
+ *
+ * 整个机群只使用一个 Actor 和一个 NiagaraComponent，避免未来数千架无人机
+ * 产生 per-drone UObject、Actor、Component 或 Tick 开销。
+ */
+UCLASS(BlueprintType)
+class DRONESHOWPLATFORM1_API ADroneFleetVisualizationActor final : public AActor
+{
+	GENERATED_BODY()
+
+public:
+	ADroneFleetVisualizationActor();
+
+	/** 立即按 Fleet 的稳定 DroneOrder 重建并批量推送 Niagara 数组。 */
+	UFUNCTION(BlueprintCallable, Category = "Drone GCS|Visualization")
+	void RefreshFromFleet();
+
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization")
+	int32 GetVisualizationDroneCount() const { return DronePositions.Num(); }
+
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization")
+	TArray<FString> GetParticleDroneIDs() const { return ParticleDroneIDs; }
+
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization")
+	TArray<FVector> GetDronePositions() const { return DronePositions; }
+
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization|Geo")
+	bool IsOriginWorldPositionInitialized() const { return bOriginWorldPositionInitialized; }
+
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization|Geo")
+	FVector GetOriginWorldPosition() const { return OriginWorldPosition; }
+
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization")
+	UNiagaraComponent* GetDroneFleetNiagara() const { return DroneFleetNiagara; }
+
+protected:
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+private:
+	UPROPERTY(VisibleAnywhere, Category = "Drone GCS|Visualization")
+	TObjectPtr<USceneComponent> SceneRoot;
+
+	/** 唯一的机群渲染组件；禁止为每架无人机创建组件。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone GCS|Visualization", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UNiagaraComponent> DroneFleetNiagara;
+
+	/** 在编辑器中指定 NS_DroneFleet，不在代码中硬编码 Content 路径。 */
+	UPROPERTY(EditAnywhere, Category = "Drone GCS|Visualization")
+	TObjectPtr<UNiagaraSystem> DroneFleetSystem;
+
+	UPROPERTY(Transient)
+	TArray<FString> ParticleDroneIDs;
+
+	UPROPERTY(Transient)
+	TArray<FVector> DronePositions;
+
+	/** 仅粒子数量变化时重建系统；普通遥测更新只批量刷新数组。 */
+	int32 LastPushedDroneCount = INDEX_NONE;
+	int32 LastLoggedFleetCount = INDEX_NONE;
+	int32 LastLoggedParticleCount = INDEX_NONE;
+
+	TWeakObjectPtr<UFleetManagerSubsystem> FleetManager;
+	TWeakObjectPtr<ACesiumGeoreference> CesiumGeoreference;
+
+	bool bCesiumLookupAttempted = false;
+	bool bCesiumReadyLogged = false;
+	bool bCesiumMissingLogged = false;
+	bool bOriginWorldPositionInitialized = false;
+	FVector OriginWorldPosition = FVector::ZeroVector;
+	FString CachedOriginDroneID;
+	double CachedOriginLatitude = 0.0;
+	double CachedOriginLongitude = 0.0;
+	float CachedOriginAltitudeAMSL = 0.0f;
+	bool bCachedOriginAltitudeValid = false;
+
+	void BindFleetManager();
+	void UnbindFleetManager();
+	void CacheCesiumGeoreference();
+	void UpdateOriginWorldPosition(const FFleetGeoOrigin& FleetGeoOrigin);
+	FVector ConvertDroneGPSPosition(
+		const FDroneData& Drone,
+		const FFleetGeoOrigin& FleetGeoOrigin) const;
+	void PushArraysToNiagara();
+
+	UFUNCTION()
+	void HandleFleetChanged();
+
+	UFUNCTION()
+	void HandleDataBatchApplied(int64 FleetRevision, int32 UpdatedDroneCount);
+};

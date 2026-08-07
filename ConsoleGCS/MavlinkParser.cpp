@@ -117,7 +117,7 @@ void MavlinkParser::Parse(
     switch (msg.msgid)
     {
         //--------------------------------------------------
-        // HEARTBEAT
+        // MAVLink #0 HEARTBEAT：飞控身份、在线/解锁状态与飞行模式。
         //--------------------------------------------------
     case MAVLINK_MSG_ID_HEARTBEAT:
     {
@@ -152,7 +152,7 @@ void MavlinkParser::Parse(
     }
 
     //--------------------------------------------------
-    // ATTITUDE
+    // MAVLink #30 ATTITUDE：姿态角 Roll/Pitch/Yaw。
     //--------------------------------------------------
     case MAVLINK_MSG_ID_ATTITUDE:
     {
@@ -169,7 +169,8 @@ void MavlinkParser::Parse(
     }
 
     //--------------------------------------------------
-    // GPS
+    // MAVLink #33 GLOBAL_POSITION_INT：飞行器融合运动状态。
+    // 只维护相对高度和速度；绝对经纬高统一由#24 GPS_RAW_INT维护。
     //--------------------------------------------------
     case MAVLINK_MSG_ID_GLOBAL_POSITION_INT:
     {
@@ -180,19 +181,6 @@ void MavlinkParser::Parse(
             &msg,
             &gps
         );
-
-
-        data.latitude =
-            gps.lat / 1e7;
-
-
-        data.longitude =
-            gps.lon / 1e7;
-
-
-        // 海拔高度 AMSL
-        data.altitude =
-            gps.alt / 1000.0;
 
 
         // 相对起飞点高度（飞控控制使用）
@@ -207,13 +195,13 @@ void MavlinkParser::Parse(
             velocityNorth * velocityNorth +
             velocityEast * velocityEast);
 
-        data.altitudeValid = true;
-
         break;
     }
 
     //--------------------------------------------------
-    // GPS质量
+    // MAVLink #24 GPS_RAW_INT：绝对GPS位置权威源。
+    // 统一维护纬度、经度、AMSL海拔、Fix、卫星数和GPS有效性。
+    // lat/lon单位为1e-7度，alt为MSL毫米。
     //--------------------------------------------------
     case MAVLINK_MSG_ID_GPS_RAW_INT:
     {
@@ -221,15 +209,25 @@ void MavlinkParser::Parse(
 
         mavlink_msg_gps_raw_int_decode(&msg, &gps);
 
+        data.latitude =
+            static_cast<double>(gps.lat) / 10000000.0;
+        data.longitude =
+            static_cast<double>(gps.lon) / 10000000.0;
+        data.altitude =
+            static_cast<float>(static_cast<double>(gps.alt) / 1000.0);
         data.gpsFixType = gps.fix_type;
         data.satellitesVisible = gps.satellites_visible;
-        data.gpsValid = gps.fix_type >= 3;
+        data.gpsValid =
+            gps.fix_type >= 3 &&
+            (gps.lat != 0 || gps.lon != 0);
+        // 海拔有效性与经纬度非零规则解耦；海平面0m是合法AMSL值。
+        data.altitudeValid = gps.fix_type >= 3;
 
         break;
     }
 
     //--------------------------------------------------
-    // 电池
+    // MAVLink #1 SYS_STATUS：剩余电量百分比。
     //--------------------------------------------------
     case MAVLINK_MSG_ID_SYS_STATUS:
     {
@@ -243,7 +241,7 @@ void MavlinkParser::Parse(
     }
 
     //--------------------------------------------------
-    // 命令确认
+    // MAVLink #77 COMMAND_ACK：控制命令结果确认。
     //--------------------------------------------------
     case MAVLINK_MSG_ID_COMMAND_ACK:
     {

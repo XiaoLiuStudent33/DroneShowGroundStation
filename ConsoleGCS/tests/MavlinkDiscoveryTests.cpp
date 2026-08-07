@@ -554,25 +554,6 @@ int main()
         ExpectOnline(manager, "Drone003", true);
         std::cout << "Drone001 online\nDrone002 online\nDrone003 online\n";
 
-        mavlink_message_t position{};
-        mavlink_msg_global_position_int_pack(
-            1,
-            MAV_COMP_ID_AUTOPILOT1,
-            &position,
-            1000,
-            319324710,
-            1186385310,
-            123450,
-            5000,
-            100,
-            200,
-            0,
-            9000);
-        Expect(
-            SubmitMessage(ingress, position, "192.168.1.145")
-                .telemetryApplied == 1,
-            "GLOBAL_POSITION_INT was not routed to Drone001");
-
         mavlink_message_t gps{};
         mavlink_msg_gps_raw_int_pack(
             1,
@@ -580,8 +561,8 @@ int main()
             &gps,
             1000000,
             3,
-            319324710,
-            1186385310,
+            319327550,
+            1186382469,
             123450,
             100,
             100,
@@ -598,6 +579,181 @@ int main()
             SubmitMessage(ingress, gps, "192.168.1.145")
                 .telemetryApplied == 1,
             "GPS_RAW_INT was not routed to Drone001");
+
+        FlightData telemetry = drone001->GetFlightData();
+        Expect(telemetry.gpsValid, "GPS_RAW_INT valid Fix was rejected");
+        Expect(
+            telemetry.latitude > 31.9327549 &&
+                telemetry.latitude < 31.9327551,
+            "GPS_RAW_INT latitude conversion failed");
+        Expect(
+            telemetry.longitude > 118.6382468 &&
+                telemetry.longitude < 118.6382470,
+            "GPS_RAW_INT longitude conversion failed");
+        Expect(
+            telemetry.altitude > 123.4f && telemetry.altitude < 123.5f &&
+                telemetry.altitudeValid,
+            "GPS_RAW_INT AMSL altitude conversion failed");
+
+        mavlink_message_t position{};
+        mavlink_msg_global_position_int_pack(
+            1,
+            MAV_COMP_ID_AUTOPILOT1,
+            &position,
+            1000,
+            0,
+            0,
+            0,
+            5000,
+            300,
+            400,
+            0,
+            9000);
+        Expect(
+            SubmitMessage(ingress, position, "192.168.1.145")
+                .telemetryApplied == 1,
+            "GLOBAL_POSITION_INT was not routed to Drone001");
+
+        telemetry = drone001->GetFlightData();
+        Expect(
+            telemetry.latitude > 31.9327549 &&
+                telemetry.latitude < 31.9327551 &&
+                telemetry.longitude > 118.6382468 &&
+                telemetry.longitude < 118.6382470,
+            "GLOBAL_POSITION_INT zero coordinates overwrote GPS_RAW_INT");
+        Expect(
+            telemetry.altitude > 123.4f && telemetry.altitude < 123.5f &&
+                telemetry.relativeAltitude > 4.9f &&
+                telemetry.relativeAltitude < 5.1f &&
+                telemetry.groundSpeed > 4.9f && telemetry.groundSpeed < 5.1f,
+            "GLOBAL_POSITION_INT overwrote #24 AMSL or failed relative altitude/ground speed");
+
+        mavlink_message_t invalidGps{};
+        mavlink_msg_gps_raw_int_pack(
+            1,
+            MAV_COMP_ID_AUTOPILOT1,
+            &invalidGps,
+            2000000,
+            1,
+            0,
+            0,
+            0,
+            100,
+            100,
+            0,
+            0,
+            5,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0);
+        Expect(
+            SubmitMessage(ingress, invalidGps, "192.168.1.145")
+                .telemetryApplied == 1,
+            "invalid GPS_RAW_INT was not routed to Drone001");
+        telemetry = drone001->GetFlightData();
+        Expect(!telemetry.gpsValid, "GPS_RAW_INT fix_type=1 remained valid");
+        Expect(
+            manager.FindDrone("Drone001") == drone001 &&
+                manager.GetDroneCount() == 3,
+            "invalid GPS_RAW_INT removed or replaced Drone001 session");
+
+        Expect(
+            SubmitMessage(ingress, gps, "192.168.1.145")
+                .telemetryApplied == 1,
+            "valid GPS_RAW_INT recovery was not routed to Drone001");
+
+        mavlink_message_t positionBeforeGps{};
+        mavlink_msg_global_position_int_pack(
+            1,
+            MAV_COMP_ID_AUTOPILOT1,
+            &positionBeforeGps,
+            3000,
+            111111111,
+            222222222,
+            100000,
+            2000,
+            0,
+            0,
+            0,
+            0);
+        Expect(
+            SubmitMessage(ingress, positionBeforeGps, "192.168.1.231")
+                .telemetryApplied == 1,
+            "GLOBAL_POSITION_INT was not routed to Drone002");
+        Expect(
+            drone002->GetFlightData().latitude == 0.0 &&
+                drone002->GetFlightData().longitude == 0.0,
+            "GLOBAL_POSITION_INT unexpectedly became the primary GPS source");
+
+        mavlink_message_t gpsAfterPosition{};
+        mavlink_msg_gps_raw_int_pack(
+            1,
+            MAV_COMP_ID_AUTOPILOT1,
+            &gpsAfterPosition,
+            3000000,
+            3,
+            319327650,
+            1186382569,
+            100000,
+            100,
+            100,
+            0,
+            0,
+            12,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0);
+        Expect(
+            SubmitMessage(ingress, gpsAfterPosition, "192.168.1.231")
+                .telemetryApplied == 1,
+            "GPS_RAW_INT was not routed to Drone002 after GLOBAL_POSITION_INT");
+        Expect(
+            drone002->GetFlightData().latitude > 31.9327649 &&
+                drone002->GetFlightData().latitude < 31.9327651 &&
+                drone002->GetFlightData().longitude > 118.6382568 &&
+                drone002->GetFlightData().longitude < 118.6382570,
+            "GPS_RAW_INT did not win after GLOBAL_POSITION_INT");
+        Expect(
+            drone002->GetFlightData().altitude > 99.9f &&
+                drone002->GetFlightData().altitude < 100.1f,
+            "GPS_RAW_INT AMSL did not win after GLOBAL_POSITION_INT");
+
+        mavlink_message_t seaLevelGps{};
+        mavlink_msg_gps_raw_int_pack(
+            1,
+            MAV_COMP_ID_AUTOPILOT1,
+            &seaLevelGps,
+            4000000,
+            3,
+            319327650,
+            1186382569,
+            0,
+            100,
+            100,
+            0,
+            0,
+            12,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0);
+        Expect(
+            SubmitMessage(ingress, seaLevelGps, "192.168.1.231")
+                .telemetryApplied == 1,
+            "sea-level GPS_RAW_INT was not routed to Drone002");
+        Expect(
+            drone002->GetFlightData().gpsValid &&
+                drone002->GetFlightData().altitudeValid &&
+                drone002->GetFlightData().altitude == 0.0f,
+            "valid GPS_RAW_INT alt=0 was treated as invalid");
 
         mavlink_message_t battery{};
         mavlink_msg_sys_status_pack(
@@ -625,14 +781,14 @@ int main()
                 .telemetryApplied == 1,
             "SYS_STATUS was not routed to Drone001");
 
-        const FlightData telemetry = drone001->GetFlightData();
+        telemetry = drone001->GetFlightData();
         Expect(telemetry.gpsValid, "Drone001 GPS did not become valid");
         Expect(telemetry.altitudeValid, "Drone001 altitude did not become valid");
         Expect(
-            telemetry.latitude > 31.9324 && telemetry.latitude < 31.9325,
+            telemetry.latitude > 31.9327549 && telemetry.latitude < 31.9327551,
             "Drone001 latitude conversion failed");
         Expect(
-            telemetry.longitude > 118.6385 && telemetry.longitude < 118.6386,
+            telemetry.longitude > 118.6382468 && telemetry.longitude < 118.6382470,
             "Drone001 longitude conversion failed");
         Expect(
             telemetry.altitude > 123.4f && telemetry.altitude < 123.5f,

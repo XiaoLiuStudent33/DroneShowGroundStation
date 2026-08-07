@@ -614,7 +614,7 @@ void UGCSUIBridgeSubsystem::RefreshFleetRows(
 	const int32 PageCount = FMath::Max(1, FMath::DivideAndRoundUp(TotalCount, FleetPageSize));
 	const int32 PageIndex = TotalCount == 0 ? 1 : FleetPageOffset / FleetPageSize + 1;
 	SetFleetText(TEXT("FleetCount"), FString::Printf(TEXT("FLEET  %05d"), TotalCount));
-	SetFleetText(TEXT("Columns"), TEXT("      ID        MODE      GPS  BAT   HGT   RSS"));
+	SetFleetText(TEXT("Columns"), TEXT("      ID        MODE      GPS  BAT   HGT   RSS      STATUS"));
 	SetFleetText(
 		TEXT("TXT_FleetPage"),
 		FString::Printf(TEXT("PAGE %d / %d"), PageIndex, PageCount));
@@ -629,10 +629,12 @@ void UGCSUIBridgeSubsystem::RefreshFleetRows(
 	{
 		const FName RowName(*FString::Printf(TEXT("Row%d"), Index + 1));
 		const FName SelectorName(*FString::Printf(TEXT("BTN_FleetSelectRow%d"), Index + 1));
+		const FName StatusName(*FString::Printf(TEXT("TXT_StatusRow%d"), Index + 1));
 		UButton* Selector = FindFleetButton(SelectorName);
 		if (!Drones.IsValidIndex(Index))
 		{
 			SetFleetText(RowName, FString());
+			SetFleetStatus(StatusName, FString(), FLinearColor::Transparent);
 			SetFleetButtonLabel(SelectorName, TEXT("[ ]"));
 			UpdateFleetRowView(Index, FString(), CurrentSelectedDroneID);
 			if (Selector)
@@ -664,6 +666,12 @@ void UGCSUIBridgeSubsystem::RefreshFleetRows(
 				Drone.Battery,
 				Drone.Altitude,
 				Drone.RSSI));
+		SetFleetStatus(
+			StatusName,
+			Drone.bOnline ? TEXT("Online") : TEXT("Offline"),
+			Drone.bOnline
+				? FLinearColor(0.15f, 1.0f, 0.45f, 1.0f)
+				: FLinearColor(1.0f, 0.18f, 0.20f, 1.0f));
 		UpdateFleetRowView(Index, Drone.DroneID, CurrentSelectedDroneID);
 	}
 }
@@ -863,6 +871,22 @@ void UGCSUIBridgeSubsystem::SetFleetText(
 	if (UTextBlock* Text = FindFleetText(Name))
 	{
 		Text->SetText(FText::FromString(Value));
+	}
+}
+
+void UGCSUIBridgeSubsystem::SetFleetStatus(
+	const FName Name,
+	const FString& Value,
+	const FLinearColor& Color) const
+{
+	if (UTextBlock* Text = FindFleetText(Name))
+	{
+		Text->SetText(FText::FromString(Value));
+		Text->SetColorAndOpacity(FSlateColor(Color));
+		Text->SetVisibility(
+			Value.IsEmpty()
+				? ESlateVisibility::Hidden
+				: ESlateVisibility::HitTestInvisible);
 	}
 }
 

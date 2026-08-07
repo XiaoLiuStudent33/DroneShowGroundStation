@@ -114,8 +114,15 @@ namespace GCSDataDelta
 		{
 			Target.GPSLat = Delta.Data.GPSLat;
 			Target.GPSLon = Delta.Data.GPSLon;
+			Target.bGPSValid = Delta.Data.bGPSValid;
+			Target.GPSFixType = Delta.Data.GPSFixType;
 		}
-		if (HasField(Delta, EGCSDroneDataField::Altitude)) Target.Altitude = Delta.Data.Altitude;
+		if (HasField(Delta, EGCSDroneDataField::Altitude))
+		{
+			Target.Altitude = Delta.Data.Altitude;
+			Target.AltitudeAMSL = Delta.Data.AltitudeAMSL;
+			Target.bAltitudeValid = Delta.Data.bAltitudeValid;
+		}
 		if (HasField(Delta, EGCSDroneDataField::Battery)) Target.Battery = Delta.Data.Battery;
 		if (HasField(Delta, EGCSDroneDataField::Mode)) Target.Mode = Delta.Data.Mode;
 		if (HasField(Delta, EGCSDroneDataField::RSSI)) Target.RSSI = Delta.Data.RSSI;

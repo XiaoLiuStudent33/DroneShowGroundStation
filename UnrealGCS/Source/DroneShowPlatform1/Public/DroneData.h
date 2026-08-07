@@ -27,8 +27,23 @@ struct DRONESHOWPLATFORM1_API FDroneData
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone|GPS")
 	double GPSLon = 0.0;
 
+	/** Provider-reported GPS validity; use DroneGPS::IsValid for fleet decisions. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone|GPS")
+	bool bGPSValid = false;
+
+	/** MAVLink-compatible fix type. A 3D fix (3) is the current minimum. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone|GPS")
+	int32 GPSFixType = 0;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone|Flight")
 	float Altitude = 0.0f;
+
+	/** Absolute altitude above mean sea level; never substitutes Altitude. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone|Flight")
+	float AltitudeAMSL = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone|Flight")
+	bool bAltitudeValid = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone|Status", meta = (ClampMin = "0.0", ClampMax = "100.0"))
 	float Battery = 0.0f;
@@ -48,3 +63,15 @@ struct DRONESHOWPLATFORM1_API FDroneData
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone|Selection")
 	bool bSelected = false;
 };
+
+namespace DroneGPS
+{
+	inline constexpr int32 MinimumValidFixType = 3;
+
+	inline bool IsValid(const FDroneData& DroneData)
+	{
+		return DroneData.bGPSValid
+			&& DroneData.GPSFixType >= MinimumValidFixType
+			&& !(DroneData.GPSLat == 0.0 && DroneData.GPSLon == 0.0);
+	}
+}

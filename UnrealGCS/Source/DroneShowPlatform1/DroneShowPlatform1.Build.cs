@@ -20,7 +20,8 @@ public class DroneShowPlatform1 : ModuleRules
 			"Slate",
 			"SlateCore",
 			"Sockets",
-			"Networking"
+			"Networking",
+			"Niagara"
 		});
 
 		PublicIncludePaths.Add(
@@ -51,7 +52,10 @@ public class DroneShowPlatform1 : ModuleRules
 		}
 		PublicIncludePaths.Add(TransportIncludePath);
 
-		PrivateDependencyModuleNames.AddRange(new string[] {  });
+		PrivateDependencyModuleNames.AddRange(new string[]
+		{
+			"CesiumRuntime"
+		});
 
 		// Uncomment if you are using Slate UI
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });

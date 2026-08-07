@@ -145,6 +145,10 @@ private:
 	UTextBlock* FindTopBarText(const FName Name) const;
 	void SetText(const FName Name, const FString& Value) const;
 	void SetFleetText(const FName Name, const FString& Value) const;
+	void SetFleetStatus(
+		FName Name,
+		const FString& Value,
+		const FLinearColor& Color) const;
 	void SetTopBarText(const FName Name, const FString& Value) const;
 	void RefreshFromFleet();
 	void RefreshFleetRows(

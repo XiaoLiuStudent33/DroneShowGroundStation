@@ -569,6 +569,7 @@ void DroneSession::SetState(DroneSessionState newState)
 
 void DroneSession::SendHeartbeat()
 {
+    // MAVLink #0 HEARTBEAT - GCS heartbeat with SYSID=255.
     mavlink_message_t message;
     std::uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
 
@@ -591,6 +592,7 @@ void DroneSession::RequestDataStream(
     std::uint8_t system,
     std::uint8_t component)
 {
+    // MAVLink #66 REQUEST_DATA_STREAM - requests all streams at 10 Hz.
     mavlink_message_t message;
     std::uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
 

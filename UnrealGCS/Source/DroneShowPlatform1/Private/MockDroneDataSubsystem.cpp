@@ -83,7 +83,11 @@ bool UMockDroneDataSubsystem::Start(UGCSServerAdapterSubsystem& Adapter)
 		DroneData.SysID = Seed.SysID;
 		DroneData.GPSLat = Seed.Latitude;
 		DroneData.GPSLon = Seed.Longitude;
+		DroneData.bGPSValid = true;
+		DroneData.GPSFixType = DroneGPS::MinimumValidFixType;
 		DroneData.Altitude = Seed.Altitude;
+		DroneData.AltitudeAMSL = 0.0f;
+		DroneData.bAltitudeValid = true;
 		DroneData.Battery = Seed.Battery;
 		DroneData.Mode = Seed.Mode;
 		DroneData.RSSI = Seed.RSSI;

@@ -50,7 +50,17 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 		Drone.Battery = 90.0f + Index;
 		Drone.Altitude = static_cast<float>(Index);
 		Drone.RSSI = -40 - Index;
+		Drone.bOnline = true;
 		TestTrue(TEXT("Drone added"), Fleet->AddDrone(Drone));
+	}
+	for (int32 Index = 5; Index <= 100; ++Index)
+	{
+		FDroneData Drone;
+		Drone.DroneID = FString::Printf(TEXT("Drone%03d"), Index);
+		Drone.Mode = TEXT("STABILIZE");
+		Drone.Battery = 90.0f;
+		Drone.bOnline = true;
+		TestTrue(TEXT("Fleet status test drone added"), Fleet->AddDrone(Drone));
 	}
 
 	FDroneData Detail;
@@ -136,6 +146,129 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Drone002 checkbox visual is untouched"), Row2Indicator->GetBackgroundColor().Equals(Row2CheckboxColor));
 		TestEqual(TEXT("Command selection remains independent"), Bridge->GetSelectedCommandDroneIDs().Num(), 2);
 		UE_LOG(LogTemp, Display, TEXT("[SELECTION_VISUAL_TEST] Drone001 overlay hidden; Drone002 overlay shown; checkbox targets unchanged"));
+	}
+
+	if (MainWidget && FleetPanel && FleetPanel->WidgetTree)
+	{
+		const FLinearColor OnlineColor(0.15f, 1.0f, 0.45f, 1.0f);
+		const FLinearColor OfflineColor(1.0f, 0.18f, 0.20f, 1.0f);
+		TArray<UTextBlock*> StatusRows;
+		for (int32 RowIndex = 1; RowIndex <= 5; ++RowIndex)
+		{
+			UTextBlock* Status = Cast<UTextBlock>(FleetPanel->WidgetTree->FindWidget(
+				*FString::Printf(TEXT("TXT_StatusRow%d"), RowIndex)));
+			StatusRows.Add(Status);
+			TestNotNull(
+				*FString::Printf(TEXT("Status row %d exists"), RowIndex),
+				Status);
+			if (Status)
+			{
+				TestEqual(
+					*FString::Printf(TEXT("Status row %d shows Online"), RowIndex),
+					Status->GetText().ToString(),
+					FString(TEXT("Online")));
+				TestTrue(
+					*FString::Printf(TEXT("Status row %d uses online green"), RowIndex),
+					Status->GetColorAndOpacity().GetSpecifiedColor().Equals(OnlineColor));
+			}
+		}
+		TestEqual(TEXT("Fleet retains 100 online drones"), Fleet->GetDroneCount(), 100);
+
+		FGCSTelemetryBatch OfflineBatch;
+		OfflineBatch.FleetRevision = 1;
+		FDroneDataDelta OfflineDelta;
+		OfflineDelta.DroneID = TEXT("Drone002");
+		OfflineDelta.ChangedFields = static_cast<int32>(EGCSDroneDataField::Online);
+		OfflineDelta.Data.bOnline = false;
+		OfflineBatch.Deltas.Add(OfflineDelta);
+		TestTrue(TEXT("Drone002 offline delta applied"), Fleet->ApplyDeltaBatch(OfflineBatch));
+		TestEqual(TEXT("Offline drone remains in fleet"), Fleet->GetDroneCount(), 100);
+		if (StatusRows.IsValidIndex(1) && StatusRows[1])
+		{
+			TestEqual(
+				TEXT("Drone002 row shows Offline"),
+				StatusRows[1]->GetText().ToString(),
+				FString(TEXT("Offline")));
+			TestTrue(
+				TEXT("Drone002 row uses offline red"),
+				StatusRows[1]->GetColorAndOpacity().GetSpecifiedColor().Equals(OfflineColor));
+		}
+
+		FGCSTelemetryBatch RecoveryBatch;
+		RecoveryBatch.FleetRevision = 2;
+		FDroneDataDelta RecoveryDelta;
+		RecoveryDelta.DroneID = TEXT("Drone002");
+		RecoveryDelta.ChangedFields = static_cast<int32>(EGCSDroneDataField::Online);
+		RecoveryDelta.Data.bOnline = true;
+		RecoveryBatch.Deltas.Add(RecoveryDelta);
+		TestTrue(TEXT("Drone002 recovery delta applied"), Fleet->ApplyDeltaBatch(RecoveryBatch));
+		if (StatusRows.IsValidIndex(1) && StatusRows[1])
+		{
+			TestEqual(
+				TEXT("Recovered Drone002 row shows Online"),
+				StatusRows[1]->GetText().ToString(),
+				FString(TEXT("Online")));
+			TestTrue(
+				TEXT("Recovered Drone002 row uses online green"),
+				StatusRows[1]->GetColorAndOpacity().GetSpecifiedColor().Equals(OnlineColor));
+		}
+
+		UButton* NextPageButton = Cast<UButton>(
+			FleetPanel->WidgetTree->FindWidget(TEXT("BTN_FleetNextPage")));
+		TestNotNull(TEXT("Fleet next-page button exists"), NextPageButton);
+		if (NextPageButton)
+		{
+			const FString SelectedBeforePaging = Fleet->GetCurrentSelectedDroneID();
+			NextPageButton->OnClicked.Broadcast();
+			UTextBlock* Row1Text = Cast<UTextBlock>(
+				FleetPanel->WidgetTree->FindWidget(TEXT("Row1")));
+			TestTrue(
+				TEXT("Second page row one maps to Drone006"),
+				Row1Text && Row1Text->GetText().ToString().Contains(TEXT("Drone006")));
+			if (StatusRows.IsValidIndex(0) && StatusRows[0])
+			{
+				TestEqual(
+					TEXT("Second page status follows Drone006"),
+					StatusRows[0]->GetText().ToString(),
+					FString(TEXT("Online")));
+			}
+			TestEqual(
+				TEXT("Paging does not change CurrentSelectedDroneID"),
+				Fleet->GetCurrentSelectedDroneID(),
+				SelectedBeforePaging);
+			TestEqual(
+				TEXT("Paging does not change command selection"),
+				Bridge->GetSelectedCommandDroneIDs().Num(),
+				2);
+		}
+
+		FGCSFleetSnapshot SparseSnapshot;
+		SparseSnapshot.FleetRevision = 3;
+		for (int32 Index = 1; Index <= 2; ++Index)
+		{
+			FDroneData Drone;
+			Drone.DroneID = FString::Printf(TEXT("Drone%03d"), Index);
+			Drone.bOnline = true;
+			SparseSnapshot.Drones.Add(Drone);
+		}
+		TestTrue(TEXT("Sparse fleet snapshot applied"), Fleet->ApplySnapshot(SparseSnapshot));
+		for (int32 RowIndex = 2; RowIndex < StatusRows.Num(); ++RowIndex)
+		{
+			if (StatusRows[RowIndex])
+			{
+				TestTrue(
+					*FString::Printf(TEXT("Blank status row %d has no text"), RowIndex + 1),
+					StatusRows[RowIndex]->GetText().IsEmpty());
+				TestEqual(
+					*FString::Printf(TEXT("Blank status row %d is hidden"), RowIndex + 1),
+					StatusRows[RowIndex]->GetVisibility(),
+					ESlateVisibility::Hidden);
+			}
+		}
+		UE_LOG(
+			LogTemp,
+			Display,
+			TEXT("[FLEET_STATUS_TEST] total=100 firstPage=Online offlineRetained=Drone002 recovery=Online secondPage=Drone006 selectionUnchanged blankRowsCleared=3"));
 	}
 
 	GameInstance->Shutdown();

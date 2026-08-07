@@ -23,6 +23,39 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	UpdatedDroneCount);
 
 /**
+ * Immutable-after-initialization geographic anchor for one fleet session.
+ *
+ * Phase 2 only stores the geodetic reference. A later visualization phase must
+ * convert Longitude/Latitude/Height through CesiumGeoreference; the legacy
+ * flat-earth longitude/latitude delta formula must not be reintroduced.
+ * Until this origin exists every drone visual stays at FVector::ZeroVector;
+ * afterwards an individual drone with invalid GPS also returns to that origin.
+ */
+USTRUCT(BlueprintType)
+struct DRONESHOWPLATFORM1_API FFleetGeoOrigin
+{
+	GENERATED_BODY()
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone GCS|Fleet|Geo")
+	bool bOriginInitialized = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone GCS|Fleet|Geo")
+	FString OriginDroneID;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone GCS|Fleet|Geo")
+	double OriginLatitude = 0.0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone GCS|Fleet|Geo")
+	double OriginLongitude = 0.0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone GCS|Fleet|Geo")
+	float OriginAltitudeAMSL = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone GCS|Fleet|Geo")
+	bool bOriginAltitudeValid = false;
+};
+
+/**
  * Authoritative UE-side collection of UI drone snapshots.
  *
  * Widgets never own drone state. They query this subsystem and react to its
@@ -74,6 +107,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Fleet")
 	FString GetCurrentSelectedDroneID() const { return CurrentSelectedDroneID; }
 
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|Fleet|Geo")
+	FFleetGeoOrigin GetFleetGeoOrigin() const { return FleetGeoOrigin; }
+
 	UPROPERTY(BlueprintAssignable, Category = "Drone GCS|Fleet")
 	FFleetChangedEvent OnFleetChanged;
 
@@ -98,4 +134,13 @@ private:
 
 	UPROPERTY()
 	int64 FleetRevision = 0;
+
+	UPROPERTY()
+	FFleetGeoOrigin FleetGeoOrigin;
+
+	UPROPERTY()
+	FString ActiveFleetSessionID;
+
+	void TryInitializeGeoOrigin();
+	void ResetGeoOrigin();
 };

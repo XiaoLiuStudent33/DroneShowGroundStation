@@ -32,7 +32,11 @@ namespace
 		Target.SysID = static_cast<int32>(Source.sysId);
 		Target.GPSLat = Source.gps.latitudeDeg;
 		Target.GPSLon = Source.gps.longitudeDeg;
+		Target.bGPSValid = Source.gps.valid;
+		Target.GPSFixType = static_cast<int32>(Source.gps.fixType);
 		Target.Altitude = Source.altitude.relativeMeters;
+		Target.AltitudeAMSL = Source.altitude.amslMeters;
+		Target.bAltitudeValid = Source.altitude.valid;
 		Target.Battery = Source.battery.remainingPercent;
 		Target.Mode = FromProtocolString(Source.mode.modeName);
 		Target.RSSI = static_cast<int32>(Source.rssi.valueDbm);

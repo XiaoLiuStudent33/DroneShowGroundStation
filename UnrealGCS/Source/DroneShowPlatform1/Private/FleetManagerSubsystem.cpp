@@ -3,6 +3,7 @@
 void UFleetManagerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	ResetGeoOrigin();
 }
 
 void UFleetManagerSubsystem::Deinitialize()
@@ -11,6 +12,8 @@ void UFleetManagerSubsystem::Deinitialize()
 	DroneOrder.Reset();
 	CurrentSelectedDroneID.Reset();
 	FleetRevision = 0;
+	ActiveFleetSessionID.Reset();
+	ResetGeoOrigin();
 	Super::Deinitialize();
 }
 
@@ -23,6 +26,7 @@ bool UFleetManagerSubsystem::AddDrone(const FDroneData& DroneData)
 
 	DronesByID.Add(DroneData.DroneID, DroneData);
 	DroneOrder.Add(DroneData.DroneID);
+	TryInitializeGeoOrigin();
 	OnFleetChanged.Broadcast();
 	return true;
 }
@@ -54,6 +58,7 @@ bool UFleetManagerSubsystem::UpdateDrone(const FDroneData& DroneData)
 	const bool bWasSelected = ExistingDrone->bSelected;
 	*ExistingDrone = DroneData;
 	ExistingDrone->bSelected = bWasSelected;
+	TryInitializeGeoOrigin();
 	OnDroneUpdated.Broadcast(*ExistingDrone);
 	return true;
 }
@@ -118,6 +123,16 @@ bool UFleetManagerSubsystem::ApplySnapshot(const FGCSFleetSnapshot& Snapshot)
 		NewDronesByID.Add(Drone.DroneID, MoveTemp(Drone));
 	}
 
+	if (!Snapshot.Header.SessionID.IsEmpty())
+	{
+		if (!ActiveFleetSessionID.IsEmpty()
+			&& !ActiveFleetSessionID.Equals(Snapshot.Header.SessionID, ESearchCase::CaseSensitive))
+		{
+			ResetGeoOrigin();
+		}
+		ActiveFleetSessionID = Snapshot.Header.SessionID;
+	}
+
 	FString NewSelectedDroneID;
 	if (NewDronesByID.Contains(CurrentSelectedDroneID))
 	{
@@ -135,6 +150,7 @@ bool UFleetManagerSubsystem::ApplySnapshot(const FGCSFleetSnapshot& Snapshot)
 	{
 		SelectedDrone->bSelected = true;
 	}
+	TryInitializeGeoOrigin();
 
 	FleetRevision = Snapshot.FleetRevision > 0
 		? Snapshot.FleetRevision
@@ -190,6 +206,7 @@ bool UFleetManagerSubsystem::ApplyDeltaBatch(const FGCSTelemetryBatch& Batch)
 	{
 		FleetRevision = FMath::Max(FleetRevision, Batch.FleetRevision);
 	}
+	TryInitializeGeoOrigin();
 	OnDataBatchApplied.Broadcast(FleetRevision, UpdatedDroneCount);
 	return true;
 }
@@ -247,4 +264,35 @@ bool UFleetManagerSubsystem::GetSelectedDrone(FDroneData& OutDroneData) const
 
 	OutDroneData = *SelectedDrone;
 	return true;
+}
+
+void UFleetManagerSubsystem::TryInitializeGeoOrigin()
+{
+	if (FleetGeoOrigin.bOriginInitialized || DroneOrder.IsEmpty())
+	{
+		return;
+	}
+
+	// Deterministic rule: only the first drone in fleet logical order may anchor
+	// this session. A later drone with valid GPS must wait for this one.
+	const FString& OriginCandidateID = DroneOrder[0];
+	const FDroneData* OriginCandidate = DronesByID.Find(OriginCandidateID);
+	if (!OriginCandidate || !DroneGPS::IsValid(*OriginCandidate))
+	{
+		return;
+	}
+
+	FleetGeoOrigin.bOriginInitialized = true;
+	FleetGeoOrigin.OriginDroneID = OriginCandidate->DroneID;
+	FleetGeoOrigin.OriginLatitude = OriginCandidate->GPSLat;
+	FleetGeoOrigin.OriginLongitude = OriginCandidate->GPSLon;
+	FleetGeoOrigin.bOriginAltitudeValid = OriginCandidate->bAltitudeValid;
+	FleetGeoOrigin.OriginAltitudeAMSL = OriginCandidate->bAltitudeValid
+		? OriginCandidate->AltitudeAMSL
+		: 0.0f;
+}
+
+void UFleetManagerSubsystem::ResetGeoOrigin()
+{
+	FleetGeoOrigin = FFleetGeoOrigin{};
 }
