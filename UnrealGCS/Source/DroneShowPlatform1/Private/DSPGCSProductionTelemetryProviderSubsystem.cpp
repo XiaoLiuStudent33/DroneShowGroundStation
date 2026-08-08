@@ -7,7 +7,6 @@
  */
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
 
-#include "Async/Async.h"
 #include "DSPGCSProtocol.h"
 #include "DSPGCSTransportFactory.h"
 #include "GCSServerAdapterSubsystem.h"
@@ -115,7 +114,7 @@ bool UDSPGCSProductionTelemetryProviderSubsystem::Start(
 void UDSPGCSProductionTelemetryProviderSubsystem::Stop()
 {
 	StopTelemetryHealthMonitor();
-	LastValidTelemetryReceiveTimeSeconds = 0.0;
+	LastValidTelemetryReceiveTimeSeconds.store(0.0);
 	SetTelemetryLinkState(EDSPGCSTelemetryLinkState::Disconnected);
 	SetCommandResultHandler({});
 	if (Transport)
@@ -293,41 +292,36 @@ void UDSPGCSProductionTelemetryProviderSubsystem::HandleTransportFrame(
 		return;
 	}
 
-	const TWeakObjectPtr<UDSPGCSProductionTelemetryProviderSubsystem> WeakThis(this);
-	AsyncTask(ENamedThreads::GameThread, [WeakThis, Envelope, Batch = MoveTemp(CompleteBatch)]()
+	UGCSServerAdapterSubsystem* Adapter = AdapterRef.Get();
+	if (!Adapter)
 	{
-		UDSPGCSProductionTelemetryProviderSubsystem* Self = WeakThis.Get();
-		UGCSServerAdapterSubsystem* Adapter = Self ? Self->AdapterRef.Get() : nullptr;
-		if (!Self || !Adapter)
-		{
-			return;
-		}
+		return;
+	}
 
-		FGCSFleetSnapshot Snapshot;
-		Snapshot.Header.SchemaVersion = GCSDataSchema::CurrentVersion;
-		Snapshot.Header.SourceID = FromProtocolString(Envelope.sourceId);
-		Snapshot.Header.SessionID = FromProtocolString(Envelope.sessionId);
-		Snapshot.Header.Sequence = static_cast<int64>(Envelope.sequence);
-		Snapshot.Header.SourceTimestamp = FromUnixMilliseconds(Envelope.timestampUtcMs);
-		Snapshot.FleetRevision = static_cast<int64>(Batch.fleetRevision);
-		Snapshot.Drones.Reserve(static_cast<int32>(Batch.items.size()));
-		for (size_t Index = 0; Index < Batch.items.size(); ++Index)
-		{
-			Snapshot.Drones.Add(ToFleetDrone(Batch.items[Index], Index == 0));
-		}
+	FGCSFleetSnapshot Snapshot;
+	Snapshot.Header.SchemaVersion = GCSDataSchema::CurrentVersion;
+	Snapshot.Header.SourceID = FromProtocolString(Envelope.sourceId);
+	Snapshot.Header.SessionID = FromProtocolString(Envelope.sessionId);
+	Snapshot.Header.Sequence = static_cast<int64>(Envelope.sequence);
+	Snapshot.Header.SourceTimestamp = FromUnixMilliseconds(Envelope.timestampUtcMs);
+	Snapshot.FleetRevision = static_cast<int64>(CompleteBatch.fleetRevision);
+	Snapshot.Drones.Reserve(static_cast<int32>(CompleteBatch.items.size()));
+	for (size_t Index = 0; Index < CompleteBatch.items.size(); ++Index)
+	{
+		Snapshot.Drones.Add(ToFleetDrone(CompleteBatch.items[Index], Index == 0));
+	}
 
-		if (Adapter->PushFleetSnapshot(Snapshot))
-		{
-			Self->ReceivedDroneCount = Snapshot.Drones.Num();
-			Self->MarkValidTelemetryReceivedAt(FPlatformTime::Seconds());
-			UE_LOG(
-				LogTemp,
-				VeryVerbose,
-				TEXT("DSP-GCS production telemetry applied drones=%d revision=%lld"),
-				Snapshot.Drones.Num(),
-				Snapshot.FleetRevision);
-		}
-	});
+	if (Adapter->PushFleetSnapshot(Snapshot))
+	{
+		ReceivedDroneCount.store(Snapshot.Drones.Num());
+		MarkValidTelemetryReceivedAt(FPlatformTime::Seconds());
+		UE_LOG(
+			LogTemp,
+			VeryVerbose,
+			TEXT("DSP-GCS production telemetry accepted drones=%d revision=%lld"),
+			Snapshot.Drones.Num(),
+			Snapshot.FleetRevision);
+	}
 }
 
 bool UDSPGCSProductionTelemetryProviderSubsystem::TryAssembleTelemetrySnapshot(
@@ -425,7 +419,7 @@ void UDSPGCSProductionTelemetryProviderSubsystem::ResetPendingTelemetrySnapshot(
 void UDSPGCSProductionTelemetryProviderSubsystem::StartTelemetryHealthMonitor()
 {
 	StopTelemetryHealthMonitor();
-	LastValidTelemetryReceiveTimeSeconds = 0.0;
+	LastValidTelemetryReceiveTimeSeconds.store(0.0);
 	SetTelemetryLinkState(EDSPGCSTelemetryLinkState::Disconnected);
 	TelemetryHealthTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
 		FTickerDelegate::CreateUObject(
@@ -454,8 +448,11 @@ bool UDSPGCSProductionTelemetryProviderSubsystem::TickTelemetryHealth(
 void UDSPGCSProductionTelemetryProviderSubsystem::MarkValidTelemetryReceivedAt(
 	const double ReceiveTimeSeconds)
 {
-	LastValidTelemetryReceiveTimeSeconds = ReceiveTimeSeconds;
-	SetTelemetryLinkState(EDSPGCSTelemetryLinkState::Connected);
+	LastValidTelemetryReceiveTimeSeconds.store(ReceiveTimeSeconds);
+	if (IsInGameThread())
+	{
+		SetTelemetryLinkState(EDSPGCSTelemetryLinkState::Connected);
+	}
 }
 
 void UDSPGCSProductionTelemetryProviderSubsystem::EvaluateTelemetryLinkHealthAt(
@@ -468,14 +465,15 @@ EDSPGCSTelemetryLinkState
 UDSPGCSProductionTelemetryProviderSubsystem::GetTelemetryLinkStateAt(
 	const double CurrentTimeSeconds) const
 {
-	if (TelemetryLinkState != EDSPGCSTelemetryLinkState::Connected ||
-		LastValidTelemetryReceiveTimeSeconds <= 0.0)
+	const double LastReceiveTimeSeconds =
+		LastValidTelemetryReceiveTimeSeconds.load();
+	if (LastReceiveTimeSeconds <= 0.0)
 	{
 		return EDSPGCSTelemetryLinkState::Disconnected;
 	}
 
 	const double ElapsedMilliseconds =
-		(CurrentTimeSeconds - LastValidTelemetryReceiveTimeSeconds) * 1000.0;
+		(CurrentTimeSeconds - LastReceiveTimeSeconds) * 1000.0;
 	return ElapsedMilliseconds <= static_cast<double>(TelemetryTimeoutMs)
 		? EDSPGCSTelemetryLinkState::Connected
 		: EDSPGCSTelemetryLinkState::Disconnected;
@@ -484,6 +482,7 @@ UDSPGCSProductionTelemetryProviderSubsystem::GetTelemetryLinkStateAt(
 void UDSPGCSProductionTelemetryProviderSubsystem::SetTelemetryLinkState(
 	const EDSPGCSTelemetryLinkState NewState)
 {
+	check(IsInGameThread());
 	if (TelemetryLinkState == NewState)
 	{
 		return;

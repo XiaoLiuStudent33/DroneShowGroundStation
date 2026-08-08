@@ -59,7 +59,7 @@ bool CommandManager::Submit(const DroneCommandRequest& request)
     {
         DroneCommandTargetResult targetResult;
         targetResult.droneId = droneId;
-        DroneSession* session = droneManager.GetDrone(droneId);
+        DroneSession* session = droneManager.FindDrone(droneId);
 
         if (session == nullptr)
         {

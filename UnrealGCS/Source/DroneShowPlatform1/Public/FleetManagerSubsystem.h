@@ -130,6 +130,11 @@ public:
 	FFleetDataBatchAppliedEvent OnDataBatchApplied;
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FDSPGCSTelemetryChunkAssemblyTest;
+	int32 DataBatchAppliedBroadcastCountForTests = 0;
+#endif
+
 	UPROPERTY()
 	TMap<FString, FDroneData> DronesByID;
 

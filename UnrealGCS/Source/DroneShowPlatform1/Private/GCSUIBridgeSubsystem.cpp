@@ -16,47 +16,20 @@
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
 #include "FleetManagerSubsystem.h"
 #include "GCSDroneRowView.h"
+#include "GCSUIWidgetPresenter.h"
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
 #include "Widgets/SWidget.h"
-
-namespace
-{
-	FString DisplayStatusText(const EGCSDroneDisplayStatus Status)
-	{
-		switch (Status)
-		{
-		case EGCSDroneDisplayStatus::Online: return TEXT("Online");
-		case EGCSDroneDisplayStatus::Offline: return TEXT("Offline");
-		case EGCSDroneDisplayStatus::LinkLost: return TEXT("Link Lost");
-		}
-		return TEXT("Link Lost");
-	}
-
-	FLinearColor DisplayStatusColor(const EGCSDroneDisplayStatus Status)
-	{
-		switch (Status)
-		{
-		case EGCSDroneDisplayStatus::Online:
-			return FLinearColor(0.15f, 1.0f, 0.45f, 1.0f);
-		case EGCSDroneDisplayStatus::Offline:
-			return FLinearColor(1.0f, 0.18f, 0.20f, 1.0f);
-		case EGCSDroneDisplayStatus::LinkLost:
-			return FLinearColor(1.0f, 0.65f, 0.10f, 1.0f);
-		}
-		return FLinearColor::White;
-	}
-}
 
 void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 {
 	ResetNavigationPages();
 
 	MainWidgetRef = MainWidget;
-	TopBarWidget = ResolveChildWidget(MainWidget, TEXT("CHILD_TopBar"));
-	LeftToolbarWidget = ResolveChildWidget(MainWidget, TEXT("CHILD_LeftToolbar"));
-	FleetPanelWidget = ResolveChildWidget(MainWidget, TEXT("CHILD_FleetPanel"));
-	UUserWidget* DroneDetail = ResolveDroneDetail(MainWidget);
+	TopBarWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_TopBar"));
+	LeftToolbarWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_LeftToolbar"));
+	FleetPanelWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_FleetPanel"));
+	UUserWidget* DroneDetail = FGCSUIWidgetPresenter::ResolveDroneDetail(MainWidget);
 
 	if (!DroneDetail)
 	{
@@ -535,30 +508,14 @@ void UGCSUIBridgeSubsystem::RefreshHoverMVPControls()
 			: TEXT("GCS MODE  MANUAL"));
 }
 
-void UGCSUIBridgeSubsystem::SetButtonLabel(
-	const FName ButtonName,
-	const FString& Value) const
-{
-	if (UButton* Button = FindButton(ButtonName))
-	{
-		if (UTextBlock* Label = Cast<UTextBlock>(Button->GetContent()))
-		{
-			Label->SetText(FText::FromString(Value));
-		}
-	}
-}
-
 void UGCSUIBridgeSubsystem::SetFleetButtonLabel(
 	const FName ButtonName,
 	const FString& Value) const
 {
-	if (UButton* Button = FindFleetButton(ButtonName))
-	{
-		if (UTextBlock* Label = Cast<UTextBlock>(Button->GetContent()))
-		{
-			Label->SetText(FText::FromString(Value));
-		}
-	}
+	FGCSUIWidgetPresenter::SetButtonLabel(
+		FleetPanelWidget.Get(),
+		ButtonName,
+		Value);
 }
 
 void UGCSUIBridgeSubsystem::SetLegacyHoverSelectionVisible(const bool bVisible) const
@@ -795,8 +752,8 @@ void UGCSUIBridgeSubsystem::RefreshFleetRows(
 				Drone.RSSI));
 		SetFleetStatus(
 			StatusName,
-			DisplayStatusText(DisplayStatus),
-			DisplayStatusColor(DisplayStatus));
+			FGCSUIWidgetPresenter::DisplayStatusText(DisplayStatus),
+			FGCSUIWidgetPresenter::DisplayStatusColor(DisplayStatus));
 		UpdateFleetRowView(Index, Drone.DroneID, CurrentSelectedDroneID);
 	}
 }
@@ -909,109 +866,48 @@ void UGCSUIBridgeSubsystem::UpdateDroneInfo(const FDroneData& DroneData)
 		DroneData.bSelected ? TEXT("SELECTED  YES") : TEXT("SELECTED  NO"));
 }
 
-UUserWidget* UGCSUIBridgeSubsystem::ResolveDroneDetail(
-	UUserWidget* MainWidget) const
-{
-	if (!MainWidget || !MainWidget->WidgetTree)
-	{
-		return nullptr;
-	}
-
-	if (UUserWidget* NamedChild = Cast<UUserWidget>(
-		MainWidget->WidgetTree->FindWidget(TEXT("CHILD_DroneDetail"))))
-	{
-		return NamedChild;
-	}
-
-	if (MainWidget->GetClass()->GetName().Contains(TEXT("WBP_GCS_DroneDetail")))
-	{
-		return MainWidget;
-	}
-
-	return nullptr;
-}
-
-UUserWidget* UGCSUIBridgeSubsystem::ResolveChildWidget(
-	UUserWidget* MainWidget,
-	const FName Name) const
-{
-	return MainWidget && MainWidget->WidgetTree
-		? Cast<UUserWidget>(MainWidget->WidgetTree->FindWidget(Name))
-		: nullptr;
-}
-
 UButton* UGCSUIBridgeSubsystem::FindButton(const FName Name) const
 {
-	UUserWidget* DroneDetail = DroneDetailWidget.Get();
-
-	return DroneDetail && DroneDetail->WidgetTree
-		? Cast<UButton>(DroneDetail->WidgetTree->FindWidget(Name))
-		: nullptr;
+	return FGCSUIWidgetPresenter::FindButton(DroneDetailWidget.Get(), Name);
 }
 
 UButton* UGCSUIBridgeSubsystem::FindFleetButton(const FName Name) const
 {
-	UUserWidget* FleetPanel = FleetPanelWidget.Get();
-
-	return FleetPanel && FleetPanel->WidgetTree
-		? Cast<UButton>(FleetPanel->WidgetTree->FindWidget(Name))
-		: nullptr;
+	return FGCSUIWidgetPresenter::FindButton(FleetPanelWidget.Get(), Name);
 }
 
 UButton* UGCSUIBridgeSubsystem::FindToolbarButton(const FName Name) const
 {
-	UUserWidget* Toolbar = LeftToolbarWidget.Get();
-
-	return Toolbar && Toolbar->WidgetTree
-		? Cast<UButton>(Toolbar->WidgetTree->FindWidget(Name))
-		: nullptr;
+	return FGCSUIWidgetPresenter::FindButton(LeftToolbarWidget.Get(), Name);
 }
 
 UTextBlock* UGCSUIBridgeSubsystem::FindText(const FName Name) const
 {
-	UUserWidget* DroneDetail = DroneDetailWidget.Get();
-
-	return DroneDetail && DroneDetail->WidgetTree
-		? Cast<UTextBlock>(DroneDetail->WidgetTree->FindWidget(Name))
-		: nullptr;
+	return FGCSUIWidgetPresenter::FindText(DroneDetailWidget.Get(), Name);
 }
 
 UTextBlock* UGCSUIBridgeSubsystem::FindFleetText(const FName Name) const
 {
-	UUserWidget* FleetPanel = FleetPanelWidget.Get();
-
-	return FleetPanel && FleetPanel->WidgetTree
-		? Cast<UTextBlock>(FleetPanel->WidgetTree->FindWidget(Name))
-		: nullptr;
+	return FGCSUIWidgetPresenter::FindText(FleetPanelWidget.Get(), Name);
 }
 
 UTextBlock* UGCSUIBridgeSubsystem::FindTopBarText(const FName Name) const
 {
-	UUserWidget* TopBar = TopBarWidget.Get();
-
-	return TopBar && TopBar->WidgetTree
-		? Cast<UTextBlock>(TopBar->WidgetTree->FindWidget(Name))
-		: nullptr;
+	return FGCSUIWidgetPresenter::FindText(TopBarWidget.Get(), Name);
 }
 
 void UGCSUIBridgeSubsystem::SetText(
 	const FName Name,
 	const FString& Value) const
 {
-	if (UTextBlock* Text = FindText(Name))
-	{
-		Text->SetText(FText::FromString(Value));
-	}
+	FGCSUIWidgetPresenter::SetText(DroneDetailWidget.Get(), Name, Value);
 }
 
 void UGCSUIBridgeSubsystem::SetFleetText(
 	const FName Name,
 	const FString& Value) const
 {
-	if (UTextBlock* Text = FindFleetText(Name))
-	{
-		Text->SetText(FText::FromString(Value));
-	}
+	FGCSUIWidgetPresenter::SetText(FleetPanelWidget.Get(), Name, Value);
 }
 
 void UGCSUIBridgeSubsystem::SetFleetStatus(
@@ -1019,25 +915,18 @@ void UGCSUIBridgeSubsystem::SetFleetStatus(
 	const FString& Value,
 	const FLinearColor& Color) const
 {
-	if (UTextBlock* Text = FindFleetText(Name))
-	{
-		Text->SetText(FText::FromString(Value));
-		Text->SetColorAndOpacity(FSlateColor(Color));
-		Text->SetVisibility(
-			Value.IsEmpty()
-				? ESlateVisibility::Hidden
-				: ESlateVisibility::HitTestInvisible);
-	}
+	FGCSUIWidgetPresenter::SetStatus(
+		FleetPanelWidget.Get(),
+		Name,
+		Value,
+		Color);
 }
 
 void UGCSUIBridgeSubsystem::SetTopBarText(
 	const FName Name,
 	const FString& Value) const
 {
-	if (UTextBlock* Text = FindTopBarText(Name))
-	{
-		Text->SetText(FText::FromString(Value));
-	}
+	FGCSUIWidgetPresenter::SetText(TopBarWidget.Get(), Name, Value);
 }
 
 void UGCSUIBridgeSubsystem::BindExistingButtons()
@@ -1293,11 +1182,20 @@ void UGCSUIBridgeSubsystem::ApplyNavigationVisibility()
 		&& (ActivePage == EGCSMainPage::Fleet
 			|| ActivePage == EGCSMainPage::Control);
 
-	SetWidgetVisible(FleetPanelWidget, bShowFleet);
-	SetWidgetVisible(DroneDetailWidget, bShowDroneDetail);
-	SetPageVisible(MapPageWidget, ActivePage == EGCSMainPage::Map);
-	SetPageVisible(SettingsPageWidget, ActivePage == EGCSMainPage::Settings);
-	SetPageVisible(LogsPageWidget, ActivePage == EGCSMainPage::Logs);
+	FGCSUIWidgetPresenter::SetWidgetVisible(FleetPanelWidget, bShowFleet);
+	FGCSUIWidgetPresenter::SetWidgetVisible(DroneDetailWidget, bShowDroneDetail);
+	FGCSUIWidgetPresenter::SetWidgetVisible(
+		MapPageWidget,
+		ActivePage == EGCSMainPage::Map,
+		true);
+	FGCSUIWidgetPresenter::SetWidgetVisible(
+		SettingsPageWidget,
+		ActivePage == EGCSMainPage::Settings,
+		true);
+	FGCSUIWidgetPresenter::SetWidgetVisible(
+		LogsPageWidget,
+		ActivePage == EGCSMainPage::Logs,
+		true);
 
 	UE_LOG(LogTemp, Log, TEXT("GCS UI navigation changed to page %d"), static_cast<int32>(ActivePage));
 }
@@ -1328,29 +1226,4 @@ UUserWidget* UGCSUIBridgeSubsystem::CreateNavigationPage(
 	}
 
 	return Page;
-}
-
-void UGCSUIBridgeSubsystem::SetWidgetVisible(
-	const TWeakObjectPtr<UUserWidget>& Widget,
-	const bool bVisible)
-{
-	if (UUserWidget* ResolvedWidget = Widget.Get())
-	{
-		ResolvedWidget->SetVisibility(
-			bVisible ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-	}
-}
-
-void UGCSUIBridgeSubsystem::SetPageVisible(
-	const TWeakObjectPtr<UUserWidget>& Widget,
-	const bool bVisible)
-{
-	if (UUserWidget* ResolvedWidget = Widget.Get())
-	{
-		// Stage 1 pages are visual placeholders. Ignore hit testing so the
-		// persistent toolbar remains usable until the pages are moved into an
-		// authored WidgetSwitcher during the layout pass.
-		ResolvedWidget->SetVisibility(
-			bVisible ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
-	}
 }

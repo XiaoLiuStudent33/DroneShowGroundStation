@@ -242,7 +242,7 @@ RemotePort=12002
         std::cout << "Safety policy uses deployment config without endpoint constants\n";
     }
 
-    std::vector<std::uint8_t> MakeHeartbeatDatagram(
+    mavlink_message_t MakeHeartbeatMessage(
         const std::uint8_t systemId,
         const std::uint8_t componentId = MAV_COMP_ID_AUTOPILOT1,
         const std::uint32_t customMode = 5)
@@ -257,6 +257,19 @@ RemotePort=12002
             MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
             customMode,
             MAV_STATE_STANDBY);
+
+        return message;
+    }
+
+    std::vector<std::uint8_t> MakeHeartbeatDatagram(
+        const std::uint8_t systemId,
+        const std::uint8_t componentId = MAV_COMP_ID_AUTOPILOT1,
+        const std::uint32_t customMode = 5)
+    {
+        const mavlink_message_t message = MakeHeartbeatMessage(
+            systemId,
+            componentId,
+            customMode);
 
         std::vector<std::uint8_t> bytes(MAVLINK_MAX_PACKET_LEN);
         const std::uint16_t byteCount =
@@ -294,11 +307,11 @@ RemotePort=12002
         const std::uint16_t sourcePort = 10001,
         const std::uint32_t customMode = 5)
     {
-        const std::vector<std::uint8_t> bytes =
-            MakeHeartbeatDatagram(systemId, MAV_COMP_ID_AUTOPILOT1, customMode);
-        return discovery.IngestDatagram(
-            bytes.data(),
-            bytes.size(),
+        return discovery.IngestMessage(
+            MakeHeartbeatMessage(
+                systemId,
+                MAV_COMP_ID_AUTOPILOT1,
+                customMode),
             sourceIp,
             sourcePort);
     }

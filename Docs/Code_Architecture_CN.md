@@ -149,7 +149,7 @@ DroneManager 稳定 SessionOrder
 -> Console DSP Transport
 -> UE ProductionTelemetryProvider
 -> SessionID + SnapshotID + FleetRevision 重组
--> 完整 Snapshot
+-> worker 上转换完整 Snapshot DTO
 -> GCSServerAdapter GameThread Flush
 -> FleetManager 原子应用
 ```
@@ -172,7 +172,8 @@ DSPGCSProductionTelemetryProviderSubsystem
 - `DronesByID` 保存按稳定 DroneID 索引的数据。
 - `DroneOrder` 保存稳定顺序。
 - `CurrentSelectedDroneID` 保存详情选择。
-- 网络线程不直接修改 Fleet/UI；Adapter 批量切换到 GameThread。
+- Provider 在网络 worker 完成 Envelope decode、分片重组和 DTO 转换；不自行切换 GameThread。
+- 网络线程不直接修改 Fleet/UI；GCSServerAdapter 是唯一 Network/Worker -> GameThread 边界，并批量原子提交 Fleet。
 
 ## 12. UE 选择模型
 
@@ -339,7 +340,7 @@ Future / Planned：如果 DSP-GCS 需要跨机器部署，可新增共享 Deploy
 
 ## 18. Future / Planned 整理方向
 
-Production 职责、重复规则、保留边界和 R0/R1/R2/R3 计划见 [`Production_Responsibility_Audit_CN.md`](Production_Responsibility_Audit_CN.md)。Cleanup Phase 3F 的结论是：Endpoint key 已统一到 `DiscoveredDroneIdentity::EndpointKey()`；DataManager、MavlinkCommand、Command 分层、GCSServerAdapter 和 DSP Transport 都有明确线程/协议/安全边界，不应为了减少文件数强行合并。下一阶段优先处理 Discovery 测试入口、重复查询 API、FlightControl public surface、Provider/Adapter 双 GameThread 调度和 UIBridge 局部拆分。
+Production 职责、重复规则、保留边界和 R0/R1/R2/R3 计划见 [`Production_Responsibility_Audit_CN.md`](Production_Responsibility_Audit_CN.md)。Cleanup Phase 3G 已完成五项 R2 收敛：Datagram decode 只由 `MavlinkReadOnlyIngress` 负责；Drone nullable 查询统一为 `FindDrone`；`FlightControl` 不再暴露正式命令旁路；`GCSServerAdapterSubsystem` 成为唯一 Fleet GameThread 提交边界；`FGCSUIWidgetPresenter` 承担无状态 Widget 查找与展示，`GCSUIBridgeSubsystem` 继续拥有 UI 生命周期、Selection、Command 和 Fleet 事件协调。
 
 未来可按以下模块域整理，但本轮没有移动任何文件：
 

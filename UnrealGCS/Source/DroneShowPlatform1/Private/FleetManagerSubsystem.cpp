@@ -166,6 +166,9 @@ bool UFleetManagerSubsystem::ApplySnapshot(const FGCSFleetSnapshot& Snapshot)
 	FleetRevision = Snapshot.FleetRevision > 0
 		? Snapshot.FleetRevision
 		: FleetRevision + 1;
+#if WITH_DEV_AUTOMATION_TESTS
+	++DataBatchAppliedBroadcastCountForTests;
+#endif
 	OnDataBatchApplied.Broadcast(FleetRevision, DronesByID.Num());
 	return true;
 }
@@ -218,6 +221,9 @@ bool UFleetManagerSubsystem::ApplyDeltaBatch(const FGCSTelemetryBatch& Batch)
 		FleetRevision = FMath::Max(FleetRevision, Batch.FleetRevision);
 	}
 	TryInitializeGeoOrigin();
+#if WITH_DEV_AUTOMATION_TESTS
+	++DataBatchAppliedBroadcastCountForTests;
+#endif
 	OnDataBatchApplied.Broadcast(FleetRevision, UpdatedDroneCount);
 	return true;
 }

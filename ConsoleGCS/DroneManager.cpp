@@ -223,17 +223,6 @@ const DroneSession* DroneManager::FindDroneByIdentity(
         : nullptr;
 }
 
-DroneSession* DroneManager::GetDrone(const std::string& droneId)
-{
-    return FindDrone(droneId);
-}
-
-const DroneSession* DroneManager::GetDrone(
-    const std::string& droneId) const
-{
-    return FindDrone(droneId);
-}
-
 std::vector<DroneSession*> DroneManager::GetAllDrones()
 {
     std::vector<DroneSession*> result;

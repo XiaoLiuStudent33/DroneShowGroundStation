@@ -39,8 +39,6 @@ public:
     const DroneSession* FindDroneByIdentity(
         const DiscoveredDroneIdentity& identity) const;
 
-    DroneSession* GetDrone(const std::string& droneId);
-    const DroneSession* GetDrone(const std::string& droneId) const;
     std::vector<DroneSession*> GetAllDrones();
     std::vector<const DroneSession*> GetAllDrones() const;
 

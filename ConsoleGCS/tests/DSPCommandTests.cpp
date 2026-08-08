@@ -397,7 +397,7 @@ int RunDSPCommandTests()
     std::size_t waitingCommandCount = 0;
     for (const std::string& droneId : fiveTargets)
     {
-        const DroneSession* session = droneManager.GetDrone(droneId);
+        const DroneSession* session = droneManager.FindDrone(droneId);
         passed &= Check(session != nullptr, "Hover target Session exists");
         if (!session)
         {
@@ -455,7 +455,7 @@ int RunDSPCommandTests()
         "manual LAND returned one result for every selected drone");
     for (const std::string& droneId : fiveTargets)
     {
-        const DroneSession* session = droneManager.GetDrone(droneId);
+        const DroneSession* session = droneManager.FindDrone(droneId);
         passed &= Check(
             session != nullptr &&
             session->GetHoverMissionState() == HoverMissionState::Idle,

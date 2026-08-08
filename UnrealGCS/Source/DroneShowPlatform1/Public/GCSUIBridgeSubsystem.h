@@ -158,8 +158,6 @@ private:
 	UFUNCTION()
 	void HandleTelemetryLinkStateChanged();
 
-	UUserWidget* ResolveDroneDetail(UUserWidget* MainWidget) const;
-	UUserWidget* ResolveChildWidget(UUserWidget* MainWidget, FName Name) const;
 	UButton* FindButton(const FName Name) const;
 	UButton* FindFleetButton(const FName Name) const;
 	UButton* FindToolbarButton(const FName Name) const;
@@ -196,7 +194,6 @@ private:
 		const FGCSProductionCommandParameters& Parameters = {});
 	TArray<FString> GetCommandTargetDroneIDs() const;
 	void RefreshHoverMVPControls();
-	void SetButtonLabel(FName ButtonName, const FString& Value) const;
 	void SetFleetButtonLabel(FName ButtonName, const FString& Value) const;
 	void SetLegacyHoverSelectionVisible(bool bVisible) const;
 	void BindExistingButtons();
@@ -207,8 +204,6 @@ private:
 	void ShowMainPage(EGCSMainPage Page);
 	void ApplyNavigationVisibility();
 	UUserWidget* CreateNavigationPage(const TCHAR* ClassPath) const;
-	static void SetWidgetVisible(const TWeakObjectPtr<UUserWidget>& Widget, bool bVisible);
-	static void SetPageVisible(const TWeakObjectPtr<UUserWidget>& Widget, bool bVisible);
 
 	TWeakObjectPtr<UUserWidget> MainWidgetRef;
 	TWeakObjectPtr<UUserWidget> TopBarWidget;

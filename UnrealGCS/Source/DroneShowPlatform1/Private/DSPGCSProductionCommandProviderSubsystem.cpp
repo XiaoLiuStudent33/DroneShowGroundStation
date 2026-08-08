@@ -47,7 +47,7 @@ namespace
 		return TEXT("UNKNOWN");
 	}
 
-	FString FromProtocolString(const std::string& Value)
+	FString CommandFromProtocolString(const std::string& Value)
 	{
 		return UTF8_TO_TCHAR(Value.c_str());
 	}
@@ -253,7 +253,7 @@ void UDSPGCSProductionCommandProviderSubsystem::ApplyResultBatch(
 	dspgcs::MessageEnvelope Envelope,
 	dspgcs::CommandResultBatchDTO Batch)
 {
-	const FString CommandID = FromProtocolString(Batch.commandId);
+	const FString CommandID = CommandFromProtocolString(Batch.commandId);
 	FPendingCommand* Pending = PendingCommands.Find(CommandID);
 	if (!Pending)
 	{
@@ -265,12 +265,12 @@ void UDSPGCSProductionCommandProviderSubsystem::ApplyResultBatch(
 	{
 		FGCSProductionCommandResult Result;
 		Result.CommandID = CommandID;
-		Result.DroneID = FromProtocolString(ProtocolResult.droneId);
+		Result.DroneID = CommandFromProtocolString(ProtocolResult.droneId);
 		Result.CommandType = Pending->Type;
 		Result.Source = Pending->Source;
 		Result.AckState = AckStateName(ProtocolResult.ackState);
-		Result.ErrorCode = FromProtocolString(ProtocolResult.error.code);
-		Result.Detail = FromProtocolString(ProtocolResult.error.message);
+		Result.ErrorCode = CommandFromProtocolString(ProtocolResult.error.code);
+		Result.Detail = CommandFromProtocolString(ProtocolResult.error.message);
 		Result.bSimulated = ProtocolResult.ackState == dspgcs::AckState::Simulated;
 		Result.bFinal = ProtocolResult.final;
 		LastResult = Result;

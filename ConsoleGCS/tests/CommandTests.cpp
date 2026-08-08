@@ -248,7 +248,7 @@ int RunCommandManagerSafeModeTests()
         droneManager.AddDrone(config),
         "single DroneSession is registered");
     passed &= Check(
-        droneManager.GetDrone("Drone001") != nullptr,
+        droneManager.FindDrone("Drone001") != nullptr,
         "registered DroneID is queryable");
     passed &= Check(
         droneManager.GetAllDrones().size() == 1,

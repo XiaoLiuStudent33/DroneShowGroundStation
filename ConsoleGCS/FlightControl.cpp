@@ -227,52 +227,6 @@ void FlightControl::Takeoff(float altitude)
         altitude);
 }
 
-//==================================================
-// LAND
-//==================================================
-
-void FlightControl::Land()
-{
-    const FlightData target = manager.GetFlightData();
-
-    if (!target.online)
-    {
-        ConsoleUI::AddLog("Land not sent: vehicle offline");
-        return;
-    }
-
-    dispatcher.QueueLand(
-        target.systemID,
-        target.componentID);
-}
-
-//==================================================
-// RTL
-//==================================================
-
-void FlightControl::RTL()
-{
-    const FlightData target = manager.GetFlightData();
-
-    if (!target.online)
-    {
-        ConsoleUI::AddLog("RTL not sent: vehicle offline");
-        return;
-    }
-
-    dispatcher.QueueRTL(
-        target.systemID,
-        target.componentID);
-}
-
-//==================================================
-// Hover
-//==================================================
-
-void FlightControl::Hover()
-{
-}
-
 HoverMissionState FlightControl::GetHoverMissionState() const
 {
     return hoverState.load();

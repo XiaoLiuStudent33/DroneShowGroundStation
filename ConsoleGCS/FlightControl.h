@@ -62,28 +62,6 @@ public:
 
 
 
-    //-----------------------------
-    // 基础控制
-    //-----------------------------
-
-    void Takeoff(
-        float altitude
-    );
-
-
-    void Land();
-
-
-    void RTL();
-
-
-
-    //-----------------------------
-    // 后续位置悬停
-    //-----------------------------
-
-    void Hover();
-
     HoverMissionState GetHoverMissionState() const;
     float GetHoverTargetAltitudeMeters() const;
 
@@ -97,6 +75,8 @@ private:
     //-----------------------------
 
     void HoverMission();
+
+    void Takeoff(float altitude);
 
 
 

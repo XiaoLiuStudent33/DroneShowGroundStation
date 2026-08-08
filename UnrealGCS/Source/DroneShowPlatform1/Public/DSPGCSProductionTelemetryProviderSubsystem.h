@@ -15,6 +15,7 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 
 #include <memory>
+#include <atomic>
 #include <functional>
 #include <vector>
 
@@ -57,7 +58,7 @@ public:
 	virtual void Stop() override;
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|DSP-GCS Telemetry")
-	int32 GetReceivedDroneCount() const { return ReceivedDroneCount; }
+	int32 GetReceivedDroneCount() const { return ReceivedDroneCount.load(); }
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|DSP-GCS Telemetry")
 	EDSPGCSTelemetryLinkState GetTelemetryLinkState() const;
@@ -106,9 +107,9 @@ private:
 	FCriticalSection CommandResultHandlerMutex;
 	FCommandResultHandler CommandResultHandler;
 	bool bEnabled = false;
-	int32 ReceivedDroneCount = 0;
+	std::atomic<int32> ReceivedDroneCount{0};
 	int32 TelemetryTimeoutMs = 2000;
-	double LastValidTelemetryReceiveTimeSeconds = 0.0;
+	std::atomic<double> LastValidTelemetryReceiveTimeSeconds{0.0};
 	EDSPGCSTelemetryLinkState TelemetryLinkState =
 		EDSPGCSTelemetryLinkState::Disconnected;
 	FTSTicker::FDelegateHandle TelemetryHealthTickerHandle;

@@ -40,10 +40,10 @@ UMG -> UGCSUIBridgeSubsystem -> UDSPGCSProductionCommandProviderSubsystem
 | `SafetyConfig` | 真实命令总门和高度限制 | 进程级安全开关 | AppConfig/命令参数 | allow/reject | Application/Session/DSP Receiver | 无网络依赖 | 主线程启动后只读 | 是，Safety boundary | UE 本地校验不是权威安全门 | 否 | 否 | 是 | 高 | R0，保持独立 |
 | `MavlinkUdpReceiver` | 单共享 UDP bind、收包、同 Socket 回发 | Socket/bind/buffer | UDP | 带 Remote Endpoint 的 Datagram / SendTo | Application、`IMavlinkDatagramSender` 使用方 | Winsock | 主循环接收；发送由 Session 调度 | 是，network boundary | 无 per-drone socket | 否 | 否 | 是 | 高 | R0 |
 | `IMavlinkDatagramSender` | 隔离共享 Socket 发送能力 | 无 | endpoint+bytes | send result | UdpClient/tests | 无 | 调用者线程 | 是，test/network seam | 无 | 否 | 否 | 是 | 中 | R0 |
-| `MavlinkReadOnlyIngress` | 每 Endpoint 解码、消息分类、Session 路由 | 每 Endpoint parser state | Datagram | Discovery/Telemetry/ACK 调用 | Application | Discovery、Manager、MAVLink C API | 主线程 | 是 | Discovery 的 test-only raw decode API | R2：raw decode 只留此处 | 否 | 是 | 高 | R1 已统一 EndpointKey；R2 移除 Discovery raw API |
-| `MavlinkDiscoveryService` | HEARTBEAT 过滤、Endpoint identity 生成、注册/刷新 | Session defaults；test-only parser state | 已解码 HEARTBEAT（Production） | registration result | Ingress/Application/tests | DroneManager | 主线程 | 是（消息到注册边界） | `IngestDatagram` 与 Ingress decode 重复 | R2：删除 `IngestDatagram` 后保留类 | 否 | 是 | 高 | R1 已统一 EndpointKey；R2 迁移测试 |
+| `MavlinkReadOnlyIngress` | 每 Endpoint 解码、消息分类、Session 路由 | 每 Endpoint parser state | Datagram | Discovery/Telemetry/ACK 调用 | Application | Discovery、Manager、MAVLink C API | 主线程 | 是 | 无第二个 raw decode Owner | 否 | 否 | 是 | 高 | R2 Resolved：Datagram decode 只在 Ingress |
+| `MavlinkDiscoveryService` | HEARTBEAT 过滤、Endpoint identity 生成、注册/刷新 | Session defaults | 已解码 HEARTBEAT | registration result | Ingress/Application/tests | DroneManager | 主线程 | 是（消息到注册边界） | 无 | 否 | 否 | 是 | 高 | R2 Resolved：删除 `IngestDatagram` 与 parser state |
 | `MavlinkParser` | Inbound MAVLink 字段到 FlightData | 无 | message | FlightData fields | DroneSession | generated MAVLink | 主线程 | 是，protocol decode boundary | 无第二套 mode/GPS authority | 否 | 否 | 是 | 高 | R0 |
-| `DroneManager` | Session 集合、稳定顺序、Endpoint index、Fleet 查询 | sessions/order/index/ID sequence | discovered identity/DroneID | Session、稳定列表 | Discovery、Application、Command、DSP | DroneSession | 主线程 | 是，Fleet owner | `GetDrone` 只是 `FindDrone` 别名 | R2：统一为 `FindDrone` | 否 | 是 | 高 | R1 已统一 EndpointKey；R2 收窄查询 API |
+| `DroneManager` | Session 集合、稳定顺序、Endpoint index、Fleet 查询 | sessions/order/index/ID sequence | discovered identity/DroneID | Session、稳定列表 | Discovery、Application、Command、DSP | DroneSession | 主线程 | 是，Fleet owner | 无 | 否 | 否 | 是 | 高 | R2 Resolved：nullable 查询统一为 `FindDrone` |
 | `DroneSession` | 单 Endpoint 聚合：遥测、Online、路由元数据、命令入口 | config/state/working data/dispatcher/hover | routed MAVLink、domain command | snapshot、dispatch/result | Manager、Ingress、CommandManager | Parser、DataManager、FlightControl、Dispatcher | 主线程；Hover worker 通过受控对象协作 | 是，per-drone aggregate | 与 FlightControl 有少量命令入口重叠 | 否 | 暂不拆 | 是 | 高 | R0；避免破坏聚合一致性 |
 | `DataManager` | 单 Session 线程安全 FlightData 快照和 timeout 更新 | FlightData+mutex | parser/session update | consistent copy/online transition | Session、FlightControl | FlightData | 主线程+Hover worker | 是，thread-safety boundary | 无 | 否 | 否 | 是 | 高 | R0；不合入 Session |
 | `FlightData` | Console 单机遥测领域数据 | 遥测字段 | Parser | Session/DSP/Control | Parser、DataManager、DSP | 标准类型 | 受 DataManager 保护 | 是，domain DTO | UE DTO 是进程边界后的模型 | 否 | 否 | 是 | 中 | R0 |
@@ -51,7 +51,7 @@ UMG -> UGCSUIBridgeSubsystem -> UDSPGCSProductionCommandProviderSubsystem
 | `CommandDispatcher` | 单 Session 队列、发送、重试、ACK 生命周期 | queue/pending/results/mutex | session actions/#77 | Mavlink send/result | DroneSession、FlightControl | MavlinkCommand/UdpClient | 主线程 Tick/ACK；Hover worker 可入队 | 是，ACK boundary | 无 | 否 | 否 | 是 | 高 | R0 |
 | `MavlinkCommand` | Outbound #11/#76 编码发送 | 无 | SYSID/COMPID/params | datagram | Dispatcher/Session heartbeat helpers旁路之外 | generated MAVLink、UdpClient | 调用者线程 | 是，protocol encode boundary | 无 | 否 | 否 | 是 | 高 | R0；LOC 大但职责单一 |
 | `UdpClient` | 将 per-Session Remote Endpoint 绑定到共享 sender | sender pointer/IP/port | bytes | `SendTo(endpoint)` | DroneSession/MavlinkCommand | IMavlinkDatagramSender | 调用者线程 | 是，endpoint-bound sender seam | 无第二套 Socket | 否 | 否 | 是 | 高 | R0；不要合入 Session |
-| `FlightControl` | HoverTest 工作线程和动作确认流程 | worker/atomic mission state | Session command/FlightData | Dispatcher queue | DroneSession | Dispatcher/DataManager | 自有 Hover worker + caller | Hover workflow 独有 | `Land/RTL/Hover` public API 无调用；primitive entry 与 Session 重叠 | R2：收窄为 Hover workflow | 可拆纯状态机但暂不做 | 部分 | 高 | Phase 3G 删除无调用 public API，保留线程边界 |
+| `FlightControl` | HoverTest 工作线程和动作确认流程 | worker/atomic mission state | Session command/FlightData | Dispatcher queue | DroneSession | Dispatcher/DataManager | 自有 Hover worker + caller | Hover workflow 独有 | 无正式命令旁路 | 否 | 可拆纯状态机但暂不做 | 是 | 高 | R2 Resolved：删除无调用 `Land/RTL/Hover`，`Takeoff` 收为 private |
 | `HoverTest` | Hover 稳定性指标 | running/time/drift | GPS/altitude | acceptance metrics | DroneSession/FlightControl/UI | math/time | Hover worker/读取方 | 是 | 无 | 否 | 否 | 是 | 中 | R0 |
 | `DSPGCSProductionTelemetryProvider` | 构建 Fleet DTO、Snapshot 分片、结果发送 | transport/sequence/revision/session/chunk limits | DroneManager/result | DSP frames | Application | Protocol/Transport factory | 主线程发布；transport 内部接收线程 | 是，Console DSP egress | 无 | 否 | 否 | 是 | 高 | R0 |
 | `DSPGCSProductionCommandReceiver` | DSP decode、接收线程队列、主线程验证/提交/结果关联 | pending/dedup/active/gate | DSP frame | CommandManager/result DTO | Telemetry transport callback/Application | Protocol/CommandManager/Safety | transport thread enqueue；主线程 process | 是，trust/thread boundary | Session 安全校验是纵深防御 | 否 | 增长后可提取纯 mapping | 是 | 高 | R0 |
@@ -66,12 +66,13 @@ UMG -> UGCSUIBridgeSubsystem -> UDSPGCSProductionCommandProviderSubsystem
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | `FDSPGCSLoopbackTransport` | UE 同机 Production UDP Transport | socket/receiver/handler/config/state | DSP UDP | frame callback/send | Factory/Providers | UE UDP socket API | `FUdpSocketReceiver` worker | 是，platform transport boundary | 无 | 否 | 否 | 是 | 高 | R0；名称不表示 Test |
 | `DSPGCSTransportFactory`（Shared） | 构造 Transport interface | 无 | config | transport | UE Providers | FDSPGCSLoopbackTransport | 启动 GameThread | 是 | 无 | 否 | 否 | 是 | 中 | R0 |
-| `UDSPGCSProductionTelemetryProviderSubsystem` | DSP envelope decode、Snapshot 分片重组、DTO 转换、Link Health、共享双向 Channel | transport/assembly/link state/handler | transport frame/config | internal snapshot/command result | UE subsystem lifecycle、CommandProvider | Protocol/Factory/Adapter | receive worker decode；当前再切 GameThread；ticker GameThread | 是，wire/assembly owner | 与 Adapter 存在双 GameThread 调度 | 否 | 可提取纯 assembler，但非必要 | 是 | 高 | R2：只保留 Adapter 的线程切换，需专项验证 |
+| `UDSPGCSProductionTelemetryProviderSubsystem` | DSP envelope decode、Snapshot 分片重组、DTO 转换、Link Health、共享双向 Channel | transport/assembly/link state/handler | transport frame/config | internal snapshot/command result | UE subsystem lifecycle、CommandProvider | Protocol/Factory/Adapter | receive worker decode/DTO；link ticker GameThread | 是，wire/assembly owner | 无 | 否 | 可提取纯 assembler，但非必要 | 是 | 高 | R2 Resolved：不再自行切 GameThread |
 | `UDSPGCSProductionCommandProviderSubsystem` | UE command DTO、发送、pending/result UI event | pending/sequence/mode/result | UI command/result payload | DSP request/UI result event | UIBridge | Telemetry Provider/Protocol | GameThread；result decode 后切 GameThread | 是，UE command boundary | Console 校验属于信任边界，不重复 | 否 | 否 | 是 | 高 | R0 |
 | `IGCSDataProvider` | 协议无关 Provider 生命周期接口 | 无 | Adapter | Provider start/stop | Adapter/Providers | 无 | lifecycle thread | 是，provider seam | 无 | 否 | 否 | 是 | 中 | R0 |
-| `UGCSServerAdapterSubsystem` | Provider 注册、Header 校验、跨线程有界合并、单次 GameThread flush | providers/pending snapshot/deltas/mutex | internal snapshot/delta | Fleet atomic apply | Providers | FleetManager/GCSDataTypes | 任意生产线程入；GameThread flush | 是，thread/lifecycle/application port | Provider 目前先切一次 GameThread | 否 | 否 | 是 | 高 | R0 保留类；R2 消除上游冗余切换 |
+| `UGCSServerAdapterSubsystem` | Provider 注册、Header 校验、跨线程有界合并、单次 GameThread flush | providers/pending snapshot/deltas/mutex | internal snapshot/delta | Fleet atomic apply | Providers | FleetManager/GCSDataTypes | 任意生产线程入；唯一 GameThread flush | 是，thread/lifecycle/application port | 无 | 否 | 否 | 是 | 高 | R2 Resolved：唯一 Network/Worker 到 GameThread 边界 |
 | `UFleetManagerSubsystem` | UE Fleet 权威状态、稳定 order、详情选择、GeoOrigin、revision | map/order/selection/origin/session | snapshot/delta | queries/events | Adapter/UI/Viz | DroneData/GCSDataTypes | GameThread only mutation | 是，Fleet owner | 无 | 否 | 否 | 是 | 高 | R0 |
-| `UGCSUIBridgeSubsystem` | Widget 绑定、页面导航、Fleet 行、详情、命令选择/提交、连接显示 | widget refs/page/selection/paging/UI cache | Fleet/events/buttons | UMG updates/commands | Main Widget/UE lifecycle | Fleet/CommandProvider/TelemetryProvider/RowView | GameThread | 多项职责均真实，但混合过多 | 无第二套权威状态；格式 helper 分散在本类 | 否 | R2：提取一个 Widget binding/presentation helper | 部分 | 中 | Phase 3G 首要拆分候选，不新增多个 Subsystem |
+| `UGCSUIBridgeSubsystem` | UI 生命周期、页面导航、Fleet/Selection 事件和命令提交 | widget refs/page/selection/paging/UI cache | Fleet/events/buttons | UMG updates/commands | Main Widget/UE lifecycle | Fleet/CommandProvider/TelemetryProvider/RowView/Presenter | GameThread | 是，UI coordination owner | 无 | 否 | 否 | 是 | 中 | R2 Resolved：纯查找/文本/颜色/可见性移至单一无状态 Presenter |
+| `FGCSUIWidgetPresenter` | Widget 查找与纯展示派生 | 无 | Widget/status/value | UMG presentation | UIBridge | UMG | GameThread | 是，presentation helper | 无 | 否 | 否 | 是 | 低 | 普通 C++ helper；无网络/Fleet/Command/生命周期/Tick |
 | `UGCSDroneRowView` | 单行 DroneID 到选中 Overlay 的映射 | row ID/overlay/selected | row bind/detail selection | row visual | UIBridge | UMG | GameThread | 是，Blueprint row view seam | 无 | 否 | 否 | 是 | 低 | R0；薄但有解耦价值 |
 | `ADroneFleetVisualizationActor` | Stable DroneOrder 到 Cesium World/Niagara arrays | actor/component/cache/arrays/origin world | Fleet events | one Niagara component arrays | level/FleetManager | Cesium/Niagara | GameThread/event-driven | 是，visualization boundary | 无 per-drone path | 否 | 否 | 是 | 高 | R0 |
 | `FDroneData` / `GCSDataTypes` | UE 领域 DTO、Snapshot/Delta contract、consumer GPS guard | 值类型 | Provider DTO | Adapter/Fleet/UI/Viz | 全 UE 数据链 | Core types | 跨线程复制，GameThread消费 | 是 | Console FlightData 是跨进程前模型 | 否 | 否 | 是 | 高 | R0 |
@@ -96,22 +97,23 @@ UMG -> UGCSUIBridgeSubsystem -> UDSPGCSProductionCommandProviderSubsystem
 | Fleet conversion/state | Provider 转 DTO；FleetManager 拥有状态 | Adapter 不拥有 Fleet | R0 |
 | Selection | Fleet 详情选择 / UI 命令选择 | 两种产品语义，禁止合并 | R0/R3 |
 | Niagara arrays | `DroneFleetVisualizationActor` | 唯一 Owner | R0 |
-| GameThread handoff | Provider 和 Adapter | 同一 Snapshot 当前经历两次 `AsyncTask(GameThread)` 调度 | R2 |
-| MAVLink raw datagram decode | Ingress；Discovery 另有 test-only API | Production 只走 Ingress，但 Runtime API 重复 | R2 |
+| GameThread handoff | `GCSServerAdapterSubsystem` | Provider 在 worker 完成 decode/reassembly/DTO；Adapter 唯一切 GameThread 并原子 Apply | R2 Resolved |
+| MAVLink raw datagram decode | `MavlinkReadOnlyIngress` | Discovery 只接收已解码 HEARTBEAT | R2 Resolved |
 
 ## 5. Merge / Split Candidates 与保留边界
 
-### Merge Candidates（均不在 3F 直接实施）
+### Phase 3G 已完成的收敛
 
-1. R2：删除 `MavlinkDiscoveryService::IngestDatagram` 和其 parser state，把相关测试迁到 `MavlinkReadOnlyIngress`；不是删除 Discovery 类。
-2. R2：删除 `DroneManager::GetDrone` 别名，统一使用 `FindDrone`。
-3. R2：将 `FlightControl::Takeoff/Land/RTL/Hover` 收窄为 Hover workflow 的 private 实现；业务命令入口继续唯一落在 `DroneSession::SubmitCommand`。
+1. 删除 `MavlinkDiscoveryService::IngestDatagram` 和其 parser state；Discovery 测试直接提交已解码 HEARTBEAT，Datagram/Ingress 集成继续由现有 pipeline 回归覆盖。
+2. 删除 `DroneManager::GetDrone` 别名，nullable 查询统一使用 `FindDrone`。
+3. 删除 `FlightControl::Land/RTL/Hover` 无调用入口，Hover workflow 所需 `Takeoff` 改为 private；正式命令入口仍唯一落在 `DroneSession::SubmitCommand`。
+4. Provider 移除上游 GameThread 调度，Adapter 成为唯一 Fleet 提交线程边界；1000 架分片回归验证只 Apply 一次。
+5. 提取一个 `FGCSUIWidgetPresenter`，UIBridge 继续拥有生命周期、Selection、Command 和 Fleet 事件协调。
 
 ### Split Candidates
 
-1. R2：`GCSUIBridgeSubsystem` 提取一个普通 C++/UObject 级 Widget binding/presentation helper；Subsystem 继续拥有事件编排、选择和命令提交。不要拆成五个 Subsystem。
-2. R2：如 Snapshot 逻辑继续增长，可把 UE 分片重组提取为无 UObject 的纯 assembler；当前不是必需。
-3. R2：`ConsoleGCSApplication` 只有在新增更多服务生命周期后再提取 main-loop runner；当前作为 composition root 可接受。
+1. R2：如 Snapshot 逻辑继续增长，可把 UE 分片重组提取为无 UObject 的纯 assembler；当前不是必需。
+2. R2：`ConsoleGCSApplication` 只有在新增更多服务生命周期后再提取 main-loop runner；当前作为 composition root 可接受。
 
 ### 明确不要合并
 
@@ -132,10 +134,10 @@ LOC 为当前 header+cpp 物理行数；方法/成员按头文件可见声明计
 
 | Rank | Type | LOC | Public methods（约） | State members（约） | Responsibility count | 结论 |
 |---:|---|---:|---:|---:|---:|---|
-| 1 | `UGCSUIBridgeSubsystem` | 1583 | 6 | 17 | 6 | 最大认知热点，R2 split |
+| 1 | `UGCSUIBridgeSubsystem` | 1451 | 6 | 17 | 5 | Phase 3G 已提取 173 LOC Presenter；仍是 UI coordination owner |
 | 2 | `DroneSession` | 770 | 19 | 13 | 5 | 大但属于聚合根，R0 |
 | 3 | `UDSPGCSProductionTelemetryProviderSubsystem` | 626 | 12 | 16 | 5 | R2 只消除双线程切换 |
-| 4 | `FlightControl` | 561 | 8 | 6 | 2 | R2 收窄 public API |
+| 4 | `FlightControl` | 495 | 4 | 6 | 1 | Phase 3G 已收窄为 Hover workflow |
 | 5 | `CommandDispatcher` | 538 | 11 | 6 | 2 | ACK/queue 紧密相关，R0 |
 | 6 | `DSPGCSProductionCommandReceiver` | 528 | 5 | 6 | 4 | trust/thread boundary，R0 |
 | 7 | `MavlinkCommand` | 505 | 9 | 0 | 1 | LOC 受旧格式影响，职责清晰，R0 |
@@ -145,11 +147,11 @@ LOC 为当前 header+cpp 物理行数；方法/成员按头文件可见声明计
 
 ## 7. Top Maintenance Risks
 
-1. `GCSUIBridgeSubsystem` 同时包含控件查找、导航、分页、详情、选择和命令编排，任何 UI 改动都容易触碰大文件。
-2. Production Telemetry Provider 先切 GameThread，Adapter 又调度 GameThread；线程 Owner 不够单一。
-3. `FlightControl` 公开无调用的 `Land/RTL/Hover` 等入口，使维护者可能绕开 `DroneSession::SubmitCommand`。
-4. Discovery 的 raw datagram 测试 API 复制 Ingress decode/parser state，容易形成第二条解析路径。
-5. Mock/Acceptance Provider 仍编译在 Runtime Module，虽然默认关闭；配置误开或未来打包规则变化时边界弱于独立 Developer Module。
+1. Mock/Acceptance Provider 仍编译在 Runtime Module，虽然默认关闭；配置误开或未来打包规则变化时边界弱于独立 Developer Module。
+2. `GCSUIBridgeSubsystem` 虽已移出纯展示 helper，仍同时协调导航、分页、详情、选择和命令；后续只按真实变化再评估，不拆多个 Subsystem。
+3. `ConsoleGCSApplication` 作为 composition root 同时组装网络、DSP、线程和主循环；新增服务前应控制继续增长。
+4. UE 分片重组仍位于 Telemetry Provider 内；只有协议复杂度继续增长时才提取纯 assembler。
+5. Console 业务层仍有较多直接 `ConsoleUI` 日志调用，未来若引入第二种前端再考虑事件化。
 
 ## 8. 新开发者入口
 
@@ -159,10 +161,10 @@ LOC 为当前 header+cpp 物理行数；方法/成员按头文件可见声明计
 | B. MAVLink GPS 解析 | `MavlinkParser::Parse` 的 #24/#33 case | 新增字段时 `FlightData.h`；UE 仅消费 guard 看 `DroneData.h` |
 | C. 新 MAV_CMD | `DroneCommandRequest` + `DroneSession::SubmitCommand`（业务） | `CommandDispatcher` + `MavlinkCommand`（ACK/编码）；若 UE 可触发，还需两端 DSP mapping |
 | D. UE Fleet 状态 | `FleetManagerSubsystem` | 内部 Snapshot/Delta contract 变化时 `GCSDataTypes.h` |
-| E. UI 按钮行为 | `GCSUIBridgeSubsystem` | payload/结果语义变化时 `DSPGCSProductionCommandProviderSubsystem` |
+| E. UI 按钮行为 | `GCSUIBridgeSubsystem` | 仅文本/颜色/查找时进入 `GCSUIWidgetPresenter`；payload/结果语义变化时进入 CommandProvider |
 | F. Niagara 数据桥 | `DroneFleetVisualizationActor` | 仅视觉资产行为再进入 `NS_DroneFleet` |
 
-新增端到端命令天然跨 UE/DSP/Console/MAVLink 边界，会超过两个组件；这不是通过合并安全/协议层来解决的问题。Phase 3G 应先提供文档化 checklist 或集中描述，不创建 `MavlinkProtocolCatalog`。
+新增端到端命令天然跨 UE/DSP/Console/MAVLink 边界，会超过两个组件；这不是通过合并安全/协议层来解决的问题。继续使用现有边界和文档化调用链，不创建 `MavlinkProtocolCatalog`。
 
 ## 9. R0 / R1 / R2 / R3 计划
 
@@ -176,16 +178,9 @@ LOC 为当前 header+cpp 物理行数；方法/成员按头文件可见声明计
 - 修正 `DataManager.h` 中“整个程序唯一一份数据”的旧注释，明确它是 per-Session 快照。
 - 未改变 public Production API。
 
-### R2 建议 Phase 3G
+### R2 Phase 3G 结果
 
-按低耦合顺序实施并分别回归：
-
-1. Discovery raw datagram API 迁移到 Ingress 测试路径。
-2. `GetDrone`/`FindDrone` 查询 API 收敛。
-3. `FlightControl` public API 收窄，只保留 Hover workflow；不改变 LAND/RTL/STOP 语义。
-4. 去掉 Production Telemetry Provider 的上游 GameThread 跳转，让 Adapter 成为唯一 Fleet 线程切换 Owner；需 Telemetry Link、1000 Drone Atomic Snapshot、Fleet Retention 全套验证。
-5. 将 UIBridge 的 Widget 查找/绑定/展示提取为一个 helper；不改变 Subsystem、Selection 或 Blueprint API。
-6. 评估把 Mock/Acceptance Provider 移入 Developer Module；先做资产和打包依赖审计。
+本阶段指定的五项均已 Resolved。Mock/Acceptance Provider 的 Developer Module 隔离仍为 R2 候选，本阶段未处理。
 
 ### R3 暂时不要动
 

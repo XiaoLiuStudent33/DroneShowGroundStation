@@ -17,49 +17,6 @@ MavlinkDiscoveryService::MavlinkDiscoveryService(
 {
 }
 
-MavlinkDiscoveryResult MavlinkDiscoveryService::IngestDatagram(
-    const std::uint8_t* bytes,
-    const std::size_t byteCount,
-    const std::string& sourceIp,
-    const std::uint16_t sourcePort)
-{
-    if (bytes == nullptr || byteCount == 0 || sourceIp.empty() || sourcePort == 0)
-    {
-        return MavlinkDiscoveryResult::Rejected;
-    }
-
-    DiscoveredDroneIdentity endpointIdentity;
-    endpointIdentity.sourceIp = sourceIp;
-    endpointIdentity.sourcePort = sourcePort;
-    EndpointParserState& parserState =
-        parserStates[endpointIdentity.EndpointKey()];
-    MavlinkDiscoveryResult finalResult = MavlinkDiscoveryResult::Ignored;
-
-    for (std::size_t index = 0; index < byteCount; ++index)
-    {
-        mavlink_message_t decodedMessage{};
-        mavlink_status_t decodedStatus{};
-        if (mavlink_frame_char_buffer(
-            &parserState.messageBuffer,
-            &parserState.parseStatus,
-            bytes[index],
-            &decodedMessage,
-            &decodedStatus) != MAVLINK_FRAMING_OK)
-        {
-            continue;
-        }
-
-        const MavlinkDiscoveryResult result =
-            IngestMessage(decodedMessage, sourceIp, sourcePort);
-        if (result != MavlinkDiscoveryResult::Ignored)
-        {
-            finalResult = result;
-        }
-    }
-
-    return finalResult;
-}
-
 MavlinkDiscoveryResult MavlinkDiscoveryService::IngestMessage(
     const mavlink_message_t& message,
     const std::string& sourceIp,
