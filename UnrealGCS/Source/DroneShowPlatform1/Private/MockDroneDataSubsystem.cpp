@@ -1,3 +1,8 @@
+/**
+ * @brief 实现可配置的 Mock Fleet 快照与更新。
+ *
+ * 分类：Mock；用于无 Console/DSP 时的开发验证，当前 Production 配置关闭。
+ */
 #include "MockDroneDataSubsystem.h"
 
 #include "GCSServerAdapterSubsystem.h"

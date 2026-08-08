@@ -1,3 +1,9 @@
+/**
+ * @brief 定义 Console 启动配置及其安全默认值。
+ *
+ * 分类：Production / Compatibility。
+ * 当前多机链使用 MAVLink bind、DSP、timeout 和安全限制；target/local 字段服务旧单会话兼容路径。
+ */
 #pragma once
 
 #include <string>

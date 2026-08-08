@@ -1,3 +1,10 @@
+/**
+ * @brief 定义 UE 内部 Provider -> Adapter -> Fleet 的 Snapshot/Delta 数据契约。
+ *
+ * 分类：Production。
+ * 输入：Production/Mock/Acceptance Provider；输出：GCSServerAdapter 与 FleetManager。
+ * 关键约束：这是 UE 内部数据模型，不是 DSP-GCS Wire Format。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

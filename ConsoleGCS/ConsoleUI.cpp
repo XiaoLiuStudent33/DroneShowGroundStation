@@ -1,3 +1,9 @@
+/**
+ * @brief 实现 Console 日志缓冲、Fleet 汇总和周期刷新。
+ *
+ * 分类：Production。
+ * 调用链：ConsoleGCSApplication/DroneSession/Command -> ConsoleUI -> 终端。
+ */
 #include "ConsoleUI.h"
 
 #include <algorithm>

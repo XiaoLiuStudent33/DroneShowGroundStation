@@ -1,3 +1,9 @@
+/**
+ * @brief 定义平台无关的 DSP-GCS Frame 收发边界。
+ *
+ * 分类：Production。
+ * Console 和 Unreal 各自实现平台 Socket，但共享 Start/Stop/Send/Receive 语义。
+ */
 #pragma once
 
 #include <cstdint>

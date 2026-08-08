@@ -1,3 +1,8 @@
+/**
+ * @brief 实现旧文本命令服务的请求缓存、状态回复和命令完成等待。
+ *
+ * 分类：Legacy / Compatibility；保留用于旧链兼容，不参与当前多机 Production 调用链。
+ */
 #include "DroneControlService.h"
 
 #include "ConsoleUI.h"

@@ -1,3 +1,9 @@
+/**
+ * @brief 声明由各平台分别实现的 DSP-GCS Transport 工厂入口。
+ *
+ * 分类：Production。
+ * 输入：DSPGCSTransportConfig；输出：当前平台可用的 IDSPGCSTransport。
+ */
 #pragma once
 
 #include "DSPGCSTransportConfig.h"

@@ -1,3 +1,9 @@
+/**
+ * @brief 实现 Unreal 当前 Production DSP-GCS 的 localhost UDP 收发。
+ *
+ * 分类：Production / Loopback。
+ * Wire Format 由 Shared DSPGCSProtocol 管理；本文件只负责 UE Socket 和接收线程边界。
+ */
 #include "DSPGCSLoopbackTransport.h"
 
 #include "Common/UdpSocketBuilder.h"

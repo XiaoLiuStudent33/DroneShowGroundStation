@@ -1,3 +1,9 @@
+/**
+ * @brief 实现 Fleet -> WGS84/Cesium -> UE World Position -> Niagara 数组的数据桥。
+ *
+ * 分类：Production。
+ * Offline 只改变状态，仍保留粒子和 DroneOrder -> ParticleIndex；无效 GPS 使用 ZeroVector。
+ */
 #include "DroneFleetVisualizationActor.h"
 
 #include "Camera/PlayerCameraManager.h"
@@ -25,7 +31,8 @@ ADroneFleetVisualizationActor::ADroneFleetVisualizationActor()
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
 
-	// One Niagara component renders the complete fleet; no per-drone components are created.
+	// 整个 Fleet 只由这一个 NiagaraComponent 渲染；禁止创建 per-drone Actor、
+	// per-drone NiagaraComponent 或 per-drone Tick，以保持千机规模的固定对象开销。
 	DroneFleetNiagara = CreateDefaultSubobject<UNiagaraComponent>(TEXT("DroneFleetNiagara"));
 	DroneFleetNiagara->SetupAttachment(SceneRoot);
 	DroneFleetNiagara->SetAutoActivate(false);
@@ -117,8 +124,8 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 	TArray<FDroneData> OrderedDrones;
 	if (Fleet)
 	{
-		// GetDronePage preserves Fleet DroneOrder, so ParticleIndex remains stable.
-		// Do not derive order from TMap iteration, GPS, online state, or selection state.
+		// GetDronePage 保留 Fleet DroneOrder，因此 ParticleIndex -> DroneID 映射稳定。
+		// 不得按 TMap、GPS、Online 或选择状态重排；Offline 也必须保留原索引。
 		OrderedDrones = Fleet->GetDronePage(0, Fleet->GetDroneCount());
 		ParticleDroneIDs.Reserve(OrderedDrones.Num());
 		DronePositions.SetNumZeroed(OrderedDrones.Num());
@@ -339,6 +346,8 @@ FVector ADroneFleetVisualizationActor::ConvertDroneGPSPosition(
 	const FFleetGeoOrigin& FleetGeoOrigin) const
 {
 	ACesiumGeoreference* Georeference = CesiumGeoreference.Get();
+	// 只有有效 WGS84 GPS 才进入 CesiumGeoreference。无效 GPS 固定返回
+	// ZeroVector，不使用随机/矩阵占位，也不沿用最后已知位置；AMSL=0 本身是合法高度。
 	if (!Georeference || !FleetGeoOrigin.bOriginInitialized || !DroneGPS::IsValid(Drone))
 	{
 		return FVector::ZeroVector;

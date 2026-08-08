@@ -1,3 +1,9 @@
+/**
+ * @brief 向 GCSServerAdapter 提供本地假数据的开发验证 Provider。
+ *
+ * 分类：Mock。
+ * 当前 Production 配置 UseMockData=False，Subsystem 初始化后不会发布 Mock Fleet。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

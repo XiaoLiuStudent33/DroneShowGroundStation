@@ -1,3 +1,8 @@
+/**
+ * @brief 实现旧 UE -> Console:10006 的 GCS1 文本命令与 STATE 解析。
+ *
+ * 分类：Legacy / Compatibility Candidate；当前 Production 命令链不调用本文件。
+ */
 #include "DroneCommandSubsystem.h"
 
 #include "Async/Async.h"

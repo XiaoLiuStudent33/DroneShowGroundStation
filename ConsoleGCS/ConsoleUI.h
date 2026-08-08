@@ -1,5 +1,13 @@
 ﻿#pragma once
 
+/**
+ * @brief Console 进程的日志和 Fleet 摘要显示接口。
+ *
+ * 分类：Production。
+ * 输入：Application/Session/Command 状态；输出：线程安全的 Windows Console 文本界面。
+ * 该 UI 只展示状态，不是 Fleet 身份或业务状态的权威来源。
+ */
+
 //--------------------------------------------------
 // Windows
 //--------------------------------------------------

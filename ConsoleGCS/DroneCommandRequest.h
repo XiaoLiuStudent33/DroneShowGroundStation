@@ -1,3 +1,10 @@
+/**
+ * @brief 定义与 UE/MAVLink 解耦的 Console 领域命令模型。
+ *
+ * 分类：Production。
+ * 输入：DSP-GCS 命令 DTO；输出：CommandManager/DroneSession 可执行请求。
+ * 支持 Arm、Disarm、Takeoff、Land、RTL、SetMode 和应用级 HoverTest。
+ */
 #pragma once
 
 #include <cstdint>

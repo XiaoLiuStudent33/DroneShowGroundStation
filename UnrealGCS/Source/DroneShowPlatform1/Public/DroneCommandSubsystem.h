@@ -1,3 +1,10 @@
+/**
+ * @brief 旧 GCS1 文本 UDP 命令客户端和单机遥测接口。
+ *
+ * 分类：Legacy / Compatibility Candidate。
+ * 当前 [DroneGCS.Network] Enabled=False，Production UI 已使用 DSPGCSProductionCommandProviderSubsystem。
+ * 因 UCLASS/UFUNCTION 可能存在反射或 Blueprint 依赖，本轮只标记用途，不删除。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

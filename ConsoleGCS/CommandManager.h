@@ -1,3 +1,11 @@
+/**
+ * @brief 在 Fleet 范围内验证、分发并汇总领域命令。
+ *
+ * 分类：Production。
+ * 输入：DSP-GCS CommandRequest 和目标 DroneID 集合；输出：各 DroneSession 的执行结果。
+ * 调用链：DSP CommandReceiver -> CommandManager -> DroneManager/DroneSession。
+ * 关键约束：命令目标使用稳定 DroneID，不以 SYSID 作为 Fleet 查找键。
+ */
 #pragma once
 
 #include "CommandDispatcher.h"

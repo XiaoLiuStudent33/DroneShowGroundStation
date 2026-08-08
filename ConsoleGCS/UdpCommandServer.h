@@ -1,3 +1,9 @@
+/**
+ * @brief 旧 GCS1 文本命令链的 UDP Server。
+ *
+ * 分类：Legacy / Compatibility。
+ * 当前 Console Production 入口没有实例化该 Server；保留用于旧链兼容路径。
+ */
 #pragma once
 
 #include <winsock2.h>

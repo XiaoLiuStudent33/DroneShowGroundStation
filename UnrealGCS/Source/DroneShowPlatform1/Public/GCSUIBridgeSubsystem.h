@@ -1,3 +1,10 @@
+/**
+ * @brief 将 Fleet/Command 状态映射到现有 UMG Widget 的 UI Bridge/ViewModel。
+ *
+ * 分类：Production。
+ * 输入：FleetManager 事件与用户按钮；输出：Widget 文本/选择状态和 DSP Production 命令。
+ * 关键约束：详情选择 CurrentSelectedDroneID 与多机命令集合 SelectedCommandDroneIDs 相互独立。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

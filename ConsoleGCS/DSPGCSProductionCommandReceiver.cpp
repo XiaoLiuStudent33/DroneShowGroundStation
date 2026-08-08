@@ -1,3 +1,9 @@
+/**
+ * @brief 实现 DSP 命令解码、校验、领域映射和结果回传准备。
+ *
+ * 分类：Production。
+ * 本文件不直接选择 UDP Endpoint；CommandManager 经 DroneID 找到原 DroneSession 后发送。
+ */
 #include "DSPGCSProductionCommandReceiver.h"
 
 #include "CommandManager.h"

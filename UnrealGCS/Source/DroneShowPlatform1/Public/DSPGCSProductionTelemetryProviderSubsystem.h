@@ -1,3 +1,10 @@
+/**
+ * @brief UE 侧 DSP-GCS Production 遥测 Provider 与 Snapshot 分片重组状态。
+ *
+ * 分类：Production。
+ * 输入：Console DSP-GCS Telemetry Frame；输出：完整 FGCSFleetSnapshot 到 GCSServerAdapter。
+ * 关键约束：所有分片完整前不得向 FleetManager 提交部分 Snapshot。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

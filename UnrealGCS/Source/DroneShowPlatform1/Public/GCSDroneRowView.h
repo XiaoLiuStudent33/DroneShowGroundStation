@@ -1,3 +1,10 @@
+/**
+ * @brief 管理 FleetPanel 单行的当前详情选择高亮视图。
+ *
+ * 分类：Production UI/View。
+ * 输入：当前行 DroneID 与 Fleet CurrentSelectedDroneID；输出：SelectedOverlay 可见性。
+ * 不负责 SelectedCommandDroneIDs 或任何命令发送。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

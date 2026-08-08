@@ -1,3 +1,10 @@
+/**
+ * @brief 实现单个 Endpoint Session 的 Online/Offline、遥测应用和命令调度。
+ *
+ * 分类：Production / Compatibility。
+ * 调用链：DroneManager/Ingress -> DroneSession -> DataManager/CommandDispatcher/MavlinkCommand。
+ * 相同 Endpoint 的新 HEARTBEAT 必须恢复原 Session；旧独立 Socket 接收路径仅用于兼容模式。
+ */
 #include "DroneSession.h"
 
 #include "ConsoleUI.h"
@@ -173,6 +180,8 @@ void DroneSession::RefreshHeartbeatStatus(
         }
         else
         {
+            // Offline 只是在线状态变化：Session、DroneID、SessionOrder 和最后遥测
+            // 都继续保留。requestSent 重置后，原 Endpoint 恢复时可重新请求数据流。
             SetState(DroneSessionState::HeartbeatTimeout);
             requestSent = false;
         }
@@ -394,6 +403,8 @@ bool DroneSession::RefreshDiscoveredPresence(
     config.targetIp = identity.sourceIp;
     config.targetPort = identity.sourcePort;
 
+    // 相同 Endpoint 的 HEARTBEAT 恢复原 Session；SYSID/COMPID 可以刷新为
+    // 当前协议路由元数据，但不会生成新的 Fleet 身份。
     workingData.systemID = identity.systemId;
     workingData.componentID = identity.componentId;
     workingData.online = true;

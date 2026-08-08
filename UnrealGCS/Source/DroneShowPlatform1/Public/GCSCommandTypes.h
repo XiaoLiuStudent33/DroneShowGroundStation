@@ -1,3 +1,9 @@
+/**
+ * @brief 定义旧 DroneCommandSubsystem 的 GCS1 回复和单机遥测 Blueprint 类型。
+ *
+ * 分类：Legacy / Compatibility Candidate。
+ * 当前 Production UI 使用 DSPGCSProductionCommandTypes；本类型仍可能被 Blueprint/反射引用。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

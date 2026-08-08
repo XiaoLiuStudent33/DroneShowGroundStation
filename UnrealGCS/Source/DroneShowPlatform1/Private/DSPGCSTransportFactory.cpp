@@ -1,3 +1,9 @@
+/**
+ * @brief 在 Unreal 平台按配置创建 DSP-GCS Transport。
+ *
+ * 分类：Production。
+ * 当前仅构造 FDSPGCSLoopbackTransport，并验证双方地址均为 127.0.0.1。
+ */
 #include "DSPGCSTransportFactory.h"
 
 #include "DSPGCSLoopbackTransport.h"

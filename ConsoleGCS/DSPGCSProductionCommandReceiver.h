@@ -1,3 +1,11 @@
+/**
+ * @brief 接收 UE 发来的 DSP-GCS 领域命令并向 CommandManager 提交。
+ *
+ * 分类：Production。
+ * 输入：DSP Transport Frame；输出：命令队列、最终/中间 CommandResultBatch。
+ * 调用链：UE CommandProvider -> DSP Transport -> Receiver -> CommandManager -> DroneSession。
+ * 关键约束：目标使用稳定 DroneID，真实命令仍受安全模式和高度上限约束。
+ */
 #pragma once
 
 #include "DSPGCSProtocol.h"

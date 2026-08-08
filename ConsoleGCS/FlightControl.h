@@ -1,6 +1,14 @@
 ﻿#pragma once
 
 
+/**
+ * @brief 协调单 Session 的飞行控制动作与 HoverTest 工作流。
+ *
+ * 分类：Production。
+ * 输入：DataManager 当前状态和控制请求；输出：CommandDispatcher 队列动作。
+ * 关键约束：所有实际飞控动作仍经过统一安全门和 MAVLink 命令调度。
+ */
+
 #include "CommandDispatcher.h"
 #include "DataManager.h"
 

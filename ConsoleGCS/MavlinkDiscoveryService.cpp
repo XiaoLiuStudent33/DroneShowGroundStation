@@ -1,3 +1,10 @@
+/**
+ * @brief 实现 HEARTBEAT 过滤、身份提取和 Session 注册刷新。
+ *
+ * 分类：Production。
+ * 输入：非 GCS HEARTBEAT 及其 Remote IP/Source Port；输出：稳定 DroneID 对应的 DroneSession。
+ * 相同 Endpoint 恢复时必须刷新原 Session，而不是创建重复 Fleet 成员。
+ */
 #include "MavlinkDiscoveryService.h"
 
 #include <utility>

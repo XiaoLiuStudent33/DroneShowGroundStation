@@ -1,3 +1,9 @@
+/**
+ * @brief 实现旧 Stage 4.2 Loopback acceptance 命令/遥测验证流程。
+ *
+ * 分类：Acceptance / Loopback Test；当前 Production 配置关闭。
+ * 它是测试 Provider，而 FDSPGCSLoopbackTransport 同时仍是 Production Transport。
+ */
 #include "DSPGCSLoopbackProviderSubsystem.h"
 
 #include "Async/Async.h"

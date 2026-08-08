@@ -1,3 +1,10 @@
+/**
+ * @brief UE 当前 Production 命令 Provider。
+ *
+ * 分类：Production。
+ * 输入：UI 领域命令和稳定 DroneID；输出：DSP-GCS CommandRequest，并接收 CommandResult。
+ * 调用链：GCSUIBridge -> ProductionCommandProvider -> ProductionTelemetry Transport -> Console。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

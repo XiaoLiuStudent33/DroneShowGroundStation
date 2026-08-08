@@ -1,3 +1,10 @@
+/**
+ * @brief Stage 4.2 DSP-GCS 本地验收 Provider。
+ *
+ * 分类：Acceptance / Loopback Test。
+ * 当前 [DSPGCS.Transport] Enabled=False，不参与 Production 数据链。
+ * 注意：不要与当前 Production 正在使用的 DSPGCSLoopbackTransport 混淆。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

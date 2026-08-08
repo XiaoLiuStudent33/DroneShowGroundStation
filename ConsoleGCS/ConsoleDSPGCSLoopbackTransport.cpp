@@ -1,3 +1,10 @@
+/**
+ * @brief 实现 Console 当前 Production DSP-GCS 的 localhost UDP 收发。
+ *
+ * 分类：Production / Loopback。
+ * 调用链：TelemetryProvider/CommandReceiver <-> Transport <-> UnrealGCS:12002。
+ * Wire Format 由 Shared DSPGCSProtocol 定义，本文件只处理平台 Socket。
+ */
 #define WIN32_LEAN_AND_MEAN
 
 #include "ConsoleDSPGCSLoopbackTransport.h"

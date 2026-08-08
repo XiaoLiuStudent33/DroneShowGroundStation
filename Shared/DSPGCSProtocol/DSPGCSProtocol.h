@@ -1,3 +1,10 @@
+/**
+ * @brief ConsoleGCS 与 UnrealGCS 共享的 DSP-GCS Wire Format 和 DTO 定义。
+ *
+ * 分类：Production。
+ * 输入/输出：Telemetry Snapshot/Delta、Command Request/Result 的二进制编码与解码。
+ * 关键约束：两端必须使用相同版本；注释整理不得改变字段顺序、类型或编码格式。
+ */
 #pragma once
 
 #include <cstdint>

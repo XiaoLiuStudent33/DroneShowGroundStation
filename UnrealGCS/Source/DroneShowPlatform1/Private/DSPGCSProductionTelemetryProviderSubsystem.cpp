@@ -1,3 +1,10 @@
+/**
+ * @brief 实现 UE Production DSP Frame 接收、解码、分片重组和领域模型转换。
+ *
+ * 分类：Production。
+ * 调用链：DSPGCSLoopbackTransport -> ProductionTelemetryProvider -> GCSServerAdapter -> FleetManager。
+ * 当前 localhost Transport 是实际 Production 通道，不是 Test Only。
+ */
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
 
 #include "Async/Async.h"
@@ -295,6 +302,8 @@ bool UDSPGCSProductionTelemetryProviderSubsystem::TryAssembleTelemetrySnapshot(
 		return false;
 	}
 
+	// SessionID + SnapshotID + FleetRevision 共同标识一个原子 Snapshot。
+	// 任一维度变化都放弃未完成旧批次，禁止把不同 Snapshot 的分片拼在一起。
 	const bool bStartsNewSnapshot =
 		PendingSnapshotSessionID != Envelope.sessionId ||
 		PendingSnapshotID != Chunk.snapshotId ||
@@ -318,11 +327,13 @@ bool UDSPGCSProductionTelemetryProviderSubsystem::TryAssembleTelemetrySnapshot(
 		++PendingSnapshotReceivedCount;
 	}
 
+	// 分片未收齐时只保存在 Provider 内部，绝不向 Adapter/FleetManager 提交半个 Fleet。
 	if (PendingSnapshotReceivedCount != PendingSnapshotChunks.size())
 	{
 		return false;
 	}
 
+	// 只有全部分片齐备后才合成一个完整 Batch；调用方随后只进行一次 GameThread 原子提交。
 	CompleteBatch = MoveTemp(Chunk);
 	CompleteBatch.chunkIndex = 0;
 	CompleteBatch.chunkCount = 1;

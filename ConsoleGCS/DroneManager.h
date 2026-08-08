@@ -1,3 +1,11 @@
+/**
+ * @brief 管理全部 DroneSession、稳定 DroneID、Endpoint 索引和 SessionOrder。
+ *
+ * 分类：Production。
+ * 输入：发现身份、Session 默认配置和命令查询；输出：稳定有序的 Fleet Session 集合。
+ * 调用链：Discovery/Command -> DroneManager -> DroneSession。
+ * 关键约束：Offline 不删除 Session，SessionOrder 是下游稳定 Fleet 顺序的来源。
+ */
 #pragma once
 
 #include "DroneDiscovery.h"

@@ -1,5 +1,11 @@
 ﻿#include "HoverTest.h"
 
+/**
+ * @brief 实现 HoverTest 的距离、高度和持续稳定判定。
+ *
+ * 分类：Production；只计算任务状态，不直接发送 MAVLink 报文。
+ */
+
 #include <cmath>
 
 constexpr double EARTH_RADIUS = 6378137.0;

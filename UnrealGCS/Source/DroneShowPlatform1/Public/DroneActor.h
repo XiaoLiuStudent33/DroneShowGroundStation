@@ -1,3 +1,10 @@
+/**
+ * @brief 旧单无人机 Actor 可视化和本地状态模拟。
+ *
+ * 分类：Legacy Single-Drone Visualization。
+ * 不参与当前 Fleet/Niagara 链；当前地图/Blueprint 仍有引用，Runtime 仍可能 Tick。
+ * 本轮不得删除；千机 Production 可视化由 DroneFleetVisualizationActor 承担。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

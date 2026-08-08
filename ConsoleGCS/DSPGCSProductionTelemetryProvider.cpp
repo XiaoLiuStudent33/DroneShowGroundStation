@@ -1,3 +1,10 @@
+/**
+ * @brief 实现 Console 到 UE 的 Production Snapshot 分片与命令结果发送。
+ *
+ * 分类：Production。
+ * 输入：稳定 SessionOrder 下的 Fleet；输出：带 Session/Snapshot/Revision 的 DSP-GCS Frame。
+ * 当前同一 Transport 也接收 UE 命令，因此并非单向遥测专用 Socket。
+ */
 #include "DSPGCSProductionTelemetryProvider.h"
 
 #include "DSPGCSProtocol.h"
@@ -173,6 +180,8 @@ bool DSPGCSProductionTelemetryProvider::PublishSnapshot(
     const std::size_t fixedFrameBytes =
         dspgcs::EncodeTelemetry(sizingEnvelope, emptyBatch).size();
 
+    // 1000 架全量 Snapshot 不能假定由单个 UDP Datagram 承载；必须先形成
+    // 有共同 SnapshotID/Revision 的分片集合，再逐片交给 DSP-GCS Transport。
     std::vector<std::vector<dspgcs::TelemetryDTO>> chunks;
     chunks.emplace_back();
     std::size_t currentFrameBytes = fixedFrameBytes;

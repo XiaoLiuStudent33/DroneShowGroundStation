@@ -4,6 +4,14 @@
 #include <cmath>
 #include <string>
 
+/**
+ * @brief 实现 Console 当前 Inbound MAVLink 能力到 FlightData 的字段映射。
+ *
+ * 分类：Production。
+ * 输入：HEARTBEAT、SYS_STATUS、GPS_RAW_INT、ATTITUDE、GLOBAL_POSITION_INT、COMMAND_ACK。
+ * 输出：仅更新对应职责字段，不在解析层创建或删除 DroneSession。
+ */
+
 //==================================================
 // ArduPilot Copter 飞行模式转换
 //==================================================

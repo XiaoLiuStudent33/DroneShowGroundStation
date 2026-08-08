@@ -1,3 +1,10 @@
+/**
+ * @brief 实现高突发量 MAVLink UDP 的共享接收与定向发送。
+ *
+ * 分类：Production。
+ * 输入：BGC2/真实 APM UDP 数据；输出：MavlinkReceivedDatagram 或发往指定 Remote Endpoint 的字节。
+ * 当前生产使用该 Socket 同时接收遥测并保持命令报文的固定本地源端口。
+ */
 #include "MavlinkUdpReceiver.h"
 
 #include <array>

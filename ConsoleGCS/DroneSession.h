@@ -1,3 +1,10 @@
+/**
+ * @brief 表示一个稳定 Remote Endpoint 的遥测、在线状态和命令生命周期。
+ *
+ * 分类：Production / Compatibility；多机路径使用共享 MAVLink Endpoint，旧单会话可使用独立 Socket。
+ * 输入：Discovery/Ingress 消息和领域命令；输出：FlightData、MAVLink 命令、ACK/任务结果。
+ * 关键约束：Heartbeat timeout 只转为 Offline，不销毁 Session、DroneID 或历史遥测。
+ */
 #pragma once
 
 #include "CommandDispatcher.h"

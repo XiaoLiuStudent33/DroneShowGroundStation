@@ -1,3 +1,10 @@
+/**
+ * @brief 实现 ConsoleGCS 启动校验和主服务循环。
+ *
+ * 分类：Production / Compatibility；当前配置进入多机 MAVLink Production 路径。
+ * 输入：gcs-config.ini；输出：MAVLink 收发、DSP-GCS 快照/命令处理和 ConsoleUI 摘要。
+ * 调用链：main -> Run -> RunReadOnlyMavlink；RunLegacySingleSession 仅保留旧链兼容。
+ */
 #define WIN32_LEAN_AND_MEAN
 
 #include "ConsoleGCSApplication.h"
@@ -305,6 +312,8 @@ int ConsoleGCSApplication::RunReadOnlyMavlink(
 int ConsoleGCSApplication::RunLegacySingleSession(
     const AppConfig& appConfig)
 {
+    // Legacy / Compatibility：当前 Production 配置不进入此分支；该函数仍保留
+    // 旧单 APM、独立 UdpClient 和固定 target_ip 的兼容运行方式。
     ConsoleUI::AddLog("Legacy single-session mode");
 
     DroneManager droneManager;

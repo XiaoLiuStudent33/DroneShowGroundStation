@@ -2,6 +2,14 @@
 
 #include <iostream>
 
+/**
+ * @brief 实现 GCS HEARTBEAT/SET_MODE/COMMAND_LONG 的具体 MAVLink 参数映射。
+ *
+ * 分类：Production。
+ * 调用链：CommandDispatcher/DroneSession -> MavlinkCommand -> UdpClient -> Remote Endpoint。
+ * 这里复用 generated MAVLink 定义，不重新定义 Wire Format。
+ */
+
 extern "C"
 {
 #include "ardupilotmega/mavlink.h"

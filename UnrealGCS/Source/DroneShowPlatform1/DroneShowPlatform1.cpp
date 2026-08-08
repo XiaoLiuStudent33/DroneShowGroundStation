@@ -1,5 +1,13 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+/**
+ * @brief UE Runtime Module 启动入口和主 GCS Widget 装配逻辑。
+ *
+ * 分类：Production。
+ * 输入：PIE/Game World 初始化；输出：WBP_GCS_Main_V2 与 GCSUIBridgeSubsystem 绑定。
+ * 调用链：Module Startup -> World Init -> Main Widget -> UI Bridge -> Fleet/Command。
+ */
+
 #include "DroneShowPlatform1.h"
 
 #include "Blueprint/UserWidget.h"

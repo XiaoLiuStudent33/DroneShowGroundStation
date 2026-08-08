@@ -1,3 +1,9 @@
+/**
+ * @brief 定义 Console/UE 共享的 DSP-GCS Transport 配置值对象。
+ *
+ * 分类：Production。
+ * 当前 Production 配置使用 localhost Loopback Endpoint；默认值仅用于缺省初始化。
+ */
 #pragma once
 
 #include <cstdint>

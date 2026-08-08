@@ -1,3 +1,10 @@
+/**
+ * @brief Unreal 侧同机 DSP-GCS UDP Transport。
+ *
+ * 分类：Production / Loopback。
+ * 输入：127.0.0.1:12002 接收；输出：发往 Console 127.0.0.1:12001 的 DSP Frame。
+ * 关键说明：当前 Production Telemetry/Command 正在使用，不能标记为 Test Only。
+ */
 #pragma once
 
 #include "Common/UdpSocketReceiver.h"
@@ -11,7 +18,7 @@
 #include <mutex>
 
 class FSocket;
-/** Localhost-only Stage 4.3 transport used by UnrealGCS acceptance tests. */
+/** Localhost-only transport currently shared by Production and acceptance paths. */
 class FDSPGCSLoopbackTransport final : public dspgcs::IDSPGCSTransport
 {
 public:

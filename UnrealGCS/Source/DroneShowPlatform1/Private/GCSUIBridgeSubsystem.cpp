@@ -1,3 +1,9 @@
+/**
+ * @brief 实现主 UI 绑定、Fleet 分页、详情显示、命令选择和页面导航。
+ *
+ * 分类：Production。
+ * 当前命令只调用 DSPGCSProductionCommandProviderSubsystem，不调用旧 DroneCommandSubsystem。
+ */
 #include "GCSUIBridgeSubsystem.h"
 
 #include "Blueprint/UserWidget.h"
@@ -372,6 +378,8 @@ void UGCSUIBridgeSubsystem::SetCommandDroneSelected(
 		return;
 	}
 
+	// SelectedCommandDroneIDs 仅表示多机命令目标；这里不调用 Fleet->SelectDrone，
+	// 因而不会覆盖用于详情查看/当前高亮的 CurrentSelectedDroneID。
 	if (bSelected)
 	{
 		SelectedCommandDroneIDs.Add(DroneID);
@@ -424,6 +432,7 @@ void UGCSUIBridgeSubsystem::HandleFleetRowDetailClicked(const int32 RowIndex)
 		return;
 	}
 
+	// 点击行文本只更新详情选择；命令复选集合由独立按钮维护。
 	const FString& DroneID = CurrentFleetPageDroneIDs[RowIndex];
 	UFleetManagerSubsystem* Fleet =
 		GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>();

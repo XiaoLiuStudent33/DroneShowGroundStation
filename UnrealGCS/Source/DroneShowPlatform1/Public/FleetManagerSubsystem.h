@@ -1,3 +1,10 @@
+/**
+ * @brief UE Fleet 状态权威源，维护 DronesByID、稳定 DroneOrder 和详情选择。
+ *
+ * 分类：Production。
+ * 输入：GCSServerAdapter 原子提交的 Snapshot/Delta；输出：UI 和 Fleet Visualization 事件/查询。
+ * 关键约束：CurrentSelectedDroneID 只表示详情选择；DroneOrder 是 ParticleIndex 稳定映射基础。
+ */
 #pragma once
 
 #include "CoreMinimal.h"
@@ -29,7 +36,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
  * convert Longitude/Latitude/Height through CesiumGeoreference; the legacy
  * flat-earth longitude/latitude delta formula must not be reintroduced.
  * Until this origin exists every drone visual stays at FVector::ZeroVector;
- * afterwards an individual drone with invalid GPS also returns to that origin.
+ * an individual drone with invalid GPS likewise uses FVector::ZeroVector.
  */
 USTRUCT(BlueprintType)
 struct DRONESHOWPLATFORM1_API FFleetGeoOrigin

@@ -1,5 +1,13 @@
 ﻿#pragma once
 
+/**
+ * @brief 为 MavlinkCommand 提供独立 Socket 或共享 Endpoint 两种发送适配。
+ *
+ * 分类：Production / Compatibility。
+ * 当前多机 Production 附着 MavlinkUdpReceiver；独立 bind/receive 仅服务旧单会话路径。
+ * 关键约束：共享模式必须按 Session 保存的 Remote IP + Source Port 定向发送。
+ */
+
 #include <winsock2.h>
 #include <ws2tcpip.h>
 

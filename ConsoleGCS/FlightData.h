@@ -1,5 +1,13 @@
 ﻿#pragma once
 
+/**
+ * @brief 保存一个 DroneSession 当前已解析的 MAVLink 飞行状态。
+ *
+ * 分类：Production。
+ * 输入：MavlinkParser；输出：Session 生命周期、Command、ConsoleUI 和 DSP Telemetry DTO。
+ * 关键约束：绝对 GPS/AMSL 来自 #24，相对高度与融合运动状态来自 #33。
+ */
+
 #include <stdint.h>
 #include <chrono>
 #include <string>

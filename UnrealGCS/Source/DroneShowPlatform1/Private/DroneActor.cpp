@@ -1,3 +1,9 @@
+/**
+ * @brief 实现旧单机 Actor 的 ARM/Takeoff/Hover/Land 动画和每帧旋转。
+ *
+ * 分类：Legacy Single-Drone Visualization。
+ * 当前地图 External Actor 仍引用该类，因此 Runtime 可能 Tick，但它不属于 Fleet/Niagara Production 链。
+ */
 #include "DroneActor.h"
 
 ADroneActor::ADroneActor()

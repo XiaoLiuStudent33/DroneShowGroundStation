@@ -1,3 +1,11 @@
+/**
+ * @brief 从 MAVLink HEARTBEAT 生成可注册的 Remote Endpoint 身份。
+ *
+ * 分类：Production。
+ * 输入：Ingress 已解码消息或测试 Datagram；输出：DroneManager 注册/刷新结果。
+ * 调用链：MavlinkReadOnlyIngress -> MavlinkDiscoveryService -> DroneManager。
+ * 关键约束：SYSID/COMPID 仅是 MAVLink 路由元数据，不能替代 Endpoint Fleet 身份。
+ */
 #pragma once
 
 #include "DroneDiscovery.h"

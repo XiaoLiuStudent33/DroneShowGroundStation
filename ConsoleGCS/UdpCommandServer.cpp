@@ -1,3 +1,8 @@
+/**
+ * @brief 实现旧 GCS1 Server 的 bind、client 过滤和文本 Datagram 收发。
+ *
+ * 分类：Legacy / Compatibility；当前没有 Production Socket 监听历史 10006 端口。
+ */
 #include "UdpCommandServer.h"
 
 #pragma comment(lib, "ws2_32.lib")

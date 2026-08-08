@@ -1,3 +1,9 @@
+/**
+ * @brief 在 Console 平台按配置创建 DSP-GCS Transport 实现。
+ *
+ * 分类：Production。
+ * 当前只注册 ConsoleDSPGCSLoopbackTransport；UDP Transport 声明仍是 Planned/Reserved。
+ */
 #include "DSPGCSTransportFactory.h"
 
 #include "ConsoleDSPGCSLoopbackTransport.h"

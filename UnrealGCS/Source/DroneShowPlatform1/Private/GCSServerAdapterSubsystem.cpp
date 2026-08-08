@@ -1,3 +1,9 @@
+/**
+ * @brief 实现跨线程 Snapshot/Delta 合并并调度到 GameThread。
+ *
+ * 分类：Production。
+ * 调用链：Data Provider -> pending batch -> GameThread Flush -> FleetManager。
+ */
 #include "GCSServerAdapterSubsystem.h"
 
 #include "Async/Async.h"
@@ -140,6 +146,8 @@ void UGCSServerAdapterSubsystem::ScheduleFlush()
 		return;
 	}
 
+	// 网络接收/协议解析不直接触碰 Fleet 或 UI；这里只安排一次 GameThread
+	// Flush，把当前积累的数据批量交给 FleetManager 原子应用。
 	const TWeakObjectPtr<UGCSServerAdapterSubsystem> WeakThis(this);
 	AsyncTask(
 		ENamedThreads::GameThread,

@@ -1,5 +1,13 @@
 ﻿#pragma once
 
+/**
+ * @brief 封装 Console 当前支持的 Outbound MAVLink 消息和飞控动作。
+ *
+ * 分类：Production。
+ * 输入：目标 SYSID/COMPID、模式或高度；输出：#11 SET_MODE、#76 COMMAND_LONG 等报文。
+ * 关键约束：MAV_CMD 与 Message ID 分离，目标 SYSID 只参与 MAVLink 协议路由。
+ */
+
 #include "UdpClient.h"
 #include <cstdint>
 

@@ -2,6 +2,13 @@
 #include "ConsoleUI.h"
 #include "SafetyConfig.h"
 
+/**
+ * @brief 实现受 SafetyConfig 约束的飞行控制与 Hover mission 状态推进。
+ *
+ * 分类：Production。
+ * 调用链：DroneSession -> FlightControl -> CommandDispatcher -> MavlinkCommand。
+ */
+
 #include <algorithm>
 #include <thread>
 #include <chrono>

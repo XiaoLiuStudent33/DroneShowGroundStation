@@ -1,3 +1,10 @@
+/**
+ * @brief Console 侧同机 DSP-GCS UDP Transport。
+ *
+ * 分类：Production / Loopback。
+ * 输入：127.0.0.1 本地/远端 Endpoint；输出：DSP-GCS Frame 双向收发。
+ * 关键说明：名称含 Loopback，但当前 Console->UE 遥测及 UE->Console 命令都在使用，绝非 Test Only。
+ */
 #pragma once
 
 #include "DSPGCSTransportConfig.h"

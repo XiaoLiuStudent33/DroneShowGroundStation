@@ -1,3 +1,9 @@
+/**
+ * @brief 实现 DSP-GCS Transport 配置文件解析和范围校验。
+ *
+ * 分类：Production。
+ * 当前配置选择同机 Loopback Transport，但 127.0.0.1 在这里属于实际 Production 通道。
+ */
 #include "DSPGCSTransportConfigLoader.h"
 
 #include <algorithm>

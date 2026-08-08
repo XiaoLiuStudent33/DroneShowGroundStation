@@ -1,3 +1,10 @@
+/**
+ * @brief 管理单个 DroneSession 的 MAVLink 命令队列、重试和 ACK 状态。
+ *
+ * 分类：Production。
+ * 输入：领域动作和目标 MAVLink 路由信息；输出：MavlinkCommand 调用及完成结果。
+ * 关键约束：ACK 必须匹配当前 Session、目标 sysid 和期望 MAV_CMD。
+ */
 #pragma once
 
 #include "UdpClient.h"

@@ -1,3 +1,10 @@
+/**
+ * @brief 实现 Fleet Snapshot/Delta 的原子应用、稳定顺序和详情选择保持。
+ *
+ * 分类：Production。
+ * 调用链：GCSServerAdapter -> FleetManager -> GCSUIBridge/DroneFleetVisualizationActor。
+ * Offline Drone 仍存在于 Snapshot/DroneOrder 中，不因在线状态变化被移除或重排。
+ */
 #include "FleetManagerSubsystem.h"
 
 void UFleetManagerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -134,6 +141,8 @@ bool UFleetManagerSubsystem::ApplySnapshot(const FGCSFleetSnapshot& Snapshot)
 	}
 
 	FString NewSelectedDroneID;
+	// CurrentSelectedDroneID 只用于详情查看/高亮；多机命令勾选由 UI Bridge 的
+	// SelectedCommandDroneIDs 独立维护，两种选择状态不能互相覆盖。
 	if (NewDronesByID.Contains(CurrentSelectedDroneID))
 	{
 		NewSelectedDroneID = CurrentSelectedDroneID;
@@ -143,6 +152,8 @@ bool UFleetManagerSubsystem::ApplySnapshot(const FGCSFleetSnapshot& Snapshot)
 		NewSelectedDroneID = SnapshotSelectedDroneID;
 	}
 
+	// Snapshot 顺序来自 Console 稳定 SessionOrder。整批替换后保持
+	// DroneOrder[Index] -> Niagara ParticleIndex 映射，Offline 不单独重排。
 	DronesByID = MoveTemp(NewDronesByID);
 	DroneOrder = MoveTemp(NewDroneOrder);
 	CurrentSelectedDroneID = MoveTemp(NewSelectedDroneID);

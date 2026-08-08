@@ -6,6 +6,13 @@
 
 #pragma comment(lib,"ws2_32.lib")
 
+/**
+ * @brief 实现 MAVLink UDP 发送适配与旧单会话接收兼容路径。
+ *
+ * 分类：Production / Compatibility。
+ * 多机路径不为每架无人机创建新 Socket，而是委托共享 IMavlinkDatagramSender。
+ */
+
 //==================================================
 // 构造函数
 //==================================================

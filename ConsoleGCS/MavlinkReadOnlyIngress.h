@@ -1,3 +1,10 @@
+/**
+ * @brief 将共享 UDP Datagram 按 Remote Endpoint 解码并路由到正确 DroneSession。
+ *
+ * 分类：Production；ReadOnly 表示发现入口不主动创造控制语义，并非整个 Session 禁止命令。
+ * 输入：MavlinkUdpReceiver Datagram；输出：Discovery 刷新、Telemetry 应用和 COMMAND_ACK 路由。
+ * 关键约束：每个 Endpoint 维护独立 MAVLink parser state，避免千机字节流互相污染。
+ */
 #pragma once
 
 #include "MavlinkDiscoveryService.h"

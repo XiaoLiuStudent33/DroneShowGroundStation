@@ -1,3 +1,8 @@
+/**
+ * @brief 实现 Fleet 行视图与已编写 UMG Border 的轻量绑定。
+ *
+ * 分类：Production UI/View；不创建 Fleet 数据，也不决定命令目标。
+ */
 #include "GCSDroneRowView.h"
 
 #include "Blueprint/UserWidget.h"

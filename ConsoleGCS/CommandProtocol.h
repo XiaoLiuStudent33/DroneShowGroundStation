@@ -1,3 +1,9 @@
+/**
+ * @brief 定义旧 GCS1 文本 UDP 命令的解析与回复格式。
+ *
+ * 分类：Legacy / Compatibility。
+ * 当前 Production 入口未使用；仍保留用于旧链兼容路径，不代表 DSP-GCS Command Wire Format。
+ */
 #pragma once
 
 #include <string>

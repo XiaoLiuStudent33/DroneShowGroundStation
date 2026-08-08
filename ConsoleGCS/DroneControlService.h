@@ -1,3 +1,9 @@
+/**
+ * @brief 旧 GCS1 UDP 命令到单 Session CommandDispatcher 的适配服务。
+ *
+ * 分类：Legacy / Compatibility。
+ * 当前 Production 入口未使用；现行 UE 命令通过 DSP-GCS Production Command Provider/Receiver。
+ */
 #pragma once
 
 #include "CommandDispatcher.h"

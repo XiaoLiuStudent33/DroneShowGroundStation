@@ -1,3 +1,10 @@
+/**
+ * @brief 实现 Remote Endpoint 隔离的 MAVLink 解码和 Session 路由。
+ *
+ * 分类：Production。
+ * 调用链：MavlinkUdpReceiver -> MavlinkReadOnlyIngress -> Discovery/DroneManager/DroneSession。
+ * 只有有效非 GCS HEARTBEAT 可以创建或刷新 Session，其他消息只能进入已知 Endpoint。
+ */
 #include "MavlinkReadOnlyIngress.h"
 
 MavlinkReadOnlyIngress::MavlinkReadOnlyIngress(

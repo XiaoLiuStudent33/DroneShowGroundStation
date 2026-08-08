@@ -1,3 +1,10 @@
+/**
+ * @brief 实现 Endpoint 索引下的 Session 创建、恢复、查询和稳定遍历。
+ *
+ * 分类：Production。
+ * 输入：DiscoveredDroneIdentity；输出：已有 Session 刷新或新 Session 创建。
+ * 不得用 SYSID 合并无人机，也不得因 Heartbeat timeout 从集合中移除 Session。
+ */
 #include "DroneManager.h"
 
 #include <algorithm>
@@ -49,6 +56,8 @@ DroneRegistrationResult DroneManager::RegisterOrRefreshDrone(
         return result;
     }
 
+    // EndpointKey 才是 Fleet 唯一键：不同 IP，或同 IP 不同 Source Port，
+    // 都代表不同无人机；相同 Endpoint 才允许恢复原 DroneID/SessionOrder。
     const std::string endpointKey = identity.EndpointKey();
     const auto knownEndpoint = discoveredEndpointIndex.find(endpointKey);
     if (knownEndpoint != discoveredEndpointIndex.end())
@@ -91,6 +100,8 @@ DroneRegistrationResult DroneManager::RegisterOrRefreshDrone(
             return result;
         }
 
+        // Heartbeat 恢复只刷新原 Session。即使它此前已 Offline，也不创建
+        // 第二个 DroneID，更不改变已建立的 SessionOrder。
         if (!existing->RefreshDiscoveredPresence(identity))
         {
             result.error = "failed to refresh discovered DroneSession";

@@ -1,3 +1,9 @@
+/**
+ * @brief 预留的非 Loopback DSP-GCS UDP Transport 声明。
+ *
+ * 分类：Planned / Reserved；当前没有实现文件、Factory 注册或 Production 构造路径。
+ * 本轮只记录真实状态，不代表该能力已经实现。
+ */
 #pragma once
 
 #include "DSPGCSTransportConfig.h"

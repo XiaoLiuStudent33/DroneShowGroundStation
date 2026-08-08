@@ -1,3 +1,10 @@
+/**
+ * @brief 定义 UE Fleet/UI/Visualization 使用的单架无人机领域快照。
+ *
+ * 分类：Production。
+ * 输入：协议 Provider 转换后的字段；输出：FleetManager、UI Bridge、Cesium/Niagara。
+ * 关键约束：该类型不暴露 DSP-GCS 或 MAVLink Wire Format 细节。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

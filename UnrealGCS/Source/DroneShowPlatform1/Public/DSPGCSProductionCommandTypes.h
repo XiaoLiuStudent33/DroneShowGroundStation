@@ -1,3 +1,9 @@
+/**
+ * @brief 定义当前 Production UI 与 DSP Command Provider 使用的 UE 领域命令类型。
+ *
+ * 分类：Production。
+ * HoverTest 是应用级工作流；SetMode 通过 MAVLink #11，不应误记为 MAV_CMD。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

@@ -1,3 +1,11 @@
+/**
+ * @brief 将 Console Fleet 快照编码为 DSP-GCS 遥测帧并发送命令结果。
+ *
+ * 分类：Production。
+ * 输入：DroneManager 全量 Session 与 CommandResult；输出：分片 Telemetry Snapshot/Result Frame。
+ * 调用链：ConsoleGCSApplication -> Provider -> DSP Transport -> Unreal Production Provider。
+ * 关键约束：大 Fleet 必须完整分片，不能发送不可重组的半个 Snapshot。
+ */
 #pragma once
 
 #include "DSPGCSProtocol.h"

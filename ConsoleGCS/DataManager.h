@@ -1,5 +1,13 @@
 ﻿#pragma once
 
+/**
+ * @brief 为一个 DroneSession 提供线程安全的 FlightData 快照存取。
+ *
+ * 分类：Production。
+ * 输入：MavlinkParser/DroneSession 更新；输出：ConsoleUI、Command、DSP Snapshot 使用的一致副本。
+ * 调用链：DroneSession -> DataManager -> Console/DSP/FlightControl。
+ */
+
 #include "FlightData.h"
 
 #include <chrono>

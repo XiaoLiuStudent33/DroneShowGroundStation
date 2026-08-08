@@ -1,3 +1,9 @@
+/**
+ * @brief 实现多机命令目标解析、提交、结果轮询和 HoverTest 协调。
+ *
+ * 分类：Production。
+ * 输入：DroneCommandRequest；输出：可经 DSP-GCS 返回 UE 的领域命令结果。
+ */
 #include "CommandManager.h"
 
 #include "ConsoleUI.h"

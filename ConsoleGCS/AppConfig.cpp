@@ -1,3 +1,8 @@
+/**
+ * @brief 解析并校验 gcs-config.ini，生成 Console 单一启动配置快照。
+ *
+ * 分类：Production / Compatibility；只读取配置，不创建 Socket 或修改协议行为。
+ */
 #include "AppConfig.h"
 
 #include <algorithm>

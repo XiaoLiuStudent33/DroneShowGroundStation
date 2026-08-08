@@ -1,5 +1,13 @@
 ﻿#pragma once
 
+/**
+ * @brief 保存并评估 HoverTest 所需的 GPS/高度稳定性状态。
+ *
+ * 分类：Production。
+ * 输入：FlightData；输出：Hover mission 对稳定、超时和异常漂移的判断。
+ * HoverTest 是应用级工作流，不是独立 MAV_CMD。
+ */
+
 #include "FlightData.h"
 
 #include <chrono>

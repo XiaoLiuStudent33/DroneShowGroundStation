@@ -1,3 +1,8 @@
+/**
+ * @brief 实现旧 GCS1 文本命令协议的解析、ACK/PONG/ERR 文本编码。
+ *
+ * 分类：Legacy / Compatibility；当前 Production 命令由 DSPGCSProductionCommandReceiver 接收。
+ */
 #include "CommandProtocol.h"
 
 #include <algorithm>

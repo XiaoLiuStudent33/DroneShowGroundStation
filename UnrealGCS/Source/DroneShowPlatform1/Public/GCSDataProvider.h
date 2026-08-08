@@ -1,3 +1,9 @@
+/**
+ * @brief 定义协议无关的 UE Fleet 数据源接口。
+ *
+ * 分类：Production Interface。
+ * Production、Mock 和 Acceptance Provider 都通过该接口向 GCSServerAdapter 提交数据。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

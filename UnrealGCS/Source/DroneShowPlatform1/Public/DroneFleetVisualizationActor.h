@@ -1,3 +1,10 @@
+/**
+ * @brief 将完整 Fleet 批量投影到 Cesium 世界坐标并推送一个 Niagara System。
+ *
+ * 分类：Production。
+ * 输入：FleetManager 稳定 DroneOrder；输出：User.DronePositions 与稳定 ParticleIndex。
+ * 关键约束：全 Fleet 只允许一个 Actor、一个 NiagaraComponent；禁止 per-drone Actor/Component/Tick。
+ */
 #pragma once
 
 #include "CoreMinimal.h"

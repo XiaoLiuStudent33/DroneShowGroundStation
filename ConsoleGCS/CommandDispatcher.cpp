@@ -1,3 +1,10 @@
+/**
+ * @brief 实现单 Session 命令排队、发送、超时重试和 COMMAND_ACK 匹配。
+ *
+ * 分类：Production。
+ * 调用链：DroneSession -> CommandDispatcher -> MavlinkCommand；#77 ACK 反向完成 pending request。
+ * SYSID 只用于协议 ACK 匹配，不承担 Fleet 唯一身份职责。
+ */
 #include "CommandDispatcher.h"
 
 #include "MavlinkCommand.h"
@@ -225,6 +232,8 @@ void CommandDispatcher::HandleAck(
 
     std::lock_guard<std::mutex> lock(mutex);
 
+    // #77 ACK 必须属于本 Session 当前等待的目标 sysid，并携带期望的
+    // MAV_CMD。这里的 SYSID 仅用于协议应答关联，不能替代 Endpoint Fleet 身份。
     if (!pending ||
         pending->system != message.sysid ||
         pending->expectedAckCommand != ack.command)

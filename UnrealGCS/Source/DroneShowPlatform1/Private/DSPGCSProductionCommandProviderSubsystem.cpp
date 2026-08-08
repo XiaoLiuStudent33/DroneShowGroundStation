@@ -1,3 +1,9 @@
+/**
+ * @brief 实现 UE 领域命令到 DSP-GCS DTO 的编码和结果事件分发。
+ *
+ * 分类：Production。
+ * 该 Provider 复用 ProductionTelemetry 已启动的双向 Transport，不直接发送 MAVLink。
+ */
 #include "DSPGCSProductionCommandProviderSubsystem.h"
 
 #include "Async/Async.h"

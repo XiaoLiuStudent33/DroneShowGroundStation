@@ -1,3 +1,11 @@
+/**
+ * @brief Console 侧共享 MAVLink UDP 端点。
+ *
+ * 分类：Production。
+ * 输入：配置的本地 Bind IP/Port；输出：带 Remote IP/Source Port 的 Datagram，并从同一 Socket 回发 MAVLink。
+ * 调用链：ConsoleGCSApplication -> MavlinkUdpReceiver -> MavlinkReadOnlyIngress / DroneSession。
+ * 关键约束：所有无人机共享一个绑定 Socket，Remote Endpoint 才是 Session 身份来源。
+ */
 #pragma once
 
 #include "MavlinkDatagramSender.h"

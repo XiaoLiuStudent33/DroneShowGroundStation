@@ -1,3 +1,10 @@
+/**
+ * @brief 抽象从 Console 共享 MAVLink Socket 向指定 Remote Endpoint 发送 Datagram 的能力。
+ *
+ * 分类：Production。
+ * 输入：目标 IP、目标 Source Port 和 MAVLink 字节；输出：UDP 发送结果。
+ * 调用链：DroneSession/UdpClient -> IMavlinkDatagramSender -> MavlinkUdpReceiver。
+ */
 #pragma once
 
 #include <cstdint>
