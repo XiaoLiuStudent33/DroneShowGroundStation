@@ -6,7 +6,7 @@
  * @brief 保存进程级飞行安全开关、限制和少量旧链兼容常量。
  *
  * 分类：Production / Compatibility。
- * 当前 Production 使用运行时安全模式与高度限制；MAVLINK_TARGET/COMMAND_* 仅服务旧兼容设计。
+ * 当前 Production 使用运行时安全模式与高度限制；MAVLINK_TARGET_* 仅服务旧单会话兼容设计。
  */
 namespace SafetyConfig
 {
@@ -48,11 +48,6 @@ namespace SafetyConfig
     inline constexpr const char* MAVLINK_TARGET_IP = "192.168.1.145";
     inline constexpr int MAVLINK_TARGET_PORT = 10001;
 
-    // Legacy / Compatibility：旧 GCS1 UdpCommandServer 当前未由 Production 入口创建。
-    inline constexpr const char* COMMAND_BIND_IP = "192.168.1.254";
-    inline constexpr int COMMAND_BIND_PORT = 10006;
-    inline constexpr const char* COMMAND_ALLOWED_CLIENT_IP = "192.168.1.254";
-
     inline constexpr float DEFAULT_TAKEOFF_ALTITUDE_METERS = 1.0f;
     inline constexpr float DEFAULT_FLIGHT_ALTITUDE_LIMIT_METERS = 5.0f;
     inline float TAKEOFF_ALTITUDE_LIMIT_METERS =
@@ -67,7 +62,4 @@ namespace SafetyConfig
         TAKEOFF_ALTITUDE_LIMIT_METERS = takeoffLimitMeters;
         HOVER_ALTITUDE_LIMIT_METERS = hoverLimitMeters;
     }
-    // Legacy / Compatibility：以下限制仅由旧 DroneControlService 使用。
-    inline constexpr int COMMAND_ACK_TIMEOUT_MS = 5000;
-    inline constexpr int MAX_COMMAND_PACKET_BYTES = 512;
 }

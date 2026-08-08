@@ -39,12 +39,6 @@
     <ClCompile Include="CommandManager.cpp">
       <Filter>Core</Filter>
     </ClCompile>
-    <ClCompile Include="CommandProtocol.cpp">
-      <Filter>Protocol</Filter>
-    </ClCompile>
-    <ClCompile Include="DroneControlService.cpp">
-      <Filter>Core</Filter>
-    </ClCompile>
     <ClCompile Include="DroneCommandRequest.cpp">
       <Filter>Core</Filter>
     </ClCompile>
@@ -73,9 +67,6 @@
       <Filter>Protocol</Filter>
     </ClCompile>
     <ClCompile Include="DSPGCSTransportFactory.cpp">
-      <Filter>Protocol</Filter>
-    </ClCompile>
-    <ClCompile Include="UdpCommandServer.cpp">
       <Filter>Protocol</Filter>
     </ClCompile>
     <ClCompile Include="main.cpp">
@@ -125,12 +116,6 @@
     <ClInclude Include="CommandManager.h">
       <Filter>Core</Filter>
     </ClInclude>
-    <ClInclude Include="CommandProtocol.h">
-      <Filter>Protocol</Filter>
-    </ClInclude>
-    <ClInclude Include="DroneControlService.h">
-      <Filter>Core</Filter>
-    </ClInclude>
     <ClInclude Include="DroneCommandRequest.h">
       <Filter>Core</Filter>
     </ClInclude>
@@ -163,9 +148,6 @@
     </ClInclude>
     <ClInclude Include="SafetyConfig.h">
       <Filter>Core</Filter>
-    </ClInclude>
-    <ClInclude Include="UdpCommandServer.h">
-      <Filter>Protocol</Filter>
     </ClInclude>
     <ClInclude Include="UdpClient.h">
       <Filter>头文件</Filter>

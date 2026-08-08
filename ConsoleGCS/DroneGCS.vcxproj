@@ -138,12 +138,10 @@
     <ClCompile Include="AppConfig.cpp" />
     <ClCompile Include="CommandDispatcher.cpp" />
     <ClCompile Include="CommandManager.cpp" />
-    <ClCompile Include="CommandProtocol.cpp" />
     <ClCompile Include="ConsoleGCSApplication.cpp" />
     <ClCompile Include="ConsoleDSPGCSLoopbackTransport.cpp" />
     <ClCompile Include="ConsoleUI.cpp" />
     <ClCompile Include="DataManager.cpp" />
-    <ClCompile Include="DroneControlService.cpp" />
     <ClCompile Include="DroneCommandRequest.cpp" />
     <ClCompile Include="DroneManager.cpp" />
     <ClCompile Include="DroneSession.cpp" />
@@ -162,18 +160,15 @@
     <ClCompile Include="MavlinkParser.cpp" />
     <ClCompile Include="test.cpp" />
     <ClCompile Include="UdpClient.cpp" />
-    <ClCompile Include="UdpCommandServer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AppConfig.h" />
     <ClInclude Include="CommandDispatcher.h" />
     <ClInclude Include="CommandManager.h" />
-    <ClInclude Include="CommandProtocol.h" />
     <ClInclude Include="ConsoleGCSApplication.h" />
     <ClInclude Include="ConsoleDSPGCSLoopbackTransport.h" />
     <ClInclude Include="ConsoleUI.h" />
     <ClInclude Include="DataManager.h" />
-    <ClInclude Include="DroneControlService.h" />
     <ClInclude Include="DroneCommandRequest.h" />
     <ClInclude Include="DroneManager.h" />
     <ClInclude Include="DroneSession.h" />
@@ -192,7 +187,6 @@
     <ClInclude Include="MavlinkParser.h" />
     <ClInclude Include="SafetyConfig.h" />
     <ClInclude Include="UdpClient.h" />
-    <ClInclude Include="UdpCommandServer.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
