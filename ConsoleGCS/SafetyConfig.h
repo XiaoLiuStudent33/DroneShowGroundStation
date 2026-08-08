@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 /**
  * @brief 保存进程级飞行安全开关、限制和少量旧链兼容常量。
  *
@@ -24,8 +26,22 @@ namespace SafetyConfig
         REAL_COMMAND_ENABLED = enabled;
     }
 
-    inline constexpr const char* MAVLINK_LOCAL_IP = "192.168.1.254";
-    inline constexpr int MAVLINK_LOCAL_PORT = 10001;
+    inline bool CanEnableRealCommands(
+        const bool mavlinkNetworkEnabled,
+        const bool dspgcsCommandEnabled,
+        const std::string& mavlinkBindAddress,
+        const int mavlinkBindPort)
+    {
+        // Safety validates explicit operator gates and a concrete local bind.
+        // The endpoint value itself belongs exclusively to AppConfig.
+        return REAL_COMMAND_ENABLED &&
+            mavlinkNetworkEnabled &&
+            dspgcsCommandEnabled &&
+            !mavlinkBindAddress.empty() &&
+            mavlinkBindAddress != "0.0.0.0" &&
+            mavlinkBindPort > 0 &&
+            mavlinkBindPort <= 65535;
+    }
 
     // Legacy / Compatibility：当前多机 Production 按发现的 Remote Endpoint 发送，
     // 不读取固定 MAVLINK_TARGET_*；这些值仍为旧单会话路径保留。

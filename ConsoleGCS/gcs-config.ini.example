@@ -6,18 +6,26 @@ safe_test_mode=true
 mavlink_network_enabled=false
 real_command_enabled=false
 mavlink_bind_ip=0.0.0.0
+# Example-only port. It is not used by the checked-in Production deployment.
 mavlink_bind_port=10005
+heartbeat_timeout_ms=3000
 
 dspgcs_telemetry_enabled=false
 dspgcs_command_enabled=false
 dspgcs_transport_config=config/DSPGCSTransport.ini
 dspgcs_telemetry_interval_ms=250
 
-# Legacy single-session settings used when mavlink_network_enabled=false.
+# Legacy single-session settings. They are ignored when Production MAVLink is enabled.
 target_ip=127.0.0.1
 target_port=10005
 local_port=10005
-heartbeat_timeout_ms=3000
+
+# Optional Production performance tuning. These values match code fallbacks.
+[performance]
+mavlink_receive_buffer_bytes=4194304
+max_packets_per_drain=4096
+snapshot_datagram_bytes=61440
+snapshot_items_per_chunk=512
 
 [max_flight]
 # Positive values in meters. Missing keys fall back to 5.0m.

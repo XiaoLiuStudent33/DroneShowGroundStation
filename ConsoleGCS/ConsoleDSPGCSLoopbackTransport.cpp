@@ -13,12 +13,12 @@
 #include <ws2tcpip.h>
 
 #include <chrono>
+#include <array>
 #include <utility>
 
 namespace
 {
     constexpr std::uintptr_t InvalidSocketValue = ~std::uintptr_t{ 0 };
-    constexpr int DSPGCSBufferBytes = 4 * 1024 * 1024;
 }
 
 ConsoleDSPGCSLoopbackTransport::ConsoleDSPGCSLoopbackTransport(
@@ -61,14 +61,14 @@ bool ConsoleDSPGCSLoopbackTransport::Start()
         socketHandle,
         SOL_SOCKET,
         SO_RCVBUF,
-        reinterpret_cast<const char*>(&DSPGCSBufferBytes),
-        sizeof(DSPGCSBufferBytes)) == SOCKET_ERROR ||
+        reinterpret_cast<const char*>(&config_.receiveBufferBytes),
+        sizeof(config_.receiveBufferBytes)) == SOCKET_ERROR ||
         setsockopt(
             socketHandle,
             SOL_SOCKET,
             SO_SNDBUF,
-            reinterpret_cast<const char*>(&DSPGCSBufferBytes),
-            sizeof(DSPGCSBufferBytes)) == SOCKET_ERROR)
+        reinterpret_cast<const char*>(&config_.receiveBufferBytes),
+        sizeof(config_.receiveBufferBytes)) == SOCKET_ERROR)
     {
         Stop();
         state_.store(dspgcs::TransportState::Faulted);
@@ -185,13 +185,14 @@ void ConsoleDSPGCSLoopbackTransport::ReceiveLoop()
 {
     while (receiveRunning_.load())
     {
-        std::uint8_t buffer[65507];
+        std::array<std::uint8_t, dspgcs::DSPGCSDefaults::MaxUdpPayloadBytes>
+            buffer{};
         sockaddr_in sender{};
         int senderLength = sizeof(sender);
         const int length = recvfrom(
             static_cast<SOCKET>(socketHandle_),
-            reinterpret_cast<char*>(buffer),
-            sizeof(buffer),
+            reinterpret_cast<char*>(buffer.data()),
+            static_cast<int>(buffer.size()),
             0,
             reinterpret_cast<sockaddr*>(&sender),
             &senderLength);
@@ -208,7 +209,7 @@ void ConsoleDSPGCSLoopbackTransport::ReceiveLoop()
             if (handler)
             {
                 dspgcs::TransportFrame frame;
-                frame.bytes.assign(buffer, buffer + length);
+                frame.bytes.assign(buffer.begin(), buffer.begin() + length);
                 handler(std::move(frame));
             }
 
@@ -216,6 +217,7 @@ void ConsoleDSPGCSLoopbackTransport::ReceiveLoop()
             // one burst instead of sleeping between its chunks.
             continue;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(config_.receiverPollMs));
     }
 }

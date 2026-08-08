@@ -11,14 +11,6 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-namespace
-{
-    // A thousand simulators commonly emit heartbeat and position packets in
-    // the same scheduler window. Keep the kernel queue large enough for that
-    // burst so heartbeat liveness is not decided by the default Winsock buffer.
-    constexpr int MavlinkReceiveBufferBytes = 4 * 1024 * 1024;
-}
-
 MavlinkUdpReceiver::MavlinkUdpReceiver() = default;
 
 MavlinkUdpReceiver::~MavlinkUdpReceiver() noexcept
@@ -29,9 +21,16 @@ MavlinkUdpReceiver::~MavlinkUdpReceiver() noexcept
 bool MavlinkUdpReceiver::Start(
     const std::string& bindIp,
     const std::uint16_t bindPort,
+    const int receiveBufferBytes,
     std::string& error)
 {
     Stop();
+
+    if (receiveBufferBytes <= 0)
+    {
+        error = "invalid MAVLink receive buffer size";
+        return false;
+    }
 
     WSADATA winsockData{};
     if (WSAStartup(MAKEWORD(2, 2), &winsockData) != 0)
@@ -53,8 +52,8 @@ bool MavlinkUdpReceiver::Start(
         socketHandle,
         SOL_SOCKET,
         SO_RCVBUF,
-        reinterpret_cast<const char*>(&MavlinkReceiveBufferBytes),
-        sizeof(MavlinkReceiveBufferBytes)) == SOCKET_ERROR)
+        reinterpret_cast<const char*>(&receiveBufferBytes),
+        sizeof(receiveBufferBytes)) == SOCKET_ERROR)
     {
         error = "failed to enlarge MAVLink UDP receive buffer: " +
             std::to_string(WSAGetLastError());

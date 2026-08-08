@@ -239,13 +239,76 @@ Future / Planned：淡紫色 Offline 表现和粒子 DisplayID 数字显示尚�
 
 `127.0.0.1` 当前也是 Production DSP 同机通信地址，不能统一标为测试地址。
 
-## 17. 配置入口
+## 17. 配置来源与优先级
 
-- Console：`ConsoleGCS/gcs-config.ini`。
-- Console DSP Endpoint：`gcs-config.ini` 的 `dspgcs_transport_config` 指向 `config/DSPGCSTransport.ini`。
-- UE：`UnrealGCS/Config/DefaultGame.ini`。
+Production 保留 Console 与 Unreal 两份部署配置，因为两个进程有不同的启动系统和部署边界；当前不强制 UE 直接读取 Console 文件。两端使用相同的 Endpoint 角色名称，并在启动时打印最终生效值，避免通过 Bind/Remote 反向关系猜测端口。
 
-当前配置值不得从本文复制回代码；本文只说明用途，运行时仍以实际配置加载结果为准。
+### 17.1 Console Deployment
+
+`ConsoleGCS/gcs-config.ini` 是 Console Production 真值来源：
+
+| 配置 | 当前字段 | 代码 Fallback / 缺失行为 |
+|---|---|---|
+| MAVLink 本地监听 | `mavlink_bind_ip`、`mavlink_bind_port` | Production 启用时必须提供；当前为 `192.168.1.254:10001` |
+| Session 超时 | `heartbeat_timeout_ms` | 必须提供；当前为 `3000ms` |
+| 真实命令总开关 | `real_command_enabled` | 缺失时安全默认 `false` |
+| DSP 开关与配置文件 | `dspgcs_*_enabled`、`dspgcs_transport_config` | DSP 配置路径默认 `config/DSPGCSTransport.ini` |
+| Snapshot 周期 | `dspgcs_telemetry_interval_ms` | 默认 `250ms` |
+| MAVLink 接收缓冲 | `[performance].mavlink_receive_buffer_bytes` | 默认 `4MiB` |
+| 单轮最大 Drain | `[performance].max_packets_per_drain` | 默认 `4096` |
+| Snapshot Datagram 上限 | `[performance].snapshot_datagram_bytes` | 默认 `61440` 字节 |
+| 单 Chunk Drone 上限 | `[performance].snapshot_items_per_chunk` | 默认 `512` |
+
+`target_ip`、`target_port`、可选 `local_ip`、`local_port` 仅属于 Legacy Single Session。Production 多机模式不解析这些值，因此错误或缺失的 Legacy Endpoint 不会阻止 Production 启动。
+
+### 17.2 DSP-GCS Endpoint 角色
+
+`gcs-config.ini` 的 `dspgcs_transport_config` 指向 `ConsoleGCS/config/DSPGCSTransport.ini`。该文件使用固定角色名：
+
+- `ConsoleAddress` / `ConsolePort`：Console 本地 Bind Endpoint，当前 `127.0.0.1:12001`。
+- `UnrealAddress` / `UnrealPort`：UE 本地 Bind Endpoint，当前 `127.0.0.1:12002`。
+- `TransportType`：当前 `Loopback`。
+- `ReceiveBufferBytes` / `ReceiverPollMs`：Console DSP Socket 性能参数，当前 `4MiB / 2ms`。
+
+旧 `BindAddress/BindPort/RemoteAddress/RemotePort` 仍可由 Console Loader 读取，仅用于配置兼容；新部署应使用角色字段。
+
+### 17.3 Unreal Deployment
+
+`UnrealGCS/Config/DefaultGame.ini` 的 `[DSPGCS.ProductionTelemetry]` 使用与 Console 相同的 `ConsoleAddress/ConsolePort/UnrealAddress/UnrealPort` 角色字段。UE 运行时将 Unreal Endpoint 作为本地 Bind，将 Console Endpoint 作为 Remote Target。
+
+UE Production 配置优先级：
+
+1. `DefaultGame.ini` 的角色字段。
+2. 旧 `BindAddress/BindPort/RemoteAddress/RemotePort` 兼容字段。
+3. `Shared/DSPGCSTransport/DSPGCSTransportConfig.h` 中的代码 Fallback。
+
+`ReceiveBufferBytes` 和 `ReceiverPollMs` 当前为 `4MiB / 20ms`。`TelemetryTimeoutMs=2000` 只判断 UE 是否持续收到完整、有效并已提交的 Production Snapshot，不重新实现 MAVLink Heartbeat timeout。Console 与 UE 启动日志都会打印 Transport、ConsoleEndpoint、UnrealEndpoint、缓冲参数和遥测超时，便于人工核对两端是否漂移。
+
+UE 的 DSP-GCS 遥测链路状态位于 `UDSPGCSProductionTelemetryProviderSubsystem`：首个有效 Snapshot 提交后为 `Connected`，超过 `TelemetryTimeoutMs` 未收到下一份有效 Snapshot 后为 `Disconnected`。断链只改变 UI 派生显示和命令可用性，不清空 Fleet、不修改原始 `Drone.bOnline`、不改变 `DroneOrder` 或 ParticleIndex。UI 显示规则为：Server Disconnected → `Link Lost`；否则使用 Console Snapshot 中的 `Drone.bOnline` 显示 `Online / Offline`。
+
+### 17.4 Safety 与部署配置边界
+
+Safety Policy 继续要求真实命令开关、Production MAVLink、DSP Command 三个门同时开启，并拒绝 `0.0.0.0` 这种通配监听作为真实命令 Endpoint。SafetyConfig 不再保存另一套 `192.168.1.254:10001` Production 真值；实际 Endpoint 只来自 `AppConfig`。
+
+高度限制仍由 `gcs-config.ini [max_flight]` 加载到 Safety Policy。`MAVLINK_TARGET_*`、`COMMAND_*` 常量仍是 Legacy Compatibility，不参与当前 Production。
+
+### 17.5 不配置化的常量
+
+以下属于协议或防御性 Safety Limit，不是部署调优项：
+
+- DSP-GCS `FrameMagic`、Schema、字段布局和编码规则。
+- `MaxFrameBytes`、`MaxStringBytes`、`MaxCollectionItems`。
+- `MaxSnapshotChunks=1024`，用于限制异常分片导致的内存占用。
+- UDP 单 Datagram 物理上限 `65507` 字节；配置的 Snapshot Datagram 必须低于该上限。
+- UE `MaxPendingDroneDeltas=20000`，用于限制网络线程积压。
+
+### 17.6 特殊端口
+
+- `10005` 只在 `gcs-config.ini.example` 中作为示例值；不会进入当前 Production 启动日志。
+- `10006` 只属于 `[DroneGCS.Network]` Legacy GCS1 文本命令链；该链未显式启用时不会进入 Production。
+- `127.0.0.1` 是当前 Console 与 UE 同机运行的 Production DSP 地址，不是 Test Address。
+
+Future / Planned：如果 DSP-GCS 需要跨机器部署，可新增共享 Deployment Profile 生成两端配置；在此之前不让 UE 直接依赖 Console 私有配置文件。
 
 ## 18. Future / Planned 整理方向
 
@@ -257,3 +320,39 @@ Unreal:  Core / Fleet / DSP / Command / UI / Visualization / Simulation / Accept
 ```
 
 未来 Cleanup 必须分阶段编译提交，且不得破坏 Endpoint 身份、Offline Session 保留、#24/#33 职责、DSP Snapshot 原子提交和 DroneOrder/ParticleIndex 稳定映射。
+
+【已知规模基线：10000 Drone】
+
+测试结果：
+
+- Console Total Session：10000
+- Console稳定Online：约2900~3200
+- 其余Session因Heartbeat timeout进入Offline
+- Unreal Fleet：10000
+- Niagara：可以实际生成万级粒子
+
+结论：
+
+10K身份发现、Session保留、DSP Fleet同步和UE Fleet容量已经初步跑通。
+
+当前10K主要未解决问题：
+Console在万机持续MAVLink流量下无法维持全部Session Online。
+
+注意：
+当前1000架已经稳定通过，因此不要为了10K实验修改当前1000架稳定参数。
+
+后续单独建立：
+10K Scaling / Performance Phase
+
+届时通过测量：
+- UDP Rx packets/s
+- Kernel drop
+- MAVLink parse/s
+- Heartbeat Rx/s
+- Session refresh/s
+- Timeout count/s
+- DSP snapshot build time
+- UE apply time
+- Niagara update time
+
+再决定优化位置。

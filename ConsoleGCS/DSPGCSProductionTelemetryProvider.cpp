@@ -16,11 +16,6 @@
 
 namespace
 {
-    // Leave headroom below the UDP payload ceiling (65,507 bytes) for the
-    // encoded DSP-GCS envelope and for platform-specific transport handling.
-    constexpr std::size_t MaxTelemetryDatagramBytes = 60 * 1024;
-    constexpr std::size_t MaxTelemetryChunkItems = 512;
-
     std::int64_t UtcNowMs()
     {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -93,9 +88,21 @@ void DSPGCSProductionTelemetryProvider::SetReceiveHandler(
 
 bool DSPGCSProductionTelemetryProvider::Start(
     const dspgcs::DSPGCSTransportConfig& transportConfig,
+    const std::size_t maxTelemetryDatagramBytes,
+    const std::size_t maxTelemetryChunkItems,
     std::string& error)
 {
     Stop();
+    if (maxTelemetryDatagramBytes == 0 ||
+        maxTelemetryDatagramBytes >
+            dspgcs::DSPGCSDefaults::MaxUdpPayloadBytes ||
+        maxTelemetryChunkItems == 0 ||
+        maxTelemetryChunkItems > dspgcs::MaxCollectionItems)
+    {
+        error = "Invalid DSP-GCS snapshot performance configuration";
+        return false;
+    }
+
     transport_ =
         dspgcs::DSPGCSTransportFactory::CreateTransport(transportConfig, error);
     if (!transport_)
@@ -120,6 +127,8 @@ bool DSPGCSProductionTelemetryProvider::Start(
     sequence_ = 0;
     fleetRevision_ = 0;
     sessionId_ = "PRODUCTION-" + std::to_string(UtcNowMs());
+    maxTelemetryDatagramBytes_ = maxTelemetryDatagramBytes;
+    maxTelemetryChunkItems_ = maxTelemetryChunkItems;
     return true;
 }
 
@@ -194,8 +203,8 @@ bool DSPGCSProductionTelemetryProvider::PublishSnapshot(
             fixedFrameBytes;
 
         if (!chunks.back().empty() &&
-            (chunks.back().size() >= MaxTelemetryChunkItems ||
-             currentFrameBytes + itemBytes > MaxTelemetryDatagramBytes))
+            (chunks.back().size() >= maxTelemetryChunkItems_ ||
+             currentFrameBytes + itemBytes > maxTelemetryDatagramBytes_))
         {
             chunks.emplace_back();
             currentFrameBytes = fixedFrameBytes;
@@ -203,7 +212,7 @@ bool DSPGCSProductionTelemetryProvider::PublishSnapshot(
 
         // A single DTO larger than the safe datagram size cannot be sent by
         // this UDP transport; fail without emitting a partial snapshot.
-        if (currentFrameBytes + itemBytes > MaxTelemetryDatagramBytes)
+        if (currentFrameBytes + itemBytes > maxTelemetryDatagramBytes_)
         {
             return false;
         }
@@ -224,7 +233,7 @@ bool DSPGCSProductionTelemetryProvider::PublishSnapshot(
         envelope.sequence = ++sequence_;
         std::vector<std::uint8_t> frame =
             dspgcs::EncodeTelemetry(envelope, batch);
-        if (frame.size() > MaxTelemetryDatagramBytes ||
+        if (frame.size() > maxTelemetryDatagramBytes_ ||
             !transport_->Send({ std::move(frame) }))
         {
             return false;

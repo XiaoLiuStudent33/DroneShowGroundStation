@@ -45,6 +45,7 @@ public:
     bool Start(
         const std::string& bindIp,
         std::uint16_t bindPort,
+        int receiveBufferBytes,
         std::string& error);
     void Stop();
 

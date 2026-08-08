@@ -33,6 +33,63 @@
 
 namespace
 {
+    std::string FormatBytes(const int bytes)
+    {
+        constexpr int bytesPerMiB = 1024 * 1024;
+        if (bytes > 0 && bytes % bytesPerMiB == 0)
+        {
+            return std::to_string(bytes / bytesPerMiB) + "MiB";
+        }
+        return std::to_string(bytes) + " bytes";
+    }
+
+    void LogProductionConfigSummary(
+        const AppConfig& appConfig,
+        const dspgcs::DSPGCSTransportConfig* transportConfig)
+    {
+        ConsoleUI::AddLog("[Config]");
+        ConsoleUI::AddLog(
+            "MAVLink: Bind=" + appConfig.mavlinkBindIP + ":" +
+            std::to_string(appConfig.mavlinkBindPort) +
+            " HeartbeatTimeout=" +
+            std::to_string(appConfig.heartbeatTimeoutMs) + "ms");
+
+        if (transportConfig != nullptr)
+        {
+            ConsoleUI::AddLog(
+                std::string("DSP-GCS: Transport=") +
+                dspgcs::ToString(transportConfig->type) +
+                " ConsoleEndpoint=" + transportConfig->bindAddress + ":" +
+                std::to_string(transportConfig->bindPort) +
+                " UnrealEndpoint=" + transportConfig->remoteAddress + ":" +
+                std::to_string(transportConfig->remotePort) +
+                " SnapshotInterval=" +
+                std::to_string(appConfig.dspgcsTelemetryIntervalMs) + "ms");
+            ConsoleUI::AddLog(
+                "Performance: MavlinkRxBuffer=" +
+                FormatBytes(appConfig.mavlinkReceiveBufferBytes) +
+                " MaxDrain=" +
+                std::to_string(appConfig.maxPacketsPerDrain) +
+                " DSPRxBuffer=" +
+                FormatBytes(transportConfig->receiveBufferBytes) +
+                " DSPPoll=" +
+                std::to_string(transportConfig->receiverPollMs) + "ms" +
+                " ChunkBytes=" +
+                std::to_string(appConfig.snapshotDatagramBytes) +
+                " ChunkDrones=" +
+                std::to_string(appConfig.snapshotItemsPerChunk));
+        }
+        else
+        {
+            ConsoleUI::AddLog("DSP-GCS: Disabled");
+            ConsoleUI::AddLog(
+                "Performance: MavlinkRxBuffer=" +
+                FormatBytes(appConfig.mavlinkReceiveBufferBytes) +
+                " MaxDrain=" +
+                std::to_string(appConfig.maxPacketsPerDrain));
+        }
+    }
+
     std::vector<ConsoleDroneStatus> BuildConsoleFleetStatus(
         const std::vector<DroneSession*>& sessions)
     {
@@ -90,9 +147,11 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
     // explicit runtime gates below are enabled. Legacy mode keeps its existing
     // SAFE_TEST_MODE behavior.
     const bool mavlinkControlEnabled =
-        (appConfig.mavlinkNetworkEnabled &&
-         appConfig.dspgcsCommandEnabled &&
-         appConfig.realCommandEnabled) ||
+        SafetyConfig::CanEnableRealCommands(
+            appConfig.mavlinkNetworkEnabled,
+            appConfig.dspgcsCommandEnabled,
+            appConfig.mavlinkBindIP,
+            appConfig.mavlinkBindPort) ||
         (!appConfig.mavlinkNetworkEnabled && !SafetyConfig::SAFE_TEST_MODE);
 
     ConsoleUI::Init();
@@ -134,23 +193,46 @@ int ConsoleGCSApplication::RunReadOnlyMavlink(
     const AppConfig& appConfig)
 {
     if (appConfig.realCommandEnabled &&
-        (appConfig.mavlinkBindIP != SafetyConfig::MAVLINK_LOCAL_IP ||
-         appConfig.mavlinkBindPort != SafetyConfig::MAVLINK_LOCAL_PORT))
+        !SafetyConfig::CanEnableRealCommands(
+            appConfig.mavlinkNetworkEnabled,
+            appConfig.dspgcsCommandEnabled,
+            appConfig.mavlinkBindIP,
+            appConfig.mavlinkBindPort))
     {
         ConsoleUI::AddLog(
-            "Startup blocked: real commands require shared MAVLink endpoint " +
-            std::string(SafetyConfig::MAVLINK_LOCAL_IP) + ":" +
-            std::to_string(SafetyConfig::MAVLINK_LOCAL_PORT) +
-            ", configured=" + appConfig.mavlinkBindIP + ":" +
-            std::to_string(appConfig.mavlinkBindPort));
+            "Startup blocked: real commands require explicit MAVLink/DSP "
+            "gates and a concrete non-wildcard MAVLink bind endpoint");
         return -2;
     }
+
+    const bool dspgcsEnabled =
+        appConfig.dspgcsTelemetryEnabled || appConfig.dspgcsCommandEnabled;
+    dspgcs::DSPGCSTransportConfig transportConfig =
+        dspgcs::MakeConsoleDSPGCSDefaults();
+    if (dspgcsEnabled)
+    {
+        std::string transportError;
+        if (!LoadDSPGCSTransportConfig(
+                appConfig.dspgcsTransportConfigPath,
+                transportConfig,
+                transportError))
+        {
+            ConsoleUI::AddLog(
+                "DSP-GCS production configuration failed: " +
+                transportError);
+            return -4;
+        }
+    }
+    LogProductionConfigSummary(
+        appConfig,
+        dspgcsEnabled ? &transportConfig : nullptr);
 
     MavlinkUdpReceiver receiver;
     std::string receiverError;
     if (!receiver.Start(
         appConfig.mavlinkBindIP,
         static_cast<std::uint16_t>(appConfig.mavlinkBindPort),
+        appConfig.mavlinkReceiveBufferBytes,
         receiverError))
     {
         ConsoleUI::AddLog(receiverError);
@@ -188,15 +270,14 @@ int ConsoleGCSApplication::RunReadOnlyMavlink(
                 commandReceiver.EnqueueFrame(std::move(frame));
             });
     }
-    if (appConfig.dspgcsTelemetryEnabled || appConfig.dspgcsCommandEnabled)
+    if (dspgcsEnabled)
     {
-        dspgcs::DSPGCSTransportConfig transportConfig;
         std::string transportError;
-        if (!LoadDSPGCSTransportConfig(
-                appConfig.dspgcsTransportConfigPath,
+        if (!telemetryProvider.Start(
                 transportConfig,
-                transportError) ||
-            !telemetryProvider.Start(transportConfig, transportError))
+                static_cast<std::size_t>(appConfig.snapshotDatagramBytes),
+                static_cast<std::size_t>(appConfig.snapshotItemsPerChunk),
+                transportError))
         {
             ConsoleUI::AddLog("DSP-GCS production channel start failed: " + transportError);
             return -4;
@@ -227,7 +308,9 @@ int ConsoleGCSApplication::RunReadOnlyMavlink(
         // Drain a full synchronized thousand-aircraft telemetry burst before
         // sleeping. The bound prevents malformed traffic from starving the
         // rest of the service loop.
-        for (int datagramIndex = 0; datagramIndex < 4096; ++datagramIndex)
+        for (int datagramIndex = 0;
+             datagramIndex < appConfig.maxPacketsPerDrain;
+             ++datagramIndex)
         {
             MavlinkReceivedDatagram datagram;
             std::string receiveError;
@@ -322,7 +405,7 @@ int ConsoleGCSApplication::RunLegacySingleSession(
     sessionConfig.droneId = "DRONE-0001";
     sessionConfig.targetIp = appConfig.targetIP;
     sessionConfig.targetPort = appConfig.targetPort;
-    sessionConfig.localIp = SafetyConfig::MAVLINK_LOCAL_IP;
+    sessionConfig.localIp = appConfig.legacyLocalIP;
     sessionConfig.localPort = appConfig.localPort;
     sessionConfig.heartbeatTimeoutMs = appConfig.heartbeatTimeoutMs;
     sessionConfig.realCommandEnabled = !SafetyConfig::SAFE_TEST_MODE;

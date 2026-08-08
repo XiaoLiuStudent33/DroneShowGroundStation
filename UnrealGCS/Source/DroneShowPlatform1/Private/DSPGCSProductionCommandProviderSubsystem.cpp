@@ -143,6 +143,14 @@ FString UDSPGCSProductionCommandProviderSubsystem::SubmitCommand(
 		UE_LOG(LogTemp, Error, TEXT("DSP-GCS command rejected locally: provider/targets invalid."));
 		return {};
 	}
+	if (!ProductionChannel->IsTelemetryLinkConnected())
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("DSP-GCS command rejected locally: ServerDisconnected."));
+		return {};
+	}
 
 	TSet<FString> UniqueTargets;
 	dspgcs::CommandRequestDTO Request;

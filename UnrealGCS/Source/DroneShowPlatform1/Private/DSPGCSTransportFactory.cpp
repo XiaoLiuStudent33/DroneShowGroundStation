@@ -18,7 +18,8 @@ std::unique_ptr<dspgcs::IDSPGCSTransport> dspgcs::DSPGCSTransportFactory::Create
 	switch (config.type)
 	{
 	case TransportType::Loopback:
-		if (config.bindAddress != "127.0.0.1" || config.remoteAddress != "127.0.0.1")
+		if (config.bindAddress != DSPGCSDefaults::LoopbackAddress ||
+			config.remoteAddress != DSPGCSDefaults::LoopbackAddress)
 		{
 			error = "Loopback Transport requires BindAddress and RemoteAddress to be 127.0.0.1";
 			return nullptr;
@@ -26,6 +27,14 @@ std::unique_ptr<dspgcs::IDSPGCSTransport> dspgcs::DSPGCSTransportFactory::Create
 		if (config.bindPort == 0 || config.remotePort == 0)
 		{
 			error = "Loopback Transport requires non-zero BindPort and RemotePort";
+			return nullptr;
+		}
+		if (config.receiveBufferBytes < DSPGCSDefaults::MinimumSocketBufferBytes ||
+			config.receiveBufferBytes > DSPGCSDefaults::MaximumSocketBufferBytes ||
+			config.receiverPollMs < DSPGCSDefaults::MinimumReceiverPollMs ||
+			config.receiverPollMs > DSPGCSDefaults::MaximumReceiverPollMs)
+		{
+			error = "Loopback Transport performance configuration is invalid";
 			return nullptr;
 		}
 		return std::make_unique<FDSPGCSLoopbackTransport>(config);

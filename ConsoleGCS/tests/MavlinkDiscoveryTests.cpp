@@ -1,8 +1,10 @@
+#include "AppConfig.h"
 #include "CommandManager.h"
 #include "DroneManager.h"
 #include "DSPGCSProductionTelemetryProvider.h"
 #include "DSPGCSProtocol.h"
 #include "DSPGCSTransportFactory.h"
+#include "DSPGCSTransportConfigLoader.h"
 #include "MavlinkDiscoveryService.h"
 #include "MavlinkReadOnlyIngress.h"
 #include "MavlinkUdpReceiver.h"
@@ -12,6 +14,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <stdexcept>
@@ -32,6 +36,212 @@ namespace
         {
             throw std::runtime_error(message);
         }
+    }
+
+    class TemporaryConfigFile
+    {
+    public:
+        TemporaryConfigFile(
+            const std::string& name,
+            const std::string& contents)
+        {
+            static int counter = 0;
+            path = std::filesystem::temp_directory_path() /
+                ("DroneGCS-" + name + "-" +
+                 std::to_string(++counter) + ".ini");
+            std::ofstream output(path, std::ios::binary);
+            Expect(output.good(), "unable to create temporary config file");
+            output << contents;
+            Expect(output.good(), "unable to write temporary config file");
+        }
+
+        ~TemporaryConfigFile()
+        {
+            std::error_code error;
+            std::filesystem::remove(path, error);
+        }
+
+        std::string GetPath() const
+        {
+            return path.string();
+        }
+
+    private:
+        std::filesystem::path path;
+    };
+
+    void VerifyProductionConfigurationLoading()
+    {
+        TemporaryConfigFile configured("production", R"(
+safe_test_mode=true
+mavlink_network_enabled=true
+real_command_enabled=false
+mavlink_bind_ip=10.20.30.40
+mavlink_bind_port=14550
+heartbeat_timeout_ms=4500
+dspgcs_telemetry_enabled=true
+dspgcs_command_enabled=true
+dspgcs_transport_config=config/DSPGCSTransport.ini
+dspgcs_telemetry_interval_ms=500
+target_ip=legacy.invalid
+target_port=not-a-port
+local_port=also-invalid
+[performance]
+mavlink_receive_buffer_bytes=8388608
+max_packets_per_drain=8192
+snapshot_datagram_bytes=60000
+snapshot_items_per_chunk=256
+)" );
+
+        AppConfig config;
+        std::string error;
+        Expect(
+            AppConfig::Load(configured.GetPath(), config, error),
+            "production config failed to load: " + error);
+        Expect(
+            config.mavlinkBindIP == "10.20.30.40" &&
+            config.mavlinkBindPort == 14550 &&
+            config.heartbeatTimeoutMs == 4500,
+            "MAVLink deployment values were not loaded");
+        Expect(
+            config.mavlinkReceiveBufferBytes == 8388608 &&
+            config.maxPacketsPerDrain == 8192 &&
+            config.snapshotDatagramBytes == 60000 &&
+            config.snapshotItemsPerChunk == 256,
+            "Production performance values were not loaded");
+
+        TemporaryConfigFile fallback("fallback", R"(
+safe_test_mode=true
+mavlink_network_enabled=true
+real_command_enabled=false
+mavlink_bind_ip=192.168.1.254
+mavlink_bind_port=10001
+heartbeat_timeout_ms=3000
+dspgcs_telemetry_enabled=false
+dspgcs_command_enabled=false
+)" );
+        AppConfig fallbackConfig;
+        error.clear();
+        Expect(
+            AppConfig::Load(fallback.GetPath(), fallbackConfig, error),
+            "fallback config failed to load: " + error);
+        Expect(
+            fallbackConfig.mavlinkReceiveBufferBytes ==
+                AppConfigDefaults::MavlinkReceiveBufferBytes &&
+            fallbackConfig.maxPacketsPerDrain ==
+                AppConfigDefaults::MaxPacketsPerDrain &&
+            fallbackConfig.snapshotDatagramBytes ==
+                AppConfigDefaults::SnapshotDatagramBytes &&
+            fallbackConfig.snapshotItemsPerChunk ==
+                AppConfigDefaults::SnapshotItemsPerChunk,
+            "missing performance keys did not preserve fallbacks");
+
+        TemporaryConfigFile legacy("legacy", R"(
+safe_test_mode=true
+mavlink_network_enabled=false
+real_command_enabled=false
+heartbeat_timeout_ms=3000
+dspgcs_telemetry_enabled=false
+dspgcs_command_enabled=false
+target_ip=127.0.0.1
+target_port=10005
+local_ip=127.0.0.1
+local_port=10005
+)" );
+        AppConfig legacyConfig;
+        error.clear();
+        Expect(
+            AppConfig::Load(legacy.GetPath(), legacyConfig, error),
+            "legacy compatibility config failed to load: " + error);
+        Expect(
+            legacyConfig.targetIP == "127.0.0.1" &&
+            legacyConfig.targetPort == 10005 &&
+            legacyConfig.legacyLocalIP == "127.0.0.1" &&
+            legacyConfig.localPort == 10005,
+            "legacy compatibility values were not retained");
+        std::cout << "Production, fallback, and legacy config loading passed\n";
+    }
+
+    void VerifyDSPTransportConfigurationLoading()
+    {
+        TemporaryConfigFile configured("dsp", R"(
+TransportType=Loopback
+ConsoleAddress=127.0.0.1
+ConsolePort=13001
+UnrealAddress=127.0.0.1
+UnrealPort=13002
+ReceiveBufferBytes=8388608
+ReceiverPollMs=7
+)" );
+        dspgcs::DSPGCSTransportConfig config;
+        std::string error;
+        Expect(
+            LoadDSPGCSTransportConfig(configured.GetPath(), config, error),
+            "DSP role config failed to load: " + error);
+        Expect(
+            config.bindAddress == "127.0.0.1" &&
+            config.bindPort == 13001 &&
+            config.remoteAddress == "127.0.0.1" &&
+            config.remotePort == 13002,
+            "ConsoleEndpoint/UnrealEndpoint mapping changed");
+        Expect(
+            config.receiveBufferBytes == 8388608 &&
+            config.receiverPollMs == 7,
+            "DSP performance values were not loaded");
+
+        TemporaryConfigFile fallback("dsp-fallback", R"(
+TransportType=Loopback
+ConsoleAddress=127.0.0.1
+ConsolePort=12001
+UnrealAddress=127.0.0.1
+UnrealPort=12002
+)" );
+        error.clear();
+        Expect(
+            LoadDSPGCSTransportConfig(fallback.GetPath(), config, error),
+            "DSP fallback config failed to load: " + error);
+        Expect(
+            config.receiveBufferBytes ==
+                dspgcs::DSPGCSDefaults::SocketBufferBytes &&
+            config.receiverPollMs ==
+                dspgcs::DSPGCSDefaults::ConsoleReceiverPollMs,
+            "DSP missing performance keys did not preserve fallbacks");
+
+        TemporaryConfigFile compatibility("dsp-compatibility", R"(
+TransportType=Loopback
+BindAddress=127.0.0.1
+BindPort=12001
+RemoteAddress=127.0.0.1
+RemotePort=12002
+)" );
+        error.clear();
+        Expect(
+            LoadDSPGCSTransportConfig(
+                compatibility.GetPath(), config, error),
+            "legacy DSP key compatibility failed: " + error);
+        Expect(
+            config.bindPort == 12001 && config.remotePort == 12002,
+            "legacy DSP endpoint keys mapped incorrectly");
+        std::cout << "DSP role endpoints and performance fallbacks passed\n";
+    }
+
+    void VerifySafetyUsesDeploymentConfig()
+    {
+        SafetyConfig::SetRealCommandEnabled(true);
+        Expect(
+            SafetyConfig::CanEnableRealCommands(
+                true, true, "10.20.30.40", 14550),
+            "Safety rejected an explicit configured deployment endpoint");
+        Expect(
+            !SafetyConfig::CanEnableRealCommands(
+                true, true, "0.0.0.0", 14550),
+            "Safety accepted a wildcard real-command bind");
+        Expect(
+            !SafetyConfig::CanEnableRealCommands(
+                true, false, "10.20.30.40", 14550),
+            "Safety ignored the DSP command gate");
+        SafetyConfig::SetRealCommandEnabled(false);
+        std::cout << "Safety policy uses deployment config without endpoint constants\n";
     }
 
     std::vector<std::uint8_t> MakeHeartbeatDatagram(
@@ -112,7 +322,11 @@ namespace
         MavlinkUdpReceiver receiver;
         std::string error;
         Expect(
-            receiver.Start("127.0.0.1", 0, error),
+            receiver.Start(
+                "127.0.0.1",
+                0,
+                AppConfigDefaults::MavlinkReceiveBufferBytes,
+                error),
             "loopback receiver failed to start: " + error);
 
         const SOCKET sender = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -381,7 +595,11 @@ namespace
         MavlinkUdpReceiver endpoint;
         std::string error;
         Expect(
-            endpoint.Start("127.0.0.1", sharedPort, error),
+            endpoint.Start(
+                "127.0.0.1",
+                sharedPort,
+                AppConfigDefaults::MavlinkReceiveBufferBytes,
+                error),
             "shared endpoint failed to bind 127.0.0.1:10001: " + error);
 
         DroneSessionConfig sessionDefaults;
@@ -536,6 +754,9 @@ int main()
                 "Discovery tests require SAFE_TEST_MODE and real commands disabled");
         }
 
+        VerifyProductionConfigurationLoading();
+        VerifyDSPTransportConfigurationLoading();
+        VerifySafetyUsesDeploymentConfig();
         VerifyUdpReceiverLoopback();
         VerifySharedMavlinkEndpoint();
 
@@ -889,7 +1110,11 @@ int main()
         publisherConfig.remotePort = 12522;
         DSPGCSProductionTelemetryProvider productionProvider;
         Expect(
-            productionProvider.Start(publisherConfig, transportError),
+            productionProvider.Start(
+                publisherConfig,
+                AppConfigDefaults::SnapshotDatagramBytes,
+                AppConfigDefaults::SnapshotItemsPerChunk,
+                transportError),
             "production telemetry provider failed: " + transportError);
         Expect(
             productionProvider.PublishSnapshot(manager),
@@ -1027,7 +1252,11 @@ int main()
         scalePublisherConfig.remotePort = 12532;
         DSPGCSProductionTelemetryProvider scaleProvider;
         Expect(
-            scaleProvider.Start(scalePublisherConfig, transportError),
+            scaleProvider.Start(
+                scalePublisherConfig,
+                AppConfigDefaults::SnapshotDatagramBytes,
+                AppConfigDefaults::SnapshotItemsPerChunk,
+                transportError),
             "scale telemetry provider failed to start");
         Expect(
             scaleProvider.PublishSnapshot(scaleManager),
@@ -1079,7 +1308,8 @@ int main()
         for (const dspgcs::TransportFrame& frame : framesToVerify)
         {
             Expect(
-                frame.bytes.size() <= 60 * 1024,
+                frame.bytes.size() <=
+                    AppConfigDefaults::SnapshotDatagramBytes,
                 "telemetry chunk exceeded safe UDP payload size");
             dspgcs::MessageEnvelope chunkEnvelope;
             std::vector<std::uint8_t> chunkPayload;

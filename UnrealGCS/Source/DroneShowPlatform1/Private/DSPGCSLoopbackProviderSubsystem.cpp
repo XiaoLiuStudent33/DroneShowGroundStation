@@ -117,18 +117,20 @@ void UDSPGCSLoopbackProviderSubsystem::Stop()
 
 bool UDSPGCSLoopbackProviderSubsystem::CreateTransport()
 {
+	dspgcs::DSPGCSTransportConfig TransportConfig =
+		dspgcs::MakeUnrealDSPGCSDefaults();
 	FString TransportTypeString = TEXT("Loopback");
-	FString ConsoleIPString = TEXT("127.0.0.1");
-	FString UnrealBindIPString = TEXT("127.0.0.1");
-	int32 ConsolePort = 12001;
-	int32 UnrealPort = 12002;
+	FString ConsoleIPString =
+		UTF8_TO_TCHAR(dspgcs::DSPGCSDefaults::LoopbackAddress);
+	FString UnrealBindIPString = ConsoleIPString;
+	int32 ConsolePort = dspgcs::DSPGCSDefaults::ConsoleBindPort;
+	int32 UnrealPort = dspgcs::DSPGCSDefaults::UnrealBindPort;
 	GConfig->GetString(TEXT("DSPGCS.Transport"), TEXT("TransportType"), TransportTypeString, GGameIni);
 	GConfig->GetString(TEXT("DSPGCS.Transport"), TEXT("RemoteAddress"), ConsoleIPString, GGameIni);
 	GConfig->GetString(TEXT("DSPGCS.Transport"), TEXT("BindAddress"), UnrealBindIPString, GGameIni);
 	GConfig->GetInt(TEXT("DSPGCS.Transport"), TEXT("RemotePort"), ConsolePort, GGameIni);
 	GConfig->GetInt(TEXT("DSPGCS.Transport"), TEXT("BindPort"), UnrealPort, GGameIni);
 
-	dspgcs::DSPGCSTransportConfig TransportConfig;
 	if (!dspgcs::TryParseTransportType(TCHAR_TO_UTF8(*TransportTypeString), TransportConfig.type))
 	{
 		UE_LOG(LogTemp, Error, TEXT("DSP-GCS CONFIG ERROR: Unsupported TransportType=%s"), *TransportTypeString);

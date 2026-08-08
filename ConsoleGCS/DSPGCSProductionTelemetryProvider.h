@@ -26,6 +26,8 @@ public:
     void SetReceiveHandler(dspgcs::TransportReceiveHandler handler);
     bool Start(
         const dspgcs::DSPGCSTransportConfig& transportConfig,
+        std::size_t maxTelemetryDatagramBytes,
+        std::size_t maxTelemetryChunkItems,
         std::string& error);
     void Stop();
     bool PublishSnapshot(const DroneManager& droneManager);
@@ -39,4 +41,6 @@ private:
     std::uint64_t sequence_ = 0;
     std::uint64_t fleetRevision_ = 0;
     std::string sessionId_;
+    std::size_t maxTelemetryDatagramBytes_ = 0;
+    std::size_t maxTelemetryChunkItems_ = 0;
 };

@@ -20,6 +20,15 @@ class UUserWidget;
 struct FGeometry;
 struct FPointerEvent;
 class FReply;
+enum class EDSPGCSTelemetryLinkState : uint8;
+
+UENUM(BlueprintType)
+enum class EGCSDroneDisplayStatus : uint8
+{
+	Online,
+	Offline,
+	LinkLost
+};
 
 enum class EGCSMainPage : uint8
 {
@@ -49,6 +58,10 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|UI")
 	TArray<FString> GetSelectedCommandDroneIDs() const;
+
+	static EGCSDroneDisplayStatus ResolveDroneDisplayStatus(
+		EDSPGCSTelemetryLinkState ServerState,
+		bool bDroneOnline);
 
 private:
 	UFUNCTION()
@@ -142,6 +155,9 @@ private:
 	UFUNCTION()
 	void HandleFleetDataBatchApplied(int64 FleetRevision, int32 UpdatedDroneCount);
 
+	UFUNCTION()
+	void HandleTelemetryLinkStateChanged();
+
 	UUserWidget* ResolveDroneDetail(UUserWidget* MainWidget) const;
 	UUserWidget* ResolveChildWidget(UUserWidget* MainWidget, FName Name) const;
 	UButton* FindButton(const FName Name) const;
@@ -158,6 +174,8 @@ private:
 		const FLinearColor& Color) const;
 	void SetTopBarText(const FName Name, const FString& Value) const;
 	void RefreshFromFleet();
+	void RefreshProductionCommandAvailability();
+	EDSPGCSTelemetryLinkState GetProductionTelemetryLinkState() const;
 	void RefreshFleetRows(
 		const TArray<FDroneData>& Drones,
 		int32 TotalCount,

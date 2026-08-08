@@ -23,6 +23,9 @@ namespace dspgcs
     inline constexpr std::size_t MaxFrameBytes = 256 * 1024;
     inline constexpr std::size_t MaxStringBytes = 16 * 1024;
     inline constexpr std::size_t MaxCollectionItems = 20000;
+    // Defensive reassembly ceiling. This protects memory use and is not a
+    // deployment tuning value, so it intentionally remains non-configurable.
+    inline constexpr std::uint32_t MaxSnapshotChunks = 1024;
 
     enum class MessageType : std::uint16_t
     {

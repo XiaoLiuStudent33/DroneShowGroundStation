@@ -5,6 +5,9 @@
  */
 #include "AppConfig.h"
 
+#include "DSPGCSProtocol.h"
+#include "DSPGCSTransportConfig.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -111,6 +114,27 @@ namespace
 
         error = "Invalid value for " + key + ": " + item->second;
         return false;
+    }
+
+    bool ParseOptionalInteger(
+        const std::unordered_map<std::string, std::string>& values,
+        const std::string& key,
+        const int minimum,
+        const int maximum,
+        int& result,
+        std::string& error)
+    {
+        if (values.find(key) == values.end())
+        {
+            return true;
+        }
+        return ParseInteger(
+            values,
+            key,
+            minimum,
+            maximum,
+            result,
+            error);
     }
 
     bool ParseOptionalFloat(
@@ -343,31 +367,7 @@ bool AppConfig::Load(
         return false;
     }
 
-    const auto targetIP = values.find("target_ip");
-
-    if (targetIP == values.end())
-    {
-        error = "Missing configuration key: target_ip";
-        return false;
-    }
-
-    config.targetIP = targetIP->second;
-
     if (!ParseInteger(
-            values,
-            "target_port",
-            1,
-            65535,
-            config.targetPort,
-            error) ||
-        !ParseInteger(
-            values,
-            "local_port",
-            1,
-            65535,
-            config.localPort,
-            error) ||
-        !ParseInteger(
             values,
             "heartbeat_timeout_ms",
             1000,
@@ -376,6 +376,75 @@ bool AppConfig::Load(
             error))
     {
         return false;
+    }
+
+    if (!ParseOptionalInteger(
+            values,
+            "performance.mavlink_receive_buffer_bytes",
+            dspgcs::DSPGCSDefaults::MinimumSocketBufferBytes,
+            dspgcs::DSPGCSDefaults::MaximumSocketBufferBytes,
+            config.mavlinkReceiveBufferBytes,
+            error) ||
+        !ParseOptionalInteger(
+            values,
+            "performance.max_packets_per_drain",
+            1,
+            100000,
+            config.maxPacketsPerDrain,
+            error) ||
+        !ParseOptionalInteger(
+            values,
+            "performance.snapshot_datagram_bytes",
+            1024,
+            static_cast<int>(dspgcs::DSPGCSDefaults::MaxUdpPayloadBytes),
+            config.snapshotDatagramBytes,
+            error) ||
+        !ParseOptionalInteger(
+            values,
+            "performance.snapshot_items_per_chunk",
+            1,
+            static_cast<int>(dspgcs::MaxCollectionItems),
+            config.snapshotItemsPerChunk,
+            error))
+    {
+        return false;
+    }
+
+    // Legacy fields are parsed only when the legacy single-session path is
+    // selected. Invalid or absent legacy values cannot block Production.
+    if (!config.mavlinkNetworkEnabled)
+    {
+        const auto targetIP = values.find("target_ip");
+        if (targetIP == values.end())
+        {
+            error = "Missing configuration key: target_ip";
+            return false;
+        }
+        config.targetIP = targetIP->second;
+
+        const auto localIP = values.find("local_ip");
+        if (localIP != values.end())
+        {
+            config.legacyLocalIP = localIP->second;
+        }
+
+        if (!ParseInteger(
+                values,
+                "target_port",
+                1,
+                65535,
+                config.targetPort,
+                error) ||
+            !ParseInteger(
+                values,
+                "local_port",
+                1,
+                65535,
+                config.localPort,
+                error))
+        {
+            return false;
+        }
     }
 
     constexpr float defaultLimitMeters = 5.0f;

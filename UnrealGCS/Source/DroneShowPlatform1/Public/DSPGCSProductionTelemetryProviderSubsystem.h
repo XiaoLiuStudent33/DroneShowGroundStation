@@ -8,6 +8,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Ticker.h"
 #include "DSPGCSProtocol.h"
 #include "GCSDataProvider.h"
 #include "IDSPGCSTransport.h"
@@ -21,6 +22,15 @@
 
 class UGCSServerAdapterSubsystem;
 namespace dspgcs { struct MessageEnvelope; }
+
+UENUM(BlueprintType)
+enum class EDSPGCSTelemetryLinkState : uint8
+{
+	Disconnected,
+	Connected
+};
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FDSPGCSTelemetryLinkStateChangedEvent);
 
 /**
  * Production DSP-GCS channel owner. Telemetry remains an IGCSDataProvider;
@@ -49,6 +59,21 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|DSP-GCS Telemetry")
 	int32 GetReceivedDroneCount() const { return ReceivedDroneCount; }
 
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|DSP-GCS Telemetry")
+	EDSPGCSTelemetryLinkState GetTelemetryLinkState() const;
+
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|DSP-GCS Telemetry")
+	bool IsTelemetryLinkConnected() const;
+
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|DSP-GCS Telemetry")
+	bool IsEnabled() const { return bEnabled; }
+
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|DSP-GCS Telemetry")
+	int32 GetTelemetryTimeoutMs() const { return TelemetryTimeoutMs; }
+
+	UPROPERTY(BlueprintAssignable, Category = "Drone GCS|DSP-GCS Telemetry")
+	FDSPGCSTelemetryLinkStateChangedEvent OnTelemetryLinkStateChanged;
+
 	/** Shared production Transport output used by the command provider. */
 	bool SendFrame(const std::vector<std::uint8_t>& Frame);
 	void SetCommandResultHandler(FCommandResultHandler Handler);
@@ -56,6 +81,8 @@ public:
 private:
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FDSPGCSTelemetryChunkAssemblyTest;
+	friend class FDSPGCSTelemetryLinkHealthTest;
+	friend class FGCSSelectionStateSeparationTest;
 #endif
 
 	bool CreateTransport();
@@ -65,6 +92,14 @@ private:
 		dspgcs::TelemetryBatchDTO&& Chunk,
 		dspgcs::TelemetryBatchDTO& CompleteBatch);
 	void ResetPendingTelemetrySnapshot();
+	void StartTelemetryHealthMonitor();
+	void StopTelemetryHealthMonitor();
+	bool TickTelemetryHealth(float DeltaSeconds);
+	void MarkValidTelemetryReceivedAt(double ReceiveTimeSeconds);
+	void EvaluateTelemetryLinkHealthAt(double CurrentTimeSeconds);
+	EDSPGCSTelemetryLinkState GetTelemetryLinkStateAt(
+		double CurrentTimeSeconds) const;
+	void SetTelemetryLinkState(EDSPGCSTelemetryLinkState NewState);
 
 	TWeakObjectPtr<UGCSServerAdapterSubsystem> AdapterRef;
 	std::unique_ptr<dspgcs::IDSPGCSTransport> Transport;
@@ -72,10 +107,19 @@ private:
 	FCommandResultHandler CommandResultHandler;
 	bool bEnabled = false;
 	int32 ReceivedDroneCount = 0;
+	int32 TelemetryTimeoutMs = 2000;
+	double LastValidTelemetryReceiveTimeSeconds = 0.0;
+	EDSPGCSTelemetryLinkState TelemetryLinkState =
+		EDSPGCSTelemetryLinkState::Disconnected;
+	FTSTicker::FDelegateHandle TelemetryHealthTickerHandle;
 	std::string PendingSnapshotSessionID;
 	std::string PendingSnapshotID;
 	std::uint64_t PendingSnapshotFleetRevision = 0;
 	std::vector<std::vector<dspgcs::TelemetryDTO>> PendingSnapshotChunks;
 	std::vector<bool> PendingSnapshotChunksReceived;
 	std::size_t PendingSnapshotReceivedCount = 0;
+
+	static constexpr int32 MinimumTelemetryTimeoutMs = 250;
+	static constexpr int32 MaximumTelemetryTimeoutMs = 60000;
+	static constexpr float TelemetryHealthCheckIntervalSeconds = 0.25f;
 };

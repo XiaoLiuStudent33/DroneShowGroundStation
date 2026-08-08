@@ -41,12 +41,14 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="tests\MavlinkDiscoveryTests.cpp" />
+    <ClCompile Include="AppConfig.cpp" />
     <ClCompile Include="CommandManager.cpp" />
     <ClCompile Include="MavlinkDiscoveryService.cpp" />
     <ClCompile Include="MavlinkReadOnlyIngress.cpp" />
     <ClCompile Include="MavlinkUdpReceiver.cpp" />
     <ClCompile Include="ConsoleDSPGCSLoopbackTransport.cpp" />
     <ClCompile Include="DSPGCSProductionTelemetryProvider.cpp" />
+    <ClCompile Include="DSPGCSTransportConfigLoader.cpp" />
     <ClCompile Include="DSPGCSTransportFactory.cpp" />
     <ClCompile Include="DroneManager.cpp" />
     <ClCompile Include="DroneSession.cpp" />
@@ -62,6 +64,7 @@
     <ClCompile Include="UdpClient.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AppConfig.h" />
     <ClInclude Include="DroneDiscovery.h" />
     <ClInclude Include="DroneManager.h" />
     <ClInclude Include="DroneSession.h" />
@@ -71,6 +74,7 @@
     <ClInclude Include="MavlinkUdpReceiver.h" />
     <ClInclude Include="ConsoleDSPGCSLoopbackTransport.h" />
     <ClInclude Include="DSPGCSProductionTelemetryProvider.h" />
+    <ClInclude Include="DSPGCSTransportConfigLoader.h" />
     <ClInclude Include="SafetyConfig.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

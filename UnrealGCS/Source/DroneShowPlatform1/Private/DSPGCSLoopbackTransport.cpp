@@ -13,12 +13,6 @@
 #include "SocketSubsystem.h"
 #include "Sockets.h"
 
-namespace
-{
-	constexpr int32 LoopbackReceiveBufferBytes = 4 * 1024 * 1024;
-	const FIPv4Address LoopbackAddress(127, 0, 0, 1);
-}
-
 FDSPGCSLoopbackTransport::FDSPGCSLoopbackTransport(dspgcs::DSPGCSTransportConfig InConfig)
 	: Config(MoveTemp(InConfig))
 {
@@ -42,9 +36,7 @@ bool FDSPGCSLoopbackTransport::Start()
 	const FString BindAddressString = UTF8_TO_TCHAR(Config.bindAddress.c_str());
 	const FString RemoteAddressString = UTF8_TO_TCHAR(Config.remoteAddress.c_str());
 	if (!FIPv4Address::Parse(BindAddressString, BindAddress)
-		|| !FIPv4Address::Parse(RemoteAddressString, RemoteAddress)
-		|| BindAddress != LoopbackAddress
-		|| RemoteAddress != LoopbackAddress)
+		|| !FIPv4Address::Parse(RemoteAddressString, RemoteAddress))
 	{
 		State.store(dspgcs::TransportState::Faulted);
 		return false;
@@ -56,8 +48,8 @@ bool FDSPGCSLoopbackTransport::Start()
 		.AsReusable()
 		.BoundToAddress(BindAddress)
 		.BoundToPort(Config.bindPort)
-		.WithReceiveBufferSize(LoopbackReceiveBufferBytes)
-		.WithSendBufferSize(LoopbackReceiveBufferBytes);
+		.WithReceiveBufferSize(Config.receiveBufferBytes)
+		.WithSendBufferSize(Config.receiveBufferBytes);
 	if (!Socket)
 	{
 		RemoteEndpoint.Reset();
@@ -67,7 +59,7 @@ bool FDSPGCSLoopbackTransport::Start()
 
 	Receiver = MakeUnique<FUdpSocketReceiver>(
 		Socket,
-		FTimespan::FromMilliseconds(20),
+		FTimespan::FromMilliseconds(Config.receiverPollMs),
 		TEXT("DSPGCSLoopbackTransportReceiver"));
 	Receiver->OnDataReceived().BindRaw(this, &FDSPGCSLoopbackTransport::HandleDatagram);
 	Receiver->Start();

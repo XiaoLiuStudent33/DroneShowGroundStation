@@ -7,11 +7,13 @@
 #include "Components/Border.h"
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
+#include "DSPGCSProductionTelemetryProviderSubsystem.h"
 #include "DroneData.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "FleetManagerSubsystem.h"
 #include "GCSUIBridgeSubsystem.h"
+#include "HAL/PlatformTime.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FGCSSelectionStateSeparationTest,
@@ -127,6 +129,11 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("Drone002 command Checkbox remains independent"), Row2Indicator);
 	if (MainWidget && Row1Border && Row2Border && Row1Indicator && Row2Indicator)
 	{
+		if (UDSPGCSProductionTelemetryProviderSubsystem* Telemetry =
+			GameInstance->GetSubsystem<UDSPGCSProductionTelemetryProviderSubsystem>())
+		{
+			Telemetry->MarkValidTelemetryReceivedAt(FPlatformTime::Seconds());
+		}
 		const FLinearColor Row1CheckboxColor = Row1Indicator->GetBackgroundColor();
 		const FLinearColor Row2CheckboxColor = Row2Indicator->GetBackgroundColor();
 		AddExpectedError(

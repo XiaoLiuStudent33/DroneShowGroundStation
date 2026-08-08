@@ -11,6 +11,7 @@
 #include "DSPGCSProtocol.h"
 #include "DSPGCSTransportFactory.h"
 #include "GCSServerAdapterSubsystem.h"
+#include "HAL/PlatformTime.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/ScopeLock.h"
 
@@ -103,11 +104,19 @@ bool UDSPGCSProductionTelemetryProviderSubsystem::Start(
 	UGCSServerAdapterSubsystem& Adapter)
 {
 	AdapterRef = &Adapter;
-	return CreateTransport();
+	if (!CreateTransport())
+	{
+		return false;
+	}
+	StartTelemetryHealthMonitor();
+	return true;
 }
 
 void UDSPGCSProductionTelemetryProviderSubsystem::Stop()
 {
+	StopTelemetryHealthMonitor();
+	LastValidTelemetryReceiveTimeSeconds = 0.0;
+	SetTelemetryLinkState(EDSPGCSTelemetryLinkState::Disconnected);
 	SetCommandResultHandler({});
 	if (Transport)
 	{
@@ -122,9 +131,21 @@ void UDSPGCSProductionTelemetryProviderSubsystem::Stop()
 bool UDSPGCSProductionTelemetryProviderSubsystem::SendFrame(
 	const std::vector<std::uint8_t>& Frame)
 {
-	return Transport
+	return IsTelemetryLinkConnected()
+		&& Transport
 		&& Transport->GetState() == dspgcs::TransportState::Running
 		&& Transport->Send({ Frame });
+}
+
+EDSPGCSTelemetryLinkState
+UDSPGCSProductionTelemetryProviderSubsystem::GetTelemetryLinkState() const
+{
+	return GetTelemetryLinkStateAt(FPlatformTime::Seconds());
+}
+
+bool UDSPGCSProductionTelemetryProviderSubsystem::IsTelemetryLinkConnected() const
+{
+	return GetTelemetryLinkState() == EDSPGCSTelemetryLinkState::Connected;
 }
 
 void UDSPGCSProductionTelemetryProviderSubsystem::SetCommandResultHandler(
@@ -136,29 +157,59 @@ void UDSPGCSProductionTelemetryProviderSubsystem::SetCommandResultHandler(
 
 bool UDSPGCSProductionTelemetryProviderSubsystem::CreateTransport()
 {
+    dspgcs::DSPGCSTransportConfig Config =
+        dspgcs::MakeUnrealDSPGCSDefaults();
 	FString TransportTypeString = TEXT("Loopback");
-	FString BindAddressString = TEXT("127.0.0.1");
-	FString RemoteAddressString = TEXT("127.0.0.1");
-	int32 BindPort = 12002;
-	int32 RemotePort = 12001;
+	FString ConsoleAddressString =
+		UTF8_TO_TCHAR(dspgcs::DSPGCSDefaults::LoopbackAddress);
+	FString UnrealAddressString = ConsoleAddressString;
+	int32 ConsolePort = dspgcs::DSPGCSDefaults::ConsoleBindPort;
+	int32 UnrealPort = dspgcs::DSPGCSDefaults::UnrealBindPort;
+	int32 ReceiveBufferBytes = Config.receiveBufferBytes;
+	int32 ReceiverPollMs = Config.receiverPollMs;
+	int32 ConfiguredTelemetryTimeoutMs = TelemetryTimeoutMs;
 	GConfig->GetString(TEXT("DSPGCS.ProductionTelemetry"), TEXT("TransportType"), TransportTypeString, GGameIni);
-	GConfig->GetString(TEXT("DSPGCS.ProductionTelemetry"), TEXT("BindAddress"), BindAddressString, GGameIni);
-	GConfig->GetString(TEXT("DSPGCS.ProductionTelemetry"), TEXT("RemoteAddress"), RemoteAddressString, GGameIni);
-	GConfig->GetInt(TEXT("DSPGCS.ProductionTelemetry"), TEXT("BindPort"), BindPort, GGameIni);
-	GConfig->GetInt(TEXT("DSPGCS.ProductionTelemetry"), TEXT("RemotePort"), RemotePort, GGameIni);
+	if (!GConfig->GetString(TEXT("DSPGCS.ProductionTelemetry"), TEXT("ConsoleAddress"), ConsoleAddressString, GGameIni))
+	{
+		GConfig->GetString(TEXT("DSPGCS.ProductionTelemetry"), TEXT("RemoteAddress"), ConsoleAddressString, GGameIni);
+	}
+	if (!GConfig->GetString(TEXT("DSPGCS.ProductionTelemetry"), TEXT("UnrealAddress"), UnrealAddressString, GGameIni))
+	{
+		GConfig->GetString(TEXT("DSPGCS.ProductionTelemetry"), TEXT("BindAddress"), UnrealAddressString, GGameIni);
+	}
+	if (!GConfig->GetInt(TEXT("DSPGCS.ProductionTelemetry"), TEXT("ConsolePort"), ConsolePort, GGameIni))
+	{
+		GConfig->GetInt(TEXT("DSPGCS.ProductionTelemetry"), TEXT("RemotePort"), ConsolePort, GGameIni);
+	}
+	if (!GConfig->GetInt(TEXT("DSPGCS.ProductionTelemetry"), TEXT("UnrealPort"), UnrealPort, GGameIni))
+	{
+		GConfig->GetInt(TEXT("DSPGCS.ProductionTelemetry"), TEXT("BindPort"), UnrealPort, GGameIni);
+	}
+	GConfig->GetInt(TEXT("DSPGCS.ProductionTelemetry"), TEXT("ReceiveBufferBytes"), ReceiveBufferBytes, GGameIni);
+	GConfig->GetInt(TEXT("DSPGCS.ProductionTelemetry"), TEXT("ReceiverPollMs"), ReceiverPollMs, GGameIni);
+	GConfig->GetInt(TEXT("DSPGCS.ProductionTelemetry"), TEXT("TelemetryTimeoutMs"), ConfiguredTelemetryTimeoutMs, GGameIni);
 
-	dspgcs::DSPGCSTransportConfig Config;
 	if (!dspgcs::TryParseTransportType(TCHAR_TO_UTF8(*TransportTypeString), Config.type)
-		|| BindPort <= 0 || BindPort > 65535
-		|| RemotePort <= 0 || RemotePort > 65535)
+		|| ConsoleAddressString.IsEmpty() || UnrealAddressString.IsEmpty()
+		|| ConsolePort <= 0 || ConsolePort > 65535
+		|| UnrealPort <= 0 || UnrealPort > 65535
+		|| ReceiveBufferBytes < dspgcs::DSPGCSDefaults::MinimumSocketBufferBytes
+		|| ReceiveBufferBytes > dspgcs::DSPGCSDefaults::MaximumSocketBufferBytes
+		|| ReceiverPollMs < dspgcs::DSPGCSDefaults::MinimumReceiverPollMs
+		|| ReceiverPollMs > dspgcs::DSPGCSDefaults::MaximumReceiverPollMs
+		|| ConfiguredTelemetryTimeoutMs < MinimumTelemetryTimeoutMs
+		|| ConfiguredTelemetryTimeoutMs > MaximumTelemetryTimeoutMs)
 	{
 		UE_LOG(LogTemp, Error, TEXT("DSP-GCS production telemetry configuration is invalid."));
 		return false;
 	}
-	Config.bindAddress = TCHAR_TO_UTF8(*BindAddressString);
-	Config.bindPort = static_cast<uint16>(BindPort);
-	Config.remoteAddress = TCHAR_TO_UTF8(*RemoteAddressString);
-	Config.remotePort = static_cast<uint16>(RemotePort);
+	Config.bindAddress = TCHAR_TO_UTF8(*UnrealAddressString);
+	Config.bindPort = static_cast<uint16>(UnrealPort);
+	Config.remoteAddress = TCHAR_TO_UTF8(*ConsoleAddressString);
+	Config.remotePort = static_cast<uint16>(ConsolePort);
+	Config.receiveBufferBytes = ReceiveBufferBytes;
+	Config.receiverPollMs = ReceiverPollMs;
+	TelemetryTimeoutMs = ConfiguredTelemetryTimeoutMs;
 
 	std::string FactoryError;
 	Transport = dspgcs::DSPGCSTransportFactory::CreateTransport(Config, FactoryError);
@@ -186,9 +237,15 @@ bool UDSPGCSProductionTelemetryProviderSubsystem::CreateTransport()
 	UE_LOG(
 		LogTemp,
 		Display,
-		TEXT("DSP-GCS production channel listening %s:%d"),
-		*BindAddressString,
-		BindPort);
+		TEXT("[DSPGCS Config] Transport=%s LocalEndpoint(UE)=%s:%d RemoteEndpoint(Console)=%s:%d ReceiveBuffer=%d ReceiverPoll=%dms TelemetryTimeout=%dms"),
+		*TransportTypeString,
+		*UnrealAddressString,
+		UnrealPort,
+		*ConsoleAddressString,
+		ConsolePort,
+		ReceiveBufferBytes,
+		ReceiverPollMs,
+		TelemetryTimeoutMs);
 	return true;
 }
 
@@ -262,6 +319,7 @@ void UDSPGCSProductionTelemetryProviderSubsystem::HandleTransportFrame(
 		if (Adapter->PushFleetSnapshot(Snapshot))
 		{
 			Self->ReceivedDroneCount = Snapshot.Drones.Num();
+			Self->MarkValidTelemetryReceivedAt(FPlatformTime::Seconds());
 			UE_LOG(
 				LogTemp,
 				VeryVerbose,
@@ -277,9 +335,8 @@ bool UDSPGCSProductionTelemetryProviderSubsystem::TryAssembleTelemetrySnapshot(
 	dspgcs::TelemetryBatchDTO&& Chunk,
 	dspgcs::TelemetryBatchDTO& CompleteBatch)
 {
-	constexpr std::uint32_t MaxSnapshotChunks = 1024;
 	if (Chunk.chunkCount == 0 ||
-		Chunk.chunkCount > MaxSnapshotChunks ||
+		Chunk.chunkCount > dspgcs::MaxSnapshotChunks ||
 		Chunk.chunkIndex >= Chunk.chunkCount)
 	{
 		return false;
@@ -363,4 +420,82 @@ void UDSPGCSProductionTelemetryProviderSubsystem::ResetPendingTelemetrySnapshot(
 	PendingSnapshotChunks.clear();
 	PendingSnapshotChunksReceived.clear();
 	PendingSnapshotReceivedCount = 0;
+}
+
+void UDSPGCSProductionTelemetryProviderSubsystem::StartTelemetryHealthMonitor()
+{
+	StopTelemetryHealthMonitor();
+	LastValidTelemetryReceiveTimeSeconds = 0.0;
+	SetTelemetryLinkState(EDSPGCSTelemetryLinkState::Disconnected);
+	TelemetryHealthTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateUObject(
+			this,
+			&UDSPGCSProductionTelemetryProviderSubsystem::TickTelemetryHealth),
+		TelemetryHealthCheckIntervalSeconds);
+}
+
+void UDSPGCSProductionTelemetryProviderSubsystem::StopTelemetryHealthMonitor()
+{
+	if (TelemetryHealthTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(TelemetryHealthTickerHandle);
+		TelemetryHealthTickerHandle.Reset();
+	}
+}
+
+bool UDSPGCSProductionTelemetryProviderSubsystem::TickTelemetryHealth(
+	const float DeltaSeconds)
+{
+	(void)DeltaSeconds;
+	EvaluateTelemetryLinkHealthAt(FPlatformTime::Seconds());
+	return true;
+}
+
+void UDSPGCSProductionTelemetryProviderSubsystem::MarkValidTelemetryReceivedAt(
+	const double ReceiveTimeSeconds)
+{
+	LastValidTelemetryReceiveTimeSeconds = ReceiveTimeSeconds;
+	SetTelemetryLinkState(EDSPGCSTelemetryLinkState::Connected);
+}
+
+void UDSPGCSProductionTelemetryProviderSubsystem::EvaluateTelemetryLinkHealthAt(
+	const double CurrentTimeSeconds)
+{
+	SetTelemetryLinkState(GetTelemetryLinkStateAt(CurrentTimeSeconds));
+}
+
+EDSPGCSTelemetryLinkState
+UDSPGCSProductionTelemetryProviderSubsystem::GetTelemetryLinkStateAt(
+	const double CurrentTimeSeconds) const
+{
+	if (TelemetryLinkState != EDSPGCSTelemetryLinkState::Connected ||
+		LastValidTelemetryReceiveTimeSeconds <= 0.0)
+	{
+		return EDSPGCSTelemetryLinkState::Disconnected;
+	}
+
+	const double ElapsedMilliseconds =
+		(CurrentTimeSeconds - LastValidTelemetryReceiveTimeSeconds) * 1000.0;
+	return ElapsedMilliseconds <= static_cast<double>(TelemetryTimeoutMs)
+		? EDSPGCSTelemetryLinkState::Connected
+		: EDSPGCSTelemetryLinkState::Disconnected;
+}
+
+void UDSPGCSProductionTelemetryProviderSubsystem::SetTelemetryLinkState(
+	const EDSPGCSTelemetryLinkState NewState)
+{
+	if (TelemetryLinkState == NewState)
+	{
+		return;
+	}
+
+	TelemetryLinkState = NewState;
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("DSP-GCS telemetry link state=%s"),
+		TelemetryLinkState == EDSPGCSTelemetryLinkState::Connected
+			? TEXT("Connected")
+			: TEXT("Disconnected"));
+	OnTelemetryLinkStateChanged.Broadcast();
 }

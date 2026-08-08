@@ -13,11 +13,40 @@
 #include "Components/TextBlock.h"
 #include "Components/Widget.h"
 #include "DSPGCSProductionCommandProviderSubsystem.h"
+#include "DSPGCSProductionTelemetryProviderSubsystem.h"
 #include "FleetManagerSubsystem.h"
 #include "GCSDroneRowView.h"
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
 #include "Widgets/SWidget.h"
+
+namespace
+{
+	FString DisplayStatusText(const EGCSDroneDisplayStatus Status)
+	{
+		switch (Status)
+		{
+		case EGCSDroneDisplayStatus::Online: return TEXT("Online");
+		case EGCSDroneDisplayStatus::Offline: return TEXT("Offline");
+		case EGCSDroneDisplayStatus::LinkLost: return TEXT("Link Lost");
+		}
+		return TEXT("Link Lost");
+	}
+
+	FLinearColor DisplayStatusColor(const EGCSDroneDisplayStatus Status)
+	{
+		switch (Status)
+		{
+		case EGCSDroneDisplayStatus::Online:
+			return FLinearColor(0.15f, 1.0f, 0.45f, 1.0f);
+		case EGCSDroneDisplayStatus::Offline:
+			return FLinearColor(1.0f, 0.18f, 0.20f, 1.0f);
+		case EGCSDroneDisplayStatus::LinkLost:
+			return FLinearColor(1.0f, 0.65f, 0.10f, 1.0f);
+		}
+		return FLinearColor::White;
+	}
+}
 
 void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 {
@@ -72,6 +101,16 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 			this,
 			&UGCSUIBridgeSubsystem::HandleProductionCommandResult);
 	}
+	if (UDSPGCSProductionTelemetryProviderSubsystem* Telemetry =
+		GetGameInstance()->GetSubsystem<UDSPGCSProductionTelemetryProviderSubsystem>())
+	{
+		Telemetry->OnTelemetryLinkStateChanged.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleTelemetryLinkStateChanged);
+		Telemetry->OnTelemetryLinkStateChanged.AddDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleTelemetryLinkStateChanged);
+	}
 
 	if (UFleetManagerSubsystem* Fleet =
 		GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>())
@@ -97,6 +136,13 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 			this,
 			&UGCSUIBridgeSubsystem::HandleProductionCommandResult);
 	}
+	if (UDSPGCSProductionTelemetryProviderSubsystem* Telemetry =
+		GetGameInstance()->GetSubsystem<UDSPGCSProductionTelemetryProviderSubsystem>())
+	{
+		Telemetry->OnTelemetryLinkStateChanged.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleTelemetryLinkStateChanged);
+	}
 	if (UFleetManagerSubsystem* Fleet =
 		GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>())
 	{
@@ -118,6 +164,19 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 	FleetPageOffset = 0;
 
 	Super::Deinitialize();
+}
+
+EGCSDroneDisplayStatus UGCSUIBridgeSubsystem::ResolveDroneDisplayStatus(
+	const EDSPGCSTelemetryLinkState ServerState,
+	const bool bDroneOnline)
+{
+	if (ServerState == EDSPGCSTelemetryLinkState::Disconnected)
+	{
+		return EGCSDroneDisplayStatus::LinkLost;
+	}
+	return bDroneOnline
+		? EGCSDroneDisplayStatus::Online
+		: EGCSDroneDisplayStatus::Offline;
 }
 
 void UGCSUIBridgeSubsystem::HandleMenuClicked()
@@ -582,6 +641,60 @@ void UGCSUIBridgeSubsystem::HandleFleetDataBatchApplied(
 	RefreshFromFleet();
 }
 
+void UGCSUIBridgeSubsystem::HandleTelemetryLinkStateChanged()
+{
+	RefreshFromFleet();
+	RefreshProductionCommandAvailability();
+}
+
+EDSPGCSTelemetryLinkState
+UGCSUIBridgeSubsystem::GetProductionTelemetryLinkState() const
+{
+	const UGameInstance* GameInstance = GetGameInstance();
+	const UDSPGCSProductionTelemetryProviderSubsystem* Telemetry = GameInstance
+		? GameInstance->GetSubsystem<UDSPGCSProductionTelemetryProviderSubsystem>()
+		: nullptr;
+	// Non-Production providers and isolated UI tests retain the authoritative
+	// Drone.bOnline presentation because DSP-GCS link health does not apply.
+	return Telemetry && Telemetry->IsEnabled()
+		? Telemetry->GetTelemetryLinkState()
+		: EDSPGCSTelemetryLinkState::Connected;
+}
+
+void UGCSUIBridgeSubsystem::RefreshProductionCommandAvailability()
+{
+	const UGameInstance* GameInstance = GetGameInstance();
+	const UDSPGCSProductionCommandProviderSubsystem* Commands = GameInstance
+		? GameInstance->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>()
+		: nullptr;
+	const UDSPGCSProductionTelemetryProviderSubsystem* Telemetry = GameInstance
+		? GameInstance->GetSubsystem<UDSPGCSProductionTelemetryProviderSubsystem>()
+		: nullptr;
+	const bool bCanSendProductionCommands = Commands && Commands->IsEnabled()
+		&& Telemetry && Telemetry->IsEnabled()
+		&& Telemetry->IsTelemetryLinkConnected();
+
+	for (const FName ButtonName :
+		{ FName(TEXT("BTN_Unlock")),
+		  FName(TEXT("BTN_Arm")),
+		  FName(TEXT("BTN_Disarm")),
+		  FName(TEXT("BTN_Guided")),
+		  FName(TEXT("BTN_Takeoff")),
+		  FName(TEXT("BTN_RTL")),
+		  FName(TEXT("BTN_Land")),
+		  FName(TEXT("BTN_Hover")),
+		  FName(TEXT("BTN_EStop")),
+		  FName(TEXT("BTN_Stop")),
+		  FName(TEXT("BTN_ModeManual")),
+		  FName(TEXT("BTN_ModeAutonomous")) })
+	{
+		if (UButton* Button = FindButton(ButtonName))
+		{
+			Button->SetIsEnabled(bCanSendProductionCommands);
+		}
+	}
+}
+
 void UGCSUIBridgeSubsystem::RefreshFromFleet()
 {
 	UFleetManagerSubsystem* Fleet =
@@ -590,6 +703,7 @@ void UGCSUIBridgeSubsystem::RefreshFromFleet()
 	{
 		return;
 	}
+	RefreshProductionCommandAvailability();
 
 	const int32 TotalCount = Fleet->GetDroneCount();
 	if (TotalCount == 0)
@@ -633,6 +747,8 @@ void UGCSUIBridgeSubsystem::RefreshFleetRows(
 
 	CurrentFleetPageDroneIDs.Reset();
 	CurrentFleetPageDroneIDs.SetNum(FleetPageSize);
+	const EDSPGCSTelemetryLinkState ServerState =
+		GetProductionTelemetryLinkState();
 
 	for (int32 Index = 0; Index < FleetPageSize; ++Index)
 	{
@@ -654,6 +770,8 @@ void UGCSUIBridgeSubsystem::RefreshFleetRows(
 		}
 
 		const FDroneData& Drone = Drones[Index];
+		const EGCSDroneDisplayStatus DisplayStatus =
+			ResolveDroneDisplayStatus(ServerState, Drone.bOnline);
 		CurrentFleetPageDroneIDs[Index] = Drone.DroneID;
 		SetFleetButtonLabel(
 			SelectorName,
@@ -677,10 +795,8 @@ void UGCSUIBridgeSubsystem::RefreshFleetRows(
 				Drone.RSSI));
 		SetFleetStatus(
 			StatusName,
-			Drone.bOnline ? TEXT("Online") : TEXT("Offline"),
-			Drone.bOnline
-				? FLinearColor(0.15f, 1.0f, 0.45f, 1.0f)
-				: FLinearColor(1.0f, 0.18f, 0.20f, 1.0f));
+			DisplayStatusText(DisplayStatus),
+			DisplayStatusColor(DisplayStatus));
 		UpdateFleetRowView(Index, Drone.DroneID, CurrentSelectedDroneID);
 	}
 }
@@ -723,9 +839,18 @@ void UGCSUIBridgeSubsystem::UpdateFleetRowView(
 
 void UGCSUIBridgeSubsystem::UpdateDroneInfo(const FDroneData& DroneData)
 {
+	const EGCSDroneDisplayStatus DisplayStatus = ResolveDroneDisplayStatus(
+		GetProductionTelemetryLinkState(),
+		DroneData.bOnline);
+	const bool bServerDisconnected =
+		DisplayStatus == EGCSDroneDisplayStatus::LinkLost;
 	SetTopBarText(
 		TEXT("LINK"),
-		DroneData.bOnline ? TEXT("LINK ONLINE") : TEXT("LINK OFFLINE"));
+		bServerDisconnected
+			? TEXT("SERVER DISCONNECTED")
+			: (DisplayStatus == EGCSDroneDisplayStatus::Online
+				? TEXT("LINK ONLINE")
+				: TEXT("LINK OFFLINE")));
 	SetTopBarText(TEXT("GPS"), FString::Printf(TEXT("SYS %d"), DroneData.SysID));
 	SetTopBarText(TEXT("BAT"), FString::Printf(TEXT("BAT %.0f%%"), DroneData.Battery));
 	SetTopBarText(TEXT("MODE"), FString::Printf(TEXT("MODE %s"), *DroneData.Mode));
@@ -733,10 +858,16 @@ void UGCSUIBridgeSubsystem::UpdateDroneInfo(const FDroneData& DroneData)
 	SetText(TEXT("DroneTitle"), DroneData.DroneID);
 	SetText(
 		TEXT("Connection"),
-		FString::Printf(
-			TEXT("LINK  %s    RSSI  %d dBm"),
-			DroneData.bOnline ? TEXT("ONLINE") : TEXT("OFFLINE"),
-			DroneData.RSSI));
+		bServerDisconnected
+			? FString::Printf(
+				TEXT("SERVER DISCONNECTED    RSSI  %d dBm"),
+				DroneData.RSSI)
+			: FString::Printf(
+				TEXT("LINK  %s    RSSI  %d dBm"),
+				DisplayStatus == EGCSDroneDisplayStatus::Online
+					? TEXT("ONLINE")
+					: TEXT("OFFLINE"),
+				DroneData.RSSI));
 	SetText(
 		TEXT("Flight"),
 		FString::Printf(
