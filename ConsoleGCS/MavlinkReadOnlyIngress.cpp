@@ -28,8 +28,11 @@ MavlinkIngressStats MavlinkReadOnlyIngress::SubmitDatagram(
         return stats;
     }
 
+    DiscoveredDroneIdentity endpointIdentity;
+    endpointIdentity.sourceIp = sourceIp;
+    endpointIdentity.sourcePort = sourcePort;
     EndpointParserState& parserState =
-        parserStates[MakeEndpointKey(sourceIp, sourcePort)];
+        parserStates[endpointIdentity.EndpointKey()];
 
     for (std::size_t index = 0; index < byteCount; ++index)
     {
@@ -70,11 +73,9 @@ MavlinkIngressStats MavlinkReadOnlyIngress::SubmitDatagram(
             continue;
         }
 
-        DiscoveredDroneIdentity identity;
+        DiscoveredDroneIdentity identity = endpointIdentity;
         identity.systemId = decodedMessage.sysid;
         identity.componentId = decodedMessage.compid;
-        identity.sourceIp = sourceIp;
-        identity.sourcePort = sourcePort;
         identity.observedAt = std::chrono::steady_clock::now();
 
         DroneSession* session = droneManager.FindDroneByIdentity(identity);
@@ -96,11 +97,4 @@ MavlinkIngressStats MavlinkReadOnlyIngress::SubmitDatagram(
     }
 
     return stats;
-}
-
-std::string MavlinkReadOnlyIngress::MakeEndpointKey(
-    const std::string& sourceIp,
-    const std::uint16_t sourcePort)
-{
-    return sourceIp + ":" + std::to_string(sourcePort);
 }

@@ -339,6 +339,8 @@ Future / Planned：如果 DSP-GCS 需要跨机器部署，可新增共享 Deploy
 
 ## 18. Future / Planned 整理方向
 
+Production 职责、重复规则、保留边界和 R0/R1/R2/R3 计划见 [`Production_Responsibility_Audit_CN.md`](Production_Responsibility_Audit_CN.md)。Cleanup Phase 3F 的结论是：Endpoint key 已统一到 `DiscoveredDroneIdentity::EndpointKey()`；DataManager、MavlinkCommand、Command 分层、GCSServerAdapter 和 DSP Transport 都有明确线程/协议/安全边界，不应为了减少文件数强行合并。下一阶段优先处理 Discovery 测试入口、重复查询 API、FlightControl public surface、Provider/Adapter 双 GameThread 调度和 UIBridge 局部拆分。
+
 未来可按以下模块域整理，但本轮没有移动任何文件：
 
 ```text

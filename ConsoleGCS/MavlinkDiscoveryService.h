@@ -63,10 +63,6 @@ private:
         mavlink_status_t parseStatus{};
     };
 
-    static std::string MakeEndpointKey(
-        const std::string& sourceIp,
-        std::uint16_t sourcePort);
-
     DroneManager& droneManager;
     DroneSessionConfig sessionDefaults;
     std::unordered_map<std::string, EndpointParserState> parserStates;

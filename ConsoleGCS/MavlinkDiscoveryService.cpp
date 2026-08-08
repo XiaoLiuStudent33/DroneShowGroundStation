@@ -28,8 +28,11 @@ MavlinkDiscoveryResult MavlinkDiscoveryService::IngestDatagram(
         return MavlinkDiscoveryResult::Rejected;
     }
 
+    DiscoveredDroneIdentity endpointIdentity;
+    endpointIdentity.sourceIp = sourceIp;
+    endpointIdentity.sourcePort = sourcePort;
     EndpointParserState& parserState =
-        parserStates[MakeEndpointKey(sourceIp, sourcePort)];
+        parserStates[endpointIdentity.EndpointKey()];
     MavlinkDiscoveryResult finalResult = MavlinkDiscoveryResult::Ignored;
 
     for (std::size_t index = 0; index < byteCount; ++index)
@@ -115,11 +118,4 @@ void MavlinkDiscoveryService::Update(
     const std::chrono::steady_clock::time_point now)
 {
     droneManager.RefreshHeartbeatStates(now);
-}
-
-std::string MavlinkDiscoveryService::MakeEndpointKey(
-    const std::string& sourceIp,
-    const std::uint16_t sourcePort)
-{
-    return sourceIp + ":" + std::to_string(sourcePort);
 }

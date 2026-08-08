@@ -161,10 +161,13 @@ bool DroneManager::RemoveDrone(const std::string& droneId)
     sessions.erase(item);
     if (!removedConfig.remoteIp.empty() && removedConfig.remotePort != 0)
     {
+        DiscoveredDroneIdentity removedIdentity;
+        removedIdentity.sourceIp = removedConfig.remoteIp;
+        removedIdentity.sourcePort =
+            static_cast<std::uint16_t>(removedConfig.remotePort);
         const auto indexItem =
             discoveredEndpointIndex.find(
-                removedConfig.remoteIp + ":" +
-                std::to_string(removedConfig.remotePort));
+                removedIdentity.EndpointKey());
         if (indexItem != discoveredEndpointIndex.end() &&
             indexItem->second == droneId)
         {
