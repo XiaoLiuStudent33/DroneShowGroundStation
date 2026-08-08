@@ -86,15 +86,15 @@ DroneRegistrationResult DroneManager::RegisterOrRefreshDrone(
     if (DroneSession* existing = FindDrone(result.droneId))
     {
         const DroneSessionConfig& existingConfig = existing->GetConfig();
-        if (existingConfig.targetIp != identity.sourceIp ||
-            existingConfig.targetPort != identity.sourcePort)
+        if (existingConfig.remoteIp != identity.sourceIp ||
+            existingConfig.remotePort != identity.sourcePort)
         {
             result.status =
                 DroneRegistrationStatus::DroneIdentityConflict;
             result.error =
                 "DroneIdentityConflict: DroneID=" + result.droneId +
-                " existingEndpoint=" + existingConfig.targetIp + ":" +
-                std::to_string(existingConfig.targetPort) +
+                " existingEndpoint=" + existingConfig.remoteIp + ":" +
+                std::to_string(existingConfig.remotePort) +
                 " incomingEndpoint=" + identity.sourceIp + ":" +
                 std::to_string(identity.sourcePort);
             return result;
@@ -115,8 +115,8 @@ DroneRegistrationResult DroneManager::RegisterOrRefreshDrone(
 
     DroneSessionConfig config = sessionDefaults;
     config.droneId = result.droneId;
-    config.targetIp = identity.sourceIp;
-    config.targetPort = identity.sourcePort;
+    config.remoteIp = identity.sourceIp;
+    config.remotePort = identity.sourcePort;
     config.discoveredSystemId = identity.systemId;
     config.discoveredComponentId = identity.componentId;
 
@@ -159,12 +159,12 @@ bool DroneManager::RemoveDrone(const std::string& droneId)
     const DroneSessionConfig removedConfig = item->second->GetConfig();
     item->second->Stop();
     sessions.erase(item);
-    if (!removedConfig.targetIp.empty() && removedConfig.targetPort != 0)
+    if (!removedConfig.remoteIp.empty() && removedConfig.remotePort != 0)
     {
         const auto indexItem =
             discoveredEndpointIndex.find(
-                removedConfig.targetIp + ":" +
-                std::to_string(removedConfig.targetPort));
+                removedConfig.remoteIp + ":" +
+                std::to_string(removedConfig.remotePort));
         if (indexItem != discoveredEndpointIndex.end() &&
             indexItem->second == droneId)
         {
@@ -214,8 +214,8 @@ const DroneSession* DroneManager::FindDroneByIdentity(
     }
 
     const DroneSessionConfig& config = session->GetConfig();
-    return config.targetIp == identity.sourceIp &&
-        config.targetPort == identity.sourcePort
+    return config.remoteIp == identity.sourceIp &&
+        config.remotePort == identity.sourcePort
         ? session
         : nullptr;
 }

@@ -292,10 +292,8 @@ int main(int argc, char** argv)
     {
         DroneSessionConfig config;
         config.droneId = "Drone00" + std::to_string(index);
-        config.targetIp = "127.0.0.1";
-        config.targetPort = 0;
-        config.localIp = "127.0.0.1";
-        config.localPort = 0;
+        config.remoteIp = "127.0.0.1";
+        config.remotePort = 0;
         droneManager.AddDrone(config);
     }
     CommandManager commandManager(droneManager);

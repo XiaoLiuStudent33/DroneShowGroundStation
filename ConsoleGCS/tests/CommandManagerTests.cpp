@@ -31,10 +31,6 @@ int main()
     DroneManager droneManager;
     DroneSessionConfig config;
     config.droneId = "Drone001";
-    config.targetIp = "127.0.0.1";
-    config.targetPort = 10001;
-    config.localIp = "127.0.0.1";
-    config.localPort = 10001;
 
     bool passed = Check(
         droneManager.AddDrone(config),

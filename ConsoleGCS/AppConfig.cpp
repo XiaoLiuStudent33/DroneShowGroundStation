@@ -1,7 +1,7 @@
 /**
  * @brief 解析并校验 gcs-config.ini，生成 Console 单一启动配置快照。
  *
- * 分类：Production / Compatibility；只读取配置，不创建 Socket 或修改协议行为。
+ * 分类：Production；只读取配置，不创建 Socket 或修改协议行为。
  */
 #include "AppConfig.h"
 
@@ -408,43 +408,6 @@ bool AppConfig::Load(
             error))
     {
         return false;
-    }
-
-    // Legacy fields are parsed only when the legacy single-session path is
-    // selected. Invalid or absent legacy values cannot block Production.
-    if (!config.mavlinkNetworkEnabled)
-    {
-        const auto targetIP = values.find("target_ip");
-        if (targetIP == values.end())
-        {
-            error = "Missing configuration key: target_ip";
-            return false;
-        }
-        config.targetIP = targetIP->second;
-
-        const auto localIP = values.find("local_ip");
-        if (localIP != values.end())
-        {
-            config.legacyLocalIP = localIP->second;
-        }
-
-        if (!ParseInteger(
-                values,
-                "target_port",
-                1,
-                65535,
-                config.targetPort,
-                error) ||
-            !ParseInteger(
-                values,
-                "local_port",
-                1,
-                65535,
-                config.localPort,
-                error))
-        {
-            return false;
-        }
     }
 
     constexpr float defaultLimitMeters = 5.0f;

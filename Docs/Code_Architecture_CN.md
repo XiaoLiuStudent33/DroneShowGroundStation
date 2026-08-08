@@ -25,10 +25,10 @@ main
 -> ConsoleGCSApplication::Run
 -> AppConfig::Load(gcs-config.ini)
 -> mavlink_network_enabled=true
--> RunReadOnlyMavlink
+-> RunProductionMavlink
 ```
 
-当前 Production 使用多机 MAVLink 路径。`RunLegacySingleSession` 仍保留为 Compatibility，但不是当前 Production 入口。
+Cleanup Phase 3C 后，Console 只保留多机 MAVLink Production 路径。`mavlink_network_enabled=false` 会明确阻止启动，不再回退到固定 Target 的单会话模式。
 
 ## 3. 无人机发现链
 
@@ -83,7 +83,7 @@ Offline 只改变在线状态。必须继续保留：
 | 30 | ATTITUDE | Roll/Pitch/Yaw | FlightData；当前未送入 UE Fleet |
 | 33 | GLOBAL_POSITION_INT | RelativeAltitude、vx/vy 融合 GroundSpeed | FlightData；UE 当前使用相对高度 |
 | 77 | COMMAND_ACK | MAV_CMD 执行结果 | CommandDispatcher、DSP Command Result、UE |
-| 253 | STATUSTEXT | 旧独立 Socket 路径日志 | Legacy；当前多机 Production 未使用 |
+| 253 | STATUSTEXT | 当前未消费 | Production Ingress 忽略 |
 
 关键边界：
 
@@ -224,6 +224,7 @@ Future / Planned：淡紫色 Offline 表现和粒子 DisplayID 数字显示尚�
 | Acceptance / Loopback Test | `DSPGCSLoopbackProviderSubsystem` | `[DSPGCS.Transport] Enabled=False`，当前关闭 |
 | Removed in Cleanup Phase 3A | Console GCS1 `CommandProtocol/UdpCommandServer/DroneControlService` | Console 端旧 10006 文本服务已移除；当前唯一 Production 命令入口为 `DSPGCSProductionCommandReceiver` |
 | Removed in Cleanup Phase 3B | UE `DroneCommandSubsystem/GCSCommandTypes` | 旧 10006/GCS1 命令客户端与 `[DroneGCS.Network]` 配置已移除；当前唯一 UE Production 命令入口为 `DSPGCSProductionCommandProviderSubsystem` |
+| Removed in Cleanup Phase 3C | Console Legacy Single Session / fixed Target / per-Session Socket | `target_ip/target_port/local_port`、`RunLegacySingleSession` 与独立 `UdpClient` Socket 已移除；Session 只能由 `DroneManager` 按实际 Remote Endpoint 建立 |
 | Legacy Single-Drone Visualization | `DroneActor` | 不参与 Fleet/Niagara；当前地图/Blueprint 仍引用，Runtime 可能 Tick |
 | Test Only | Console test projects、UE Automation Tests | 不进入 Production |
 
@@ -259,7 +260,21 @@ Production 保留 Console 与 Unreal 两份部署配置，因为两个进程有�
 | Snapshot Datagram 上限 | `[performance].snapshot_datagram_bytes` | 默认 `61440` 字节 |
 | 单 Chunk Drone 上限 | `[performance].snapshot_items_per_chunk` | 默认 `512` |
 
-`target_ip`、`target_port`、可选 `local_ip`、`local_port` 仅属于 Legacy Single Session。Production 多机模式不解析这些值，因此错误或缺失的 Legacy Endpoint 不会阻止 Production 启动。
+Cleanup Phase 3C 已删除 `target_ip`、`target_port`、`local_ip`、`local_port` 及其解析、验证和示例值。Production 不接受启动时配置的单架无人机目标；每架无人机的 Remote IP 与 UDP Source Port 只来自实际收到的 MAVLink Datagram。
+
+Production Session 与命令路由固定为：
+
+```text
+MAVLink Datagram Remote Endpoint
+-> DroneManager endpoint index
+-> DroneSession(remoteIp, remotePort)
+-> HEARTBEAT 中的 per-Session target_system/target_component
+-> CommandDispatcher / MavlinkCommand
+-> shared MavlinkUdpReceiver Socket
+-> 同一 Drone Remote Endpoint
+```
+
+`SYSID/COMPID` 是每个 Session 的 MAVLink 路由元数据，不是 Fleet Identity；相同 IP、不同 Source Port、相同 SYSID 仍创建不同 Session。
 
 ### 17.2 DSP-GCS Endpoint 角色
 
@@ -290,7 +305,7 @@ UE 的 DSP-GCS 遥测链路状态位于 `UDSPGCSProductionTelemetryProviderSubsy
 
 Safety Policy 继续要求真实命令开关、Production MAVLink、DSP Command 三个门同时开启，并拒绝 `0.0.0.0` 这种通配监听作为真实命令 Endpoint。SafetyConfig 不再保存另一套 `192.168.1.254:10001` Production 真值；实际 Endpoint 只来自 `AppConfig`。
 
-高度限制仍由 `gcs-config.ini [max_flight]` 加载到 Safety Policy。`MAVLINK_TARGET_*`、`COMMAND_*` 常量仍是 Legacy Compatibility，不参与当前 Production。
+高度限制仍由 `gcs-config.ini [max_flight]` 加载到 Safety Policy。固定单目标 `MAVLINK_TARGET_IP/MAVLINK_TARGET_PORT` 已在 Cleanup Phase 3C 删除；Safety Policy 不拥有无人机 Endpoint 真值。
 
 ### 17.5 不配置化的常量
 

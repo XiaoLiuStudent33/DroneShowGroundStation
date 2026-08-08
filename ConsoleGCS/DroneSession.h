@@ -1,7 +1,7 @@
 /**
  * @brief 表示一个稳定 Remote Endpoint 的遥测、在线状态和命令生命周期。
  *
- * 分类：Production / Compatibility；多机路径使用共享 MAVLink Endpoint，旧单会话可使用独立 Socket。
+ * 分类：Production；每个 Session 使用共享 MAVLink Endpoint 向自己的 Remote Endpoint 发送。
  * 输入：Discovery/Ingress 消息和领域命令；输出：FlightData、MAVLink 命令、ACK/任务结果。
  * 关键约束：Heartbeat timeout 只转为 Offline，不销毁 Session、DroneID 或历史遥测。
  */
@@ -40,10 +40,8 @@ const char* DroneSessionStateName(DroneSessionState state);
 struct DroneSessionConfig
 {
     std::string droneId;
-    std::string targetIp;
-    int targetPort = 0;
-    std::string localIp;
-    int localPort = 0;
+    std::string remoteIp;
+    int remotePort = 0;
     int heartbeatTimeoutMs = 3000;
     bool receiveOnly = false;
     bool realCommandEnabled = false;
@@ -115,7 +113,6 @@ private:
     void SetState(DroneSessionState newState);
     void SendHeartbeat();
     void RequestDataStream(std::uint8_t system, std::uint8_t component);
-    void ProcessIncomingData(std::chrono::steady_clock::time_point now);
     void ProcessDispatchResults(std::chrono::steady_clock::time_point now);
 
 private:
@@ -126,8 +123,6 @@ private:
     DataManager dataManager;
     FlightData workingData;
     MavlinkParser parser;
-    mavlink_message_t parseMessageBuffer{};
-    mavlink_status_t parseStatus{};
     HoverTest hoverTest;
     CommandDispatcher dispatcher;
     FlightControl flightControl;

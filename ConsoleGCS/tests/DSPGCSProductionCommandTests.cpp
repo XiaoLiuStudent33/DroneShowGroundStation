@@ -1,3 +1,4 @@
+#include "../AppConfig.h"
 #include "../CommandManager.h"
 #include "../ConsoleDSPGCSLoopbackTransport.h"
 #include "../DSPGCSProductionCommandReceiver.h"
@@ -93,10 +94,8 @@ int main()
     {
         DroneSessionConfig config;
         config.droneId = droneId;
-        config.targetIp = "127.0.0.1";
-        config.targetPort = 0;
-        config.localIp = "127.0.0.1";
-        config.localPort = 0;
+        config.remoteIp = "127.0.0.1";
+        config.remotePort = 0;
         config.receiveOnly = false;
         if (!droneManager.AddDrone(config) ||
             !droneManager.StartDrone(config.droneId))
@@ -122,7 +121,11 @@ int main()
     consoleConfig.remoteAddress = "127.0.0.1";
     consoleConfig.remotePort = 12532;
     std::string error;
-    if (!productionChannel.Start(consoleConfig, error))
+    if (!productionChannel.Start(
+            consoleConfig,
+            AppConfigDefaults::SnapshotDatagramBytes,
+            AppConfigDefaults::SnapshotItemsPerChunk,
+            error))
     {
         std::cerr << "FAILED: production channel start: " << error << '\n';
         return 4;

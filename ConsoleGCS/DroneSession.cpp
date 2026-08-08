@@ -1,9 +1,9 @@
 /**
  * @brief 实现单个 Endpoint Session 的 Online/Offline、遥测应用和命令调度。
  *
- * 分类：Production / Compatibility。
+ * 分类：Production。
  * 调用链：DroneManager/Ingress -> DroneSession -> DataManager/CommandDispatcher/MavlinkCommand。
- * 相同 Endpoint 的新 HEARTBEAT 必须恢复原 Session；旧独立 Socket 接收路径仅用于兼容模式。
+ * 相同 Endpoint 的新 HEARTBEAT 必须恢复原 Session；接收统一由 MavlinkUdpReceiver/Ingress 路由。
  */
 #include "DroneSession.h"
 
@@ -71,16 +71,11 @@ bool DroneSession::Start()
 
     if (!config.receiveOnly &&
         config.realCommandEnabled &&
-        !(config.sharedMavlinkEndpoint != nullptr
-            ? udp.AttachSharedEndpoint(
-                *config.sharedMavlinkEndpoint,
-                config.targetIp,
-                config.targetPort)
-            : udp.Init(
-                config.targetIp,
-                config.targetPort,
-                config.localIp,
-                config.localPort)))
+        (config.sharedMavlinkEndpoint == nullptr ||
+         !udp.AttachSharedEndpoint(
+             *config.sharedMavlinkEndpoint,
+             config.remoteIp,
+             config.remotePort)))
     {
         SetState(DroneSessionState::Error);
         return false;
@@ -99,12 +94,8 @@ bool DroneSession::Start()
             ? "receive-only MAVLink session started"
             : !config.realCommandEnabled
             ? "MAVLink command transport disabled"
-            : std::string(config.sharedMavlinkEndpoint != nullptr
-                ? "shared MAVLink endpoint "
-                : "MAVLink session started ") +
-                config.localIp + ":" + std::to_string(config.localPort) +
-                " -> " + config.targetIp + ":" +
-                std::to_string(config.targetPort)));
+            : "shared MAVLink endpoint -> " + config.remoteIp + ":" +
+                std::to_string(config.remotePort)));
 
     return true;
 }
@@ -141,7 +132,6 @@ void DroneSession::Tick(
 
     RefreshHeartbeatStatus(now);
 
-    ProcessIncomingData(now);
     ProcessDispatchResults(now);
 
     const FlightData currentData = dataManager.GetFlightData();
@@ -392,16 +382,16 @@ bool DroneSession::RefreshDiscoveredPresence(
     const DiscoveredDroneIdentity& identity)
 {
     if (!started ||
-        identity.sourceIp != config.targetIp ||
-        identity.sourcePort != config.targetPort)
+        identity.sourceIp != config.remoteIp ||
+        identity.sourcePort != config.remotePort)
     {
         return false;
     }
 
     config.discoveredSystemId = identity.systemId;
     config.discoveredComponentId = identity.componentId;
-    config.targetIp = identity.sourceIp;
-    config.targetPort = identity.sourcePort;
+    config.remoteIp = identity.sourceIp;
+    config.remotePort = identity.sourcePort;
 
     // 相同 Endpoint 的 HEARTBEAT 恢复原 Session；SYSID/COMPID 可以刷新为
     // 当前协议路由元数据，但不会生成新的 Fleet 身份。
@@ -426,8 +416,8 @@ bool DroneSession::ApplyDiscoveredHeartbeat(
         message.compid != config.discoveredComponentId ||
         identity.systemId != config.discoveredSystemId ||
         identity.componentId != config.discoveredComponentId ||
-        identity.sourceIp != config.targetIp ||
-        identity.sourcePort != config.targetPort)
+        identity.sourceIp != config.remoteIp ||
+        identity.sourcePort != config.remotePort)
     {
         return false;
     }
@@ -450,8 +440,8 @@ bool DroneSession::ApplyDiscoveredHeartbeat(
             "[HEARTBEAT] " + config.droneId +
             " Mode=" + workingData.modeName +
             " custom_mode=" + std::to_string(workingData.mode) +
-            " endpoint=" + config.targetIp + ":" +
-            std::to_string(config.targetPort));
+            " endpoint=" + config.remoteIp + ":" +
+            std::to_string(config.remotePort));
     }
     return true;
 }
@@ -464,8 +454,8 @@ bool DroneSession::ApplyDiscoveredTelemetry(
         message.compid != config.discoveredComponentId ||
         identity.systemId != config.discoveredSystemId ||
         identity.componentId != config.discoveredComponentId ||
-        identity.sourceIp != config.targetIp ||
-        identity.sourcePort != config.targetPort)
+        identity.sourceIp != config.remoteIp ||
+        identity.sourcePort != config.remotePort)
     {
         return false;
     }
@@ -491,8 +481,8 @@ bool DroneSession::ApplyDiscoveredCommandMessage(
     if (message.msgid != MAVLINK_MSG_ID_COMMAND_ACK ||
         message.sysid != config.discoveredSystemId ||
         identity.systemId != config.discoveredSystemId ||
-        identity.sourceIp != config.targetIp ||
-        identity.sourcePort != config.targetPort)
+        identity.sourceIp != config.remoteIp ||
+        identity.sourcePort != config.remotePort)
     {
         return false;
     }
@@ -623,103 +613,6 @@ void DroneSession::RequestDataStream(
 
     ConsoleUI::AddLog(
         SessionPrefix(config.droneId) + "REQUEST DATA STREAM");
-}
-
-void DroneSession::ProcessIncomingData(
-    std::chrono::steady_clock::time_point now)
-{
-    if (!config.realCommandEnabled)
-    {
-        return;
-    }
-
-    std::uint8_t buffer[2048];
-    const int length = udp.Receive(buffer, sizeof(buffer));
-
-    if (length <= 0)
-    {
-        return;
-    }
-
-    mavlink_message_t message;
-    mavlink_status_t decodedStatus{};
-
-    for (int index = 0; index < length; ++index)
-    {
-        if (mavlink_frame_char_buffer(
-            &parseMessageBuffer,
-            &parseStatus,
-            buffer[index],
-            &message,
-            &decodedStatus) != MAVLINK_FRAMING_OK)
-        {
-            continue;
-        }
-
-        if (message.msgid == MAVLINK_MSG_ID_HEARTBEAT)
-        {
-            mavlink_heartbeat_t heartbeat;
-            mavlink_msg_heartbeat_decode(&message, &heartbeat);
-
-            if (heartbeat.type == MAV_TYPE_GCS)
-            {
-                continue;
-            }
-        }
-
-        if (workingData.systemID != 0 &&
-            message.sysid != workingData.systemID)
-        {
-            continue;
-        }
-
-        const std::uint8_t previousSysId = workingData.systemID;
-        parser.Parse(message, workingData);
-
-        if (workingData.lastHeartbeat ==
-                std::chrono::steady_clock::time_point{} ||
-            now - workingData.lastHeartbeat >
-                std::chrono::milliseconds(config.heartbeatTimeoutMs))
-        {
-            workingData.online = false;
-        }
-
-        dataManager.Update(workingData);
-        hoverTest.Update(dataManager.GetFlightData());
-
-        if (previousSysId == 0 && workingData.systemID != 0)
-        {
-            ConsoleUI::AddLog(
-                SessionPrefix(config.droneId) +
-                "SYSID locked=" + std::to_string(workingData.systemID));
-        }
-
-        if (workingData.online)
-        {
-            SetState(DroneSessionState::Online);
-        }
-
-        if (message.msgid == MAVLINK_MSG_ID_COMMAND_ACK)
-        {
-            dispatcher.HandleAck(message);
-
-            mavlink_command_ack_t ack;
-            mavlink_msg_command_ack_decode(&message, &ack);
-            ConsoleUI::AddLog(
-                SessionPrefix(config.droneId) +
-                "ACK cmd=" + std::to_string(ack.command) +
-                " result=" + std::to_string(ack.result));
-        }
-
-        if (message.msgid == MAVLINK_MSG_ID_STATUSTEXT)
-        {
-            mavlink_statustext_t statusText;
-            mavlink_msg_statustext_decode(&message, &statusText);
-            ConsoleUI::AddLog(
-                SessionPrefix(config.droneId) +
-                "MSG:" + std::string(statusText.text));
-        }
-    }
 }
 
 void DroneSession::ProcessDispatchResults(

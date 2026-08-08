@@ -1,8 +1,8 @@
 /**
  * @brief 定义 Console 启动配置及其安全默认值。
  *
- * 分类：Production / Compatibility。
- * 当前多机链使用 MAVLink bind、DSP、timeout 和安全限制；target/local 字段服务旧单会话兼容路径。
+ * 分类：Production。
+ * 当前多机链使用 MAVLink bind、DSP、timeout 和安全限制；无人机 Remote Endpoint 来自实际收包来源。
  */
 #pragma once
 
@@ -18,8 +18,6 @@ namespace AppConfigDefaults
     inline constexpr int SnapshotDatagramBytes = 60 * 1024;
     inline constexpr int SnapshotItemsPerChunk = 512;
 
-    // Legacy single-session fallback. Production MAVLink never reads it.
-    inline constexpr const char* LegacyLocalIP = "192.168.1.254";
 }
 
 struct AppConfig
@@ -40,12 +38,6 @@ struct AppConfig
     int snapshotDatagramBytes = AppConfigDefaults::SnapshotDatagramBytes;
     int snapshotItemsPerChunk = AppConfigDefaults::SnapshotItemsPerChunk;
 
-    // Legacy / Compatibility only. These values are ignored by the
-    // multi-aircraft Production path.
-    std::string targetIP;
-    int targetPort = 0;
-    std::string legacyLocalIP = AppConfigDefaults::LegacyLocalIP;
-    int localPort = 0;
     int heartbeatTimeoutMs = AppConfigDefaults::HeartbeatTimeoutMs;
     float takeoffAltitudeLimitMeters = 5.0f;
     float hoverAltitudeLimitMeters = 5.0f;

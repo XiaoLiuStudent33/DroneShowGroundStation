@@ -1,9 +1,9 @@
 /**
  * @brief 实现 ConsoleGCS 启动校验和主服务循环。
  *
- * 分类：Production / Compatibility；当前配置进入多机 MAVLink Production 路径。
+ * 分类：Production；当前配置只进入多机 MAVLink Production 路径。
  * 输入：gcs-config.ini；输出：MAVLink 收发、DSP-GCS 快照/命令处理和 ConsoleUI 摘要。
- * 调用链：main -> Run -> RunReadOnlyMavlink；RunLegacySingleSession 仅保留旧链兼容。
+ * 调用链：main -> Run -> RunProductionMavlink。
  */
 #define WIN32_LEAN_AND_MEAN
 
@@ -143,16 +143,14 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
         appConfig.takeoffAltitudeLimitMeters,
         appConfig.hoverAltitudeLimitMeters);
 
-    // Discovery/production mode enables real commands only when all three
-    // explicit runtime gates below are enabled. Legacy mode keeps its existing
-    // SAFE_TEST_MODE behavior.
+    // Production mode enables real commands only when all explicit runtime
+    // gates below are enabled.
     const bool mavlinkControlEnabled =
         SafetyConfig::CanEnableRealCommands(
             appConfig.mavlinkNetworkEnabled,
             appConfig.dspgcsCommandEnabled,
             appConfig.mavlinkBindIP,
-            appConfig.mavlinkBindPort) ||
-        (!appConfig.mavlinkNetworkEnabled && !SafetyConfig::SAFE_TEST_MODE);
+            appConfig.mavlinkBindPort);
 
     ConsoleUI::Init();
     ConsoleUI::AddLog("Drone GCS Started");
@@ -184,12 +182,18 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
             : "false"));
     ConsoleUI::UpdateFleet({});
 
-    return appConfig.mavlinkNetworkEnabled
-        ? RunReadOnlyMavlink(appConfig)
-        : RunLegacySingleSession(appConfig);
+    if (!appConfig.mavlinkNetworkEnabled)
+    {
+        ConsoleUI::AddLog(
+            "Startup blocked: mavlink_network_enabled=false; "
+            "Legacy Single Session was removed in Cleanup Phase 3C");
+        return -2;
+    }
+
+    return RunProductionMavlink(appConfig);
 }
 
-int ConsoleGCSApplication::RunReadOnlyMavlink(
+int ConsoleGCSApplication::RunProductionMavlink(
     const AppConfig& appConfig)
 {
     if (appConfig.realCommandEnabled &&
@@ -244,10 +248,8 @@ int ConsoleGCSApplication::RunReadOnlyMavlink(
     DSPGCSProductionCommandReceiver commandReceiver;
     commandReceiver.SetRealCommandEnabled(appConfig.realCommandEnabled);
     DroneSessionConfig discoveredSessionDefaults;
-    discoveredSessionDefaults.localIp = appConfig.mavlinkBindIP;
     // Discovery Sessions share the same bound endpoint for receive, heartbeat,
     // commands, and ACK routing. They never create an ephemeral control socket.
-    discoveredSessionDefaults.localPort = receiver.GetBoundPort();
     discoveredSessionDefaults.sharedMavlinkEndpoint = &receiver;
     discoveredSessionDefaults.heartbeatTimeoutMs =
         appConfig.heartbeatTimeoutMs;
@@ -375,8 +377,8 @@ int ConsoleGCSApplication::RunReadOnlyMavlink(
                     session->GetDroneId() +
                     " registered SYSID=" +
                     std::to_string(session->GetSysId()) +
-                    " source=" + config.targetIp + ":" +
-                    std::to_string(config.targetPort));
+                    " source=" + config.remoteIp + ":" +
+                    std::to_string(config.remotePort));
             }
         }
 
@@ -385,64 +387,6 @@ int ConsoleGCSApplication::RunReadOnlyMavlink(
             const std::vector<DroneSession*> sessions =
                 droneManager.GetAllDrones();
             ConsoleUI::UpdateFleet(BuildConsoleFleetStatus(sessions));
-            lastRefresh = now;
-        }
-
-        Sleep(10);
-    }
-}
-
-int ConsoleGCSApplication::RunLegacySingleSession(
-    const AppConfig& appConfig)
-{
-    // Legacy / Compatibility：当前 Production 配置不进入此分支；该函数仍保留
-    // 旧单 APM、独立 UdpClient 和固定 target_ip 的兼容运行方式。
-    ConsoleUI::AddLog("Legacy single-session mode");
-
-    DroneManager droneManager;
-    CommandManager commandManager(droneManager);
-    DroneSessionConfig sessionConfig;
-    sessionConfig.droneId = "DRONE-0001";
-    sessionConfig.targetIp = appConfig.targetIP;
-    sessionConfig.targetPort = appConfig.targetPort;
-    sessionConfig.localIp = appConfig.legacyLocalIP;
-    sessionConfig.localPort = appConfig.localPort;
-    sessionConfig.heartbeatTimeoutMs = appConfig.heartbeatTimeoutMs;
-    sessionConfig.realCommandEnabled = !SafetyConfig::SAFE_TEST_MODE;
-
-    if (!droneManager.AddDrone(sessionConfig))
-    {
-        ConsoleUI::AddLog("Unable to add initial drone session");
-        return -2;
-    }
-
-    DroneSession* activeSession =
-        droneManager.FindDrone(sessionConfig.droneId);
-
-    if (activeSession == nullptr ||
-        !droneManager.StartDrone(sessionConfig.droneId))
-    {
-        ConsoleUI::AddLog("Unable to start initial drone session");
-        return -3;
-    }
-
-    ConsoleUI::AddLog(
-        "Active DroneID=" + activeSession->GetDroneId() +
-        " SYSID=" + std::to_string(activeSession->GetSysId()) +
-        " Session=" + DroneSessionStateName(activeSession->GetState()));
-
-    auto lastRefresh = std::chrono::steady_clock::now();
-
-    while (true)
-    {
-        const auto now = std::chrono::steady_clock::now();
-        droneManager.TickAll(now);
-        commandManager.Tick();
-
-        if (now - lastRefresh >= std::chrono::seconds(1))
-        {
-            ConsoleUI::UpdateFleet(
-                BuildConsoleFleetStatus(droneManager.GetAllDrones()));
             lastRefresh = now;
         }
 

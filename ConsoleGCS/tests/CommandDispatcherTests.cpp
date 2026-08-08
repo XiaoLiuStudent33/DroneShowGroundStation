@@ -1,15 +1,14 @@
 #define WIN32_LEAN_AND_MEAN
 
 #include "../CommandDispatcher.h"
-
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include "../MavlinkDatagramSender.h"
 
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <string>
-#include <thread>
+#include <utility>
 #include <vector>
 
 namespace
@@ -24,103 +23,65 @@ namespace
         return condition;
     }
 
-    bool ReceiveMessage(
-        SOCKET receiver,
-        mavlink_message_t& message)
+    class CapturingDatagramSender final : public IMavlinkDatagramSender
     {
-        const auto deadline =
-            std::chrono::steady_clock::now() +
-            std::chrono::seconds(1);
-
-        mavlink_status_t status{};
-        std::uint8_t buffer[2048];
-
-        while (std::chrono::steady_clock::now() < deadline)
+    public:
+        bool SendTo(
+            const std::string& targetIp,
+            const std::uint16_t targetPort,
+            const std::uint8_t* data,
+            const int length) override
         {
-            const int length = recv(
-                receiver,
-                reinterpret_cast<char*>(buffer),
-                sizeof(buffer),
-                0);
-
-            if (length > 0)
+            if (targetIp != "127.0.0.1" ||
+                targetPort != 30001 ||
+                data == nullptr ||
+                length <= 0)
             {
-                for (int index = 0; index < length; ++index)
-                {
-                    if (mavlink_parse_char(
-                        MAVLINK_COMM_1,
-                        buffer[index],
-                        &message,
-                        &status))
-                    {
-                        return true;
-                    }
-                }
+                return false;
             }
 
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(5));
+            datagrams.emplace_back(data, data + length);
+            return true;
         }
 
-        return false;
-    }
+        bool ConsumeMessage(mavlink_message_t& message)
+        {
+            if (datagrams.empty())
+            {
+                return false;
+            }
+
+            const std::vector<std::uint8_t> datagram =
+                std::move(datagrams.front());
+            datagrams.erase(datagrams.begin());
+            mavlink_status_t status{};
+            for (const std::uint8_t byte : datagram)
+            {
+                if (mavlink_parse_char(
+                    MAVLINK_COMM_1,
+                    byte,
+                    &message,
+                    &status))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+    private:
+        std::vector<std::vector<std::uint8_t>> datagrams;
+    };
 }
 
 int main()
 {
-    WSADATA wsa{};
-
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
-    {
-        std::cerr << "FAILED: WSAStartup\n";
-        return 1;
-    }
-
-    SOCKET receiver =
-        socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-
-    if (receiver == INVALID_SOCKET)
-    {
-        WSACleanup();
-        return 1;
-    }
-
-    sockaddr_in receiverAddress{};
-    receiverAddress.sin_family = AF_INET;
-    receiverAddress.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    receiverAddress.sin_port = 0;
-
-    if (bind(
-        receiver,
-        reinterpret_cast<sockaddr*>(&receiverAddress),
-        sizeof(receiverAddress)) == SOCKET_ERROR)
-    {
-        closesocket(receiver);
-        WSACleanup();
-        return 1;
-    }
-
-    int receiverAddressLength = sizeof(receiverAddress);
-    getsockname(
-        receiver,
-        reinterpret_cast<sockaddr*>(&receiverAddress),
-        &receiverAddressLength);
-
-    u_long nonBlocking = 1;
-    ioctlsocket(
-        receiver,
-        FIONBIO,
-        &nonBlocking);
-
+    CapturingDatagramSender endpoint;
     UdpClient sender;
 
     bool passed = Check(
-        sender.Init(
-            "127.0.0.1",
-            ntohs(receiverAddress.sin_port),
-            "127.0.0.1",
-            0),
-        "UDP sender initializes");
+        sender.AttachSharedEndpoint(endpoint, "127.0.0.1", 30001),
+        "shared Endpoint sender attaches");
 
     CommandDispatcher dispatcher(sender);
     const auto now =
@@ -131,7 +92,7 @@ int main()
 
     mavlink_message_t received{};
     passed &= Check(
-        ReceiveMessage(receiver, received),
+        endpoint.ConsumeMessage(received),
         "ARM packet is emitted");
     passed &= Check(
         received.msgid == MAVLINK_MSG_ID_COMMAND_LONG,
@@ -190,7 +151,7 @@ int main()
         dispatcher.Tick(now + std::chrono::milliseconds(index + 1));
 
         passed &= Check(
-            ReceiveMessage(receiver, received),
+            endpoint.ConsumeMessage(received),
             std::string(expected.name) + " SET_MODE packet is emitted");
         passed &= Check(
             received.msgid == MAVLINK_MSG_ID_SET_MODE,
@@ -230,7 +191,7 @@ int main()
 
     dispatcher.Tick(now);
     passed &= Check(
-        ReceiveMessage(receiver, received),
+        endpoint.ConsumeMessage(received),
         "LAND packet is emitted");
     mavlink_msg_command_long_decode(
         &received,
@@ -240,8 +201,6 @@ int main()
         "priority packet is LAND");
 
     sender.Close();
-    closesocket(receiver);
-    WSACleanup();
 
     if (passed)
     {

@@ -83,9 +83,6 @@ dspgcs_telemetry_enabled=true
 dspgcs_command_enabled=true
 dspgcs_transport_config=config/DSPGCSTransport.ini
 dspgcs_telemetry_interval_ms=500
-target_ip=legacy.invalid
-target_port=not-a-port
-local_port=also-invalid
 [performance]
 mavlink_receive_buffer_bytes=8388608
 max_packets_per_drain=8192
@@ -136,30 +133,28 @@ dspgcs_command_enabled=false
                 AppConfigDefaults::SnapshotItemsPerChunk,
             "missing performance keys did not preserve fallbacks");
 
-        TemporaryConfigFile legacy("legacy", R"(
-safe_test_mode=true
-mavlink_network_enabled=false
-real_command_enabled=false
+        TemporaryConfigFile disabledNetwork("disabled-network", R"(
+ safe_test_mode=true
+ mavlink_network_enabled=false
+ real_command_enabled=false
 heartbeat_timeout_ms=3000
 dspgcs_telemetry_enabled=false
 dspgcs_command_enabled=false
-target_ip=127.0.0.1
-target_port=10005
-local_ip=127.0.0.1
-local_port=10005
-)" );
-        AppConfig legacyConfig;
+ )" );
+        AppConfig disabledNetworkConfig;
         error.clear();
         Expect(
-            AppConfig::Load(legacy.GetPath(), legacyConfig, error),
-            "legacy compatibility config failed to load: " + error);
+            AppConfig::Load(
+                disabledNetwork.GetPath(),
+                disabledNetworkConfig,
+                error),
+            "disabled-network config unexpectedly required a fixed target: " +
+                error);
         Expect(
-            legacyConfig.targetIP == "127.0.0.1" &&
-            legacyConfig.targetPort == 10005 &&
-            legacyConfig.legacyLocalIP == "127.0.0.1" &&
-            legacyConfig.localPort == 10005,
-            "legacy compatibility values were not retained");
-        std::cout << "Production, fallback, and legacy config loading passed\n";
+            !disabledNetworkConfig.mavlinkNetworkEnabled,
+            "disabled-network flag was not preserved");
+        std::cout
+            << "Production/fallback config loading passed; fixed target fields are not required\n";
     }
 
     void VerifyDSPTransportConfigurationLoading()
@@ -603,8 +598,6 @@ RemotePort=12002
             "shared endpoint failed to bind 127.0.0.1:10001: " + error);
 
         DroneSessionConfig sessionDefaults;
-        sessionDefaults.localIp = "127.0.0.1";
-        sessionDefaults.localPort = sharedPort;
         sessionDefaults.heartbeatTimeoutMs = 5000;
         sessionDefaults.receiveOnly = false;
         sessionDefaults.realCommandEnabled = true;
@@ -629,6 +622,24 @@ RemotePort=12002
         Expect(
             heartbeatStats.heartbeatsApplied == 3 && manager.GetDroneCount() == 3,
             "shared endpoint did not register three heartbeats");
+        const DroneSession* sharedDrone1 = manager.FindDrone("Drone001");
+        const DroneSession* sharedDrone2 = manager.FindDrone("Drone002");
+        const DroneSession* sharedDrone3 = manager.FindDrone("Drone003");
+        Expect(
+            sharedDrone1 != nullptr && sharedDrone2 != nullptr &&
+                sharedDrone3 != nullptr,
+            "shared endpoint sessions were not assigned stable DroneIDs");
+        Expect(
+            drone1.GetPort() != drone2.GetPort() &&
+                drone1.GetPort() != drone3.GetPort() &&
+                drone2.GetPort() != drone3.GetPort() &&
+                sharedDrone1->GetConfig().remoteIp == "127.0.0.1" &&
+                sharedDrone2->GetConfig().remoteIp == "127.0.0.1" &&
+                sharedDrone3->GetConfig().remoteIp == "127.0.0.1" &&
+                sharedDrone1->GetConfig().remotePort == drone1.GetPort() &&
+                sharedDrone2->GetConfig().remotePort == drone2.GetPort() &&
+                sharedDrone3->GetConfig().remotePort == drone3.GetPort(),
+            "same IP/different source port/same SYSID did not create three Endpoint Sessions");
 
         for (int droneIndex = 0; droneIndex < 3; ++droneIndex)
         {
@@ -737,7 +748,8 @@ RemotePort=12002
         }
 
         std::cout
-            << "Shared endpoint PASS: three registrations, telemetry routes, ACK routes; "
+            << "Shared endpoint PASS: same IP/different source port/same SYSID; "
+            << "three registrations, telemetry routes, ACK routes; "
             << "one multi-target ARM expanded to three Sessions; "
             << "GCS heartbeat and COMMAND_LONG source port=10001\n";
     }
@@ -761,8 +773,6 @@ int main()
         VerifySharedMavlinkEndpoint();
 
         DroneSessionConfig sessionDefaults;
-        sessionDefaults.localIp = "127.0.0.1";
-        sessionDefaults.localPort = 0;
         sessionDefaults.heartbeatTimeoutMs = 40;
         sessionDefaults.receiveOnly = true;
 
@@ -800,9 +810,9 @@ int main()
             drone001->GetConfig().discoveredSystemId == 1 &&
             drone002->GetConfig().discoveredSystemId == 1 &&
             drone003->GetConfig().discoveredSystemId == 1 &&
-            drone001->GetConfig().targetIp == "192.168.1.145" &&
-            drone002->GetConfig().targetIp == "192.168.1.231" &&
-            drone003->GetConfig().targetIp == "192.168.1.232",
+            drone001->GetConfig().remoteIp == "192.168.1.145" &&
+            drone002->GetConfig().remoteIp == "192.168.1.231" &&
+            drone003->GetConfig().remoteIp == "192.168.1.232",
             "same SYSID endpoints were not preserved as independent Sessions");
         ExpectOnline(manager, "Drone001", true);
         ExpectOnline(manager, "Drone002", true);

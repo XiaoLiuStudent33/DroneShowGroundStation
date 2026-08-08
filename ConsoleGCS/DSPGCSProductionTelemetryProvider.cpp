@@ -70,8 +70,8 @@ namespace
             : dspgcs::ConnectionState::Offline;
         dto.connection.lastHeartbeatUtcMs =
             ToUtcMilliseconds(data.lastHeartbeat);
-        dto.connection.linkId = config.targetIp + ":" +
-            std::to_string(config.targetPort);
+        dto.connection.linkId = config.remoteIp + ":" +
+            std::to_string(config.remotePort);
 
         dto.rssi.valid = false;
         dto.led.state = dspgcs::LEDState::Unknown;

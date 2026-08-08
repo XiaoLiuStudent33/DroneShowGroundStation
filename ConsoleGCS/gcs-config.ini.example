@@ -1,8 +1,8 @@
 # Copy this file to gcs-config.ini before running the program.
-# Keep true for normal startup and all automated tests.
+# Keep true for safe operation and all automated tests.
 safe_test_mode=true
 
-# Enable only when this computer should receive real MAVLink telemetry.
+# Production is the only runtime path. Review the bind endpoint, then set true.
 mavlink_network_enabled=false
 real_command_enabled=false
 mavlink_bind_ip=0.0.0.0
@@ -14,11 +14,6 @@ dspgcs_telemetry_enabled=false
 dspgcs_command_enabled=false
 dspgcs_transport_config=config/DSPGCSTransport.ini
 dspgcs_telemetry_interval_ms=250
-
-# Legacy single-session settings. They are ignored when Production MAVLink is enabled.
-target_ip=127.0.0.1
-target_port=10005
-local_port=10005
 
 # Optional Production performance tuning. These values match code fallbacks.
 [performance]
