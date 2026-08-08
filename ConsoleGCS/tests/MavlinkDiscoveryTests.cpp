@@ -147,12 +147,46 @@ namespace
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 
-        closesocket(sender);
         Expect(result == MavlinkUdpReceiveResult::Received, "loopback receive failed");
         Expect(received.sourceIp == "127.0.0.1", "source IP extraction failed");
         Expect(received.sourcePort != 0, "source port extraction failed");
         Expect(received.bytes == heartbeat, "received datagram bytes changed");
-        std::cout << "UDP receiver loopback source endpoint extraction passed\n";
+
+        constexpr int BurstDatagrams = 4096;
+        for (int index = 0; index < BurstDatagrams; ++index)
+        {
+            const int burstSent = sendto(
+                sender,
+                reinterpret_cast<const char*>(heartbeat.data()),
+                static_cast<int>(heartbeat.size()),
+                0,
+                reinterpret_cast<const sockaddr*>(&destination),
+                sizeof(destination));
+            Expect(
+                burstSent == static_cast<int>(heartbeat.size()),
+                "loopback burst send failed");
+        }
+
+        int burstReceived = 0;
+        for (int attempt = 0;
+             attempt < 10000 && burstReceived < BurstDatagrams;
+             ++attempt)
+        {
+            result = receiver.Receive(received, error);
+            if (result == MavlinkUdpReceiveResult::WouldBlock)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            Expect(result == MavlinkUdpReceiveResult::Received, error);
+            ++burstReceived;
+        }
+        closesocket(sender);
+        Expect(
+            burstReceived == BurstDatagrams,
+            "MAVLink UDP receive buffer dropped synchronized burst traffic");
+        std::cout
+            << "UDP receiver endpoint extraction and 4096-datagram burst passed\n";
     }
 
     class SimulatedDroneEndpoint
@@ -946,6 +980,138 @@ int main()
                 manager.GetDroneCount() == 3,
             "Drone002 recovery created a duplicate session");
         std::cout << "Drone002 online again using original session\n";
+
+        // Scale regression: a 1000-aircraft snapshot must not be emitted as
+        // one oversized UDP datagram. All chunks retain stable order and the
+        // same snapshot identity so the UE side can apply them atomically.
+        DroneManager scaleManager;
+        DroneSessionConfig scaleDefaults;
+        scaleDefaults.receiveOnly = true;
+        scaleDefaults.heartbeatTimeoutMs = 3000;
+        MavlinkDiscoveryService scaleDiscovery(scaleManager, scaleDefaults);
+        for (std::uint16_t index = 0; index < 1000; ++index)
+        {
+            Expect(
+                SendHeartbeat(
+                    scaleDiscovery,
+                    1,
+                    "127.0.0.1",
+                    static_cast<std::uint16_t>(20000 + index)) ==
+                    MavlinkDiscoveryResult::Registered,
+                "1000-aircraft scale registration failed");
+        }
+
+        dspgcs::DSPGCSTransportConfig scaleReceiverConfig;
+        scaleReceiverConfig.type = dspgcs::TransportType::Loopback;
+        scaleReceiverConfig.bindAddress = "127.0.0.1";
+        scaleReceiverConfig.bindPort = 12532;
+        scaleReceiverConfig.remoteAddress = "127.0.0.1";
+        scaleReceiverConfig.remotePort = 12531;
+        auto scaleReceiver = dspgcs::DSPGCSTransportFactory::CreateTransport(
+            scaleReceiverConfig,
+            transportError);
+        Expect(scaleReceiver != nullptr, "scale DTO receiver factory failed");
+
+        std::mutex scaleFramesMutex;
+        std::vector<dspgcs::TransportFrame> scaleFrames;
+        scaleReceiver->Receive([&](dspgcs::TransportFrame frame)
+        {
+            std::lock_guard<std::mutex> lock(scaleFramesMutex);
+            scaleFrames.push_back(std::move(frame));
+        });
+        Expect(scaleReceiver->Start(), "scale DTO receiver failed to start");
+
+        dspgcs::DSPGCSTransportConfig scalePublisherConfig =
+            scaleReceiverConfig;
+        scalePublisherConfig.bindPort = 12531;
+        scalePublisherConfig.remotePort = 12532;
+        DSPGCSProductionTelemetryProvider scaleProvider;
+        Expect(
+            scaleProvider.Start(scalePublisherConfig, transportError),
+            "scale telemetry provider failed to start");
+        Expect(
+            scaleProvider.PublishSnapshot(scaleManager),
+            "1000-aircraft telemetry snapshot send failed");
+
+        std::uint32_t expectedChunkCount = 0;
+        for (int attempt = 0; attempt < 500; ++attempt)
+        {
+            {
+                std::lock_guard<std::mutex> lock(scaleFramesMutex);
+                if (!scaleFrames.empty() && expectedChunkCount == 0)
+                {
+                    dspgcs::MessageEnvelope firstEnvelope;
+                    std::vector<std::uint8_t> firstPayload;
+                    dspgcs::TelemetryBatchDTO firstBatch;
+                    if (dspgcs::DecodeEnvelope(
+                            scaleFrames.front().bytes,
+                            firstEnvelope,
+                            firstPayload) &&
+                        dspgcs::DecodeTelemetry(firstPayload, firstBatch))
+                    {
+                        expectedChunkCount = firstBatch.chunkCount;
+                    }
+                }
+                if (expectedChunkCount > 0 &&
+                    scaleFrames.size() >= expectedChunkCount)
+                {
+                    break;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+
+        scaleProvider.Stop();
+        scaleReceiver->Stop();
+        std::vector<dspgcs::TransportFrame> framesToVerify;
+        {
+            std::lock_guard<std::mutex> lock(scaleFramesMutex);
+            framesToVerify = std::move(scaleFrames);
+        }
+        Expect(expectedChunkCount > 1, "1000-aircraft snapshot was not chunked");
+        Expect(
+            framesToVerify.size() == expectedChunkCount,
+            "1000-aircraft snapshot chunks were lost");
+
+        std::vector<bool> chunkSeen(expectedChunkCount, false);
+        std::size_t decodedDroneCount = 0;
+        std::string scaleSnapshotId;
+        for (const dspgcs::TransportFrame& frame : framesToVerify)
+        {
+            Expect(
+                frame.bytes.size() <= 60 * 1024,
+                "telemetry chunk exceeded safe UDP payload size");
+            dspgcs::MessageEnvelope chunkEnvelope;
+            std::vector<std::uint8_t> chunkPayload;
+            dspgcs::TelemetryBatchDTO chunkBatch;
+            Expect(
+                dspgcs::DecodeEnvelope(
+                    frame.bytes,
+                    chunkEnvelope,
+                    chunkPayload) &&
+                dspgcs::DecodeTelemetry(chunkPayload, chunkBatch),
+                "1000-aircraft telemetry chunk failed to decode");
+            Expect(
+                chunkBatch.chunkCount == expectedChunkCount &&
+                chunkBatch.chunkIndex < expectedChunkCount &&
+                !chunkSeen[chunkBatch.chunkIndex],
+                "telemetry chunk metadata was inconsistent");
+            chunkSeen[chunkBatch.chunkIndex] = true;
+            if (scaleSnapshotId.empty())
+            {
+                scaleSnapshotId = chunkBatch.snapshotId;
+            }
+            Expect(
+                chunkBatch.snapshotId == scaleSnapshotId,
+                "telemetry chunks did not share a snapshot ID");
+            decodedDroneCount += chunkBatch.items.size();
+        }
+        Expect(
+            decodedDroneCount == 1000,
+            "chunked telemetry snapshot did not preserve all 1000 drones");
+        std::cout
+            << "1000-aircraft DSP-GCS snapshot passed: chunks="
+            << expectedChunkCount << " drones=" << decodedDroneCount << '\n';
 
         std::cout
             << "PASS: endpoint identity registered/refreshed online state; "

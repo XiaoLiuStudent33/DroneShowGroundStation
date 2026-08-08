@@ -217,7 +217,10 @@ int ConsoleGCSApplication::RunReadOnlyMavlink(
     auto lastTelemetryPublish = std::chrono::steady_clock::time_point{};
     while (true)
     {
-        for (int datagramIndex = 0; datagramIndex < 256; ++datagramIndex)
+        // Drain a full synchronized thousand-aircraft telemetry burst before
+        // sleeping. The bound prevents malformed traffic from starving the
+        // rest of the service loop.
+        for (int datagramIndex = 0; datagramIndex < 4096; ++datagramIndex)
         {
             MavlinkReceivedDatagram datagram;
             std::string receiveError;

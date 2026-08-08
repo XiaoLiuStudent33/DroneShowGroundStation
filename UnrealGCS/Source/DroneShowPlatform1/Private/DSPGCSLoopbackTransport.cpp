@@ -9,7 +9,7 @@
 
 namespace
 {
-	constexpr int32 LoopbackReceiveBufferBytes = 2 * 1024 * 1024;
+	constexpr int32 LoopbackReceiveBufferBytes = 4 * 1024 * 1024;
 	const FIPv4Address LoopbackAddress(127, 0, 0, 1);
 }
 

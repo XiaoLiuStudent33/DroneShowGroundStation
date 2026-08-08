@@ -11,6 +11,7 @@
 namespace
 {
     constexpr std::uintptr_t InvalidSocketValue = ~std::uintptr_t{ 0 };
+    constexpr int DSPGCSBufferBytes = 4 * 1024 * 1024;
 }
 
 ConsoleDSPGCSLoopbackTransport::ConsoleDSPGCSLoopbackTransport(
@@ -48,6 +49,24 @@ bool ConsoleDSPGCSLoopbackTransport::Start()
         return false;
     }
     socketHandle_ = static_cast<std::uintptr_t>(socketHandle);
+
+    if (setsockopt(
+        socketHandle,
+        SOL_SOCKET,
+        SO_RCVBUF,
+        reinterpret_cast<const char*>(&DSPGCSBufferBytes),
+        sizeof(DSPGCSBufferBytes)) == SOCKET_ERROR ||
+        setsockopt(
+            socketHandle,
+            SOL_SOCKET,
+            SO_SNDBUF,
+            reinterpret_cast<const char*>(&DSPGCSBufferBytes),
+            sizeof(DSPGCSBufferBytes)) == SOCKET_ERROR)
+    {
+        Stop();
+        state_.store(dspgcs::TransportState::Faulted);
+        return false;
+    }
 
     sockaddr_in localEndpoint{};
     localEndpoint.sin_family = AF_INET;
@@ -185,6 +204,10 @@ void ConsoleDSPGCSLoopbackTransport::ReceiveLoop()
                 frame.bytes.assign(buffer, buffer + length);
                 handler(std::move(frame));
             }
+
+            // Continue immediately so a multi-datagram snapshot is drained as
+            // one burst instead of sleeping between its chunks.
+            continue;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "DSPGCSProtocol.h"
 #include "GCSDataProvider.h"
 #include "IDSPGCSTransport.h"
 #include "Subsystems/GameInstanceSubsystem.h"
@@ -46,8 +47,17 @@ public:
 	void SetCommandResultHandler(FCommandResultHandler Handler);
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FDSPGCSTelemetryChunkAssemblyTest;
+#endif
+
 	bool CreateTransport();
 	void HandleTransportFrame(dspgcs::TransportFrame Frame);
+	bool TryAssembleTelemetrySnapshot(
+		const dspgcs::MessageEnvelope& Envelope,
+		dspgcs::TelemetryBatchDTO&& Chunk,
+		dspgcs::TelemetryBatchDTO& CompleteBatch);
+	void ResetPendingTelemetrySnapshot();
 
 	TWeakObjectPtr<UGCSServerAdapterSubsystem> AdapterRef;
 	std::unique_ptr<dspgcs::IDSPGCSTransport> Transport;
@@ -55,4 +65,10 @@ private:
 	FCommandResultHandler CommandResultHandler;
 	bool bEnabled = false;
 	int32 ReceivedDroneCount = 0;
+	std::string PendingSnapshotSessionID;
+	std::string PendingSnapshotID;
+	std::uint64_t PendingSnapshotFleetRevision = 0;
+	std::vector<std::vector<dspgcs::TelemetryDTO>> PendingSnapshotChunks;
+	std::vector<bool> PendingSnapshotChunksReceived;
+	std::size_t PendingSnapshotReceivedCount = 0;
 };

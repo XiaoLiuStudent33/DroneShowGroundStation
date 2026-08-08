@@ -9,6 +9,11 @@
 
 namespace
 {
+    // Leave headroom below the UDP payload ceiling (65,507 bytes) for the
+    // encoded DSP-GCS envelope and for platform-specific transport handling.
+    constexpr std::size_t MaxTelemetryDatagramBytes = 60 * 1024;
+    constexpr std::size_t MaxTelemetryChunkItems = 512;
+
     std::int64_t UtcNowMs()
     {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -128,28 +133,96 @@ bool DSPGCSProductionTelemetryProvider::PublishSnapshot(
         return false;
     }
 
-    dspgcs::TelemetryBatchDTO batch;
-    batch.batchId = "TELEMETRY-" + std::to_string(++sequence_);
-    batch.batchMode = dspgcs::BatchMode::Snapshot;
-    batch.fleetRevision = ++fleetRevision_;
-    batch.snapshotId = batch.batchId;
+    const std::uint64_t fleetRevision = ++fleetRevision_;
+    const std::string snapshotId =
+        "TELEMETRY-" + std::to_string(fleetRevision);
+    std::vector<dspgcs::TelemetryDTO> items;
 
     for (const DroneSession* session : droneManager.GetAllDrones())
     {
         dspgcs::TelemetryDTO dto = ToTelemetryDTO(*session);
-        dto.telemetryRevision = fleetRevision_;
-        batch.items.push_back(std::move(dto));
+        dto.telemetryRevision = fleetRevision;
+        items.push_back(std::move(dto));
     }
 
-    dspgcs::MessageEnvelope envelope;
-    envelope.messageType = dspgcs::MessageType::TelemetryBatch;
-    envelope.sourceId = "ConsoleGCS-ProductionTelemetry";
-    envelope.sessionId = sessionId_;
-    envelope.sequence = sequence_;
-    envelope.timestampUtcMs = UtcNowMs();
-    envelope.fleetRevision = fleetRevision_;
+    auto MakeBatch = [&snapshotId, fleetRevision]()
+    {
+        dspgcs::TelemetryBatchDTO batch;
+        batch.batchId = snapshotId;
+        batch.batchMode = dspgcs::BatchMode::Snapshot;
+        batch.fleetRevision = fleetRevision;
+        batch.snapshotId = snapshotId;
+        return batch;
+    };
+    auto MakeEnvelope = [this, fleetRevision]()
+    {
+        dspgcs::MessageEnvelope envelope;
+        envelope.messageType = dspgcs::MessageType::TelemetryBatch;
+        envelope.sourceId = "ConsoleGCS-ProductionTelemetry";
+        envelope.sessionId = sessionId_;
+        envelope.timestampUtcMs = UtcNowMs();
+        envelope.fleetRevision = fleetRevision;
+        return envelope;
+    };
 
-    return transport_->Send({ dspgcs::EncodeTelemetry(envelope, batch) });
+    // Encoding is additive per TelemetryDTO. Measure each item once and use
+    // the empty-frame size as exact fixed overhead, avoiding repeated trial
+    // serialization while still guaranteeing a UDP-safe frame size.
+    dspgcs::TelemetryBatchDTO emptyBatch = MakeBatch();
+    dspgcs::MessageEnvelope sizingEnvelope = MakeEnvelope();
+    const std::size_t fixedFrameBytes =
+        dspgcs::EncodeTelemetry(sizingEnvelope, emptyBatch).size();
+
+    std::vector<std::vector<dspgcs::TelemetryDTO>> chunks;
+    chunks.emplace_back();
+    std::size_t currentFrameBytes = fixedFrameBytes;
+    for (dspgcs::TelemetryDTO& item : items)
+    {
+        dspgcs::TelemetryBatchDTO oneItemBatch = MakeBatch();
+        oneItemBatch.items.push_back(item);
+        const std::size_t itemBytes =
+            dspgcs::EncodeTelemetry(sizingEnvelope, oneItemBatch).size() -
+            fixedFrameBytes;
+
+        if (!chunks.back().empty() &&
+            (chunks.back().size() >= MaxTelemetryChunkItems ||
+             currentFrameBytes + itemBytes > MaxTelemetryDatagramBytes))
+        {
+            chunks.emplace_back();
+            currentFrameBytes = fixedFrameBytes;
+        }
+
+        // A single DTO larger than the safe datagram size cannot be sent by
+        // this UDP transport; fail without emitting a partial snapshot.
+        if (currentFrameBytes + itemBytes > MaxTelemetryDatagramBytes)
+        {
+            return false;
+        }
+        currentFrameBytes += itemBytes;
+        chunks.back().push_back(std::move(item));
+    }
+
+    const std::uint32_t chunkCount =
+        static_cast<std::uint32_t>(chunks.size());
+    for (std::uint32_t chunkIndex = 0; chunkIndex < chunkCount; ++chunkIndex)
+    {
+        dspgcs::TelemetryBatchDTO batch = MakeBatch();
+        batch.chunkIndex = chunkIndex;
+        batch.chunkCount = chunkCount;
+        batch.items = std::move(chunks[chunkIndex]);
+
+        dspgcs::MessageEnvelope envelope = MakeEnvelope();
+        envelope.sequence = ++sequence_;
+        std::vector<std::uint8_t> frame =
+            dspgcs::EncodeTelemetry(envelope, batch);
+        if (frame.size() > MaxTelemetryDatagramBytes ||
+            !transport_->Send({ std::move(frame) }))
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 bool DSPGCSProductionTelemetryProvider::SendCommandResult(

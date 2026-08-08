@@ -7,6 +7,8 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/ScopeLock.h"
 
+#include <iterator>
+
 namespace
 {
 	FString FromProtocolString(const std::string& Value)
@@ -106,6 +108,7 @@ void UDSPGCSProductionTelemetryProviderSubsystem::Stop()
 		Transport->Stop();
 		Transport.reset();
 	}
+	ResetPendingTelemetrySnapshot();
 	AdapterRef.Reset();
 }
 
@@ -217,8 +220,17 @@ void UDSPGCSProductionTelemetryProviderSubsystem::HandleTransportFrame(
 		return;
 	}
 
+	dspgcs::TelemetryBatchDTO CompleteBatch;
+	if (!TryAssembleTelemetrySnapshot(
+		Envelope,
+		MoveTemp(Batch),
+		CompleteBatch))
+	{
+		return;
+	}
+
 	const TWeakObjectPtr<UDSPGCSProductionTelemetryProviderSubsystem> WeakThis(this);
-	AsyncTask(ENamedThreads::GameThread, [WeakThis, Envelope, Batch]()
+	AsyncTask(ENamedThreads::GameThread, [WeakThis, Envelope, Batch = MoveTemp(CompleteBatch)]()
 	{
 		UDSPGCSProductionTelemetryProviderSubsystem* Self = WeakThis.Get();
 		UGCSServerAdapterSubsystem* Adapter = Self ? Self->AdapterRef.Get() : nullptr;
@@ -251,4 +263,93 @@ void UDSPGCSProductionTelemetryProviderSubsystem::HandleTransportFrame(
 				Snapshot.FleetRevision);
 		}
 	});
+}
+
+bool UDSPGCSProductionTelemetryProviderSubsystem::TryAssembleTelemetrySnapshot(
+	const dspgcs::MessageEnvelope& Envelope,
+	dspgcs::TelemetryBatchDTO&& Chunk,
+	dspgcs::TelemetryBatchDTO& CompleteBatch)
+{
+	constexpr std::uint32_t MaxSnapshotChunks = 1024;
+	if (Chunk.chunkCount == 0 ||
+		Chunk.chunkCount > MaxSnapshotChunks ||
+		Chunk.chunkIndex >= Chunk.chunkCount)
+	{
+		return false;
+	}
+
+	if (Chunk.chunkCount == 1)
+	{
+		if (Chunk.chunkIndex != 0)
+		{
+			return false;
+		}
+		ResetPendingTelemetrySnapshot();
+		CompleteBatch = MoveTemp(Chunk);
+		return true;
+	}
+
+	if (Chunk.batchMode != dspgcs::BatchMode::Snapshot ||
+		Chunk.snapshotId.empty())
+	{
+		return false;
+	}
+
+	const bool bStartsNewSnapshot =
+		PendingSnapshotSessionID != Envelope.sessionId ||
+		PendingSnapshotID != Chunk.snapshotId ||
+		PendingSnapshotFleetRevision != Chunk.fleetRevision ||
+		PendingSnapshotChunks.size() != Chunk.chunkCount;
+	if (bStartsNewSnapshot)
+	{
+		ResetPendingTelemetrySnapshot();
+		PendingSnapshotSessionID = Envelope.sessionId;
+		PendingSnapshotID = Chunk.snapshotId;
+		PendingSnapshotFleetRevision = Chunk.fleetRevision;
+		PendingSnapshotChunks.resize(Chunk.chunkCount);
+		PendingSnapshotChunksReceived.resize(Chunk.chunkCount, false);
+	}
+
+	const std::size_t ChunkIndex = static_cast<std::size_t>(Chunk.chunkIndex);
+	if (!PendingSnapshotChunksReceived[ChunkIndex])
+	{
+		PendingSnapshotChunks[ChunkIndex] = MoveTemp(Chunk.items);
+		PendingSnapshotChunksReceived[ChunkIndex] = true;
+		++PendingSnapshotReceivedCount;
+	}
+
+	if (PendingSnapshotReceivedCount != PendingSnapshotChunks.size())
+	{
+		return false;
+	}
+
+	CompleteBatch = MoveTemp(Chunk);
+	CompleteBatch.chunkIndex = 0;
+	CompleteBatch.chunkCount = 1;
+	CompleteBatch.items.clear();
+	std::size_t TotalItems = 0;
+	for (const auto& Items : PendingSnapshotChunks)
+	{
+		TotalItems += Items.size();
+	}
+	CompleteBatch.items.reserve(TotalItems);
+	for (auto& Items : PendingSnapshotChunks)
+	{
+		CompleteBatch.items.insert(
+			CompleteBatch.items.end(),
+			std::make_move_iterator(Items.begin()),
+			std::make_move_iterator(Items.end()));
+	}
+	ResetPendingTelemetrySnapshot();
+	return true;
+}
+
+void UDSPGCSProductionTelemetryProviderSubsystem::ResetPendingTelemetrySnapshot()
+{
+	PendingSnapshotSessionID.clear();
+	PendingSnapshotID.clear();
+	PendingSnapshotFleetRevision = 0;
+	PendingSnapshotChunks.clear();
+	PendingSnapshotChunksReceived.clear();
+	PendingSnapshotReceivedCount = 0;
 }
