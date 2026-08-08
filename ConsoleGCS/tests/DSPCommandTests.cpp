@@ -80,7 +80,7 @@ namespace
     }
 }
 
-int main()
+int RunDSPCommandTests()
 {
     if (!SafetyConfig::SAFE_TEST_MODE)
     {

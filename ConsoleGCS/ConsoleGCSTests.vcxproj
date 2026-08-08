@@ -10,7 +10,7 @@
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{2E6AF099-1E31-4D82-9F2F-08C45197A511}</ProjectGuid>
-    <RootNamespace>MavlinkDiscoveryTests</RootNamespace>
+    <RootNamespace>ConsoleGCSTests</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -23,7 +23,7 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup>
-    <IntDir>$(Platform)\$(Configuration)\MavlinkDiscoveryTests\</IntDir>
+    <IntDir>$(Platform)\$(Configuration)\ConsoleGCSTests\</IntDir>
     <OutDir>$(Platform)\$(Configuration)\</OutDir>
   </PropertyGroup>
   <ItemDefinitionGroup>
@@ -40,7 +40,9 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="tests\MavlinkDiscoveryTests.cpp" />
+    <ClCompile Include="tests\ConsolePipelineTests.cpp" />
+    <ClCompile Include="tests\CommandTests.cpp" />
+    <ClCompile Include="tests\DSPCommandTests.cpp" />
     <ClCompile Include="AppConfig.cpp" />
     <ClCompile Include="CommandManager.cpp" />
     <ClCompile Include="MavlinkDiscoveryService.cpp" />
@@ -48,6 +50,7 @@
     <ClCompile Include="MavlinkUdpReceiver.cpp" />
     <ClCompile Include="ConsoleDSPGCSLoopbackTransport.cpp" />
     <ClCompile Include="DSPGCSProductionTelemetryProvider.cpp" />
+    <ClCompile Include="DSPGCSProductionCommandReceiver.cpp" />
     <ClCompile Include="DSPGCSTransportConfigLoader.cpp" />
     <ClCompile Include="DSPGCSTransportFactory.cpp" />
     <ClCompile Include="DroneManager.cpp" />
@@ -74,6 +77,7 @@
     <ClInclude Include="MavlinkUdpReceiver.h" />
     <ClInclude Include="ConsoleDSPGCSLoopbackTransport.h" />
     <ClInclude Include="DSPGCSProductionTelemetryProvider.h" />
+    <ClInclude Include="DSPGCSProductionCommandReceiver.h" />
     <ClInclude Include="DSPGCSTransportConfigLoader.h" />
     <ClInclude Include="SafetyConfig.h" />
   </ItemGroup>

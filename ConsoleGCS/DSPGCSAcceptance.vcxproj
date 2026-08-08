@@ -9,7 +9,7 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion><Keyword>Win32Proj</Keyword>
     <ProjectGuid>{9CB87F91-DC2C-4A3E-9B8A-50E36DB7EC85}</ProjectGuid>
-    <RootNamespace>DSPGCSLoopbackHost</RootNamespace><WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <RootNamespace>DSPGCSAcceptance</RootNamespace><WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">
@@ -17,19 +17,19 @@
     <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries><PlatformToolset>v143</PlatformToolset><CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-  <PropertyGroup><IntDir>$(Platform)\$(Configuration)\DSPGCSLoopbackHost\</IntDir><OutDir>$(Platform)\$(Configuration)\</OutDir></PropertyGroup>
+  <PropertyGroup><IntDir>$(Platform)\$(Configuration)\DSPGCSAcceptance\</IntDir><OutDir>$(Platform)\$(Configuration)\</OutDir></PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile><WarningLevel>Level3</WarningLevel><SDLCheck>true</SDLCheck><ConformanceMode>true</ConformanceMode><LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalIncludeDirectories>$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
     <Link><SubSystem>Console</SubSystem><AdditionalDependencies>%(AdditionalDependencies);ws2_32.lib</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="tests\DSPGCSLoopbackHost.cpp" /><ClCompile Include="tests\DSPGCSTransportFactory.cpp" /><ClCompile Include="tests\LoopbackDSPGCSTransport.cpp" /><ClCompile Include="CommandManager.cpp" /><ClCompile Include="DroneCommandRequest.cpp" />
+    <ClCompile Include="acceptance\DSPGCSAcceptance.cpp" /><ClCompile Include="acceptance\DSPGCSTransportFactory.cpp" /><ClCompile Include="acceptance\LoopbackDSPGCSTransport.cpp" /><ClCompile Include="CommandManager.cpp" /><ClCompile Include="DroneCommandRequest.cpp" />
     <ClCompile Include="DroneManager.cpp" /><ClCompile Include="DroneSession.cpp" /><ClCompile Include="CommandDispatcher.cpp" />
     <ClCompile Include="ConsoleUI.cpp" /><ClCompile Include="DataManager.cpp" /><ClCompile Include="FlightControl.cpp" /><ClCompile Include="FlightData.cpp" />
     <ClCompile Include="HoverTest.cpp" /><ClCompile Include="MavlinkCommand.cpp" /><ClCompile Include="MavlinkParser.cpp" /><ClCompile Include="UdpClient.cpp" />
   </ItemGroup>
-  <ItemGroup><ClInclude Include="..\Shared\DSPGCSProtocol\DSPGCSProtocol.h" /><ClInclude Include="..\Shared\DSPGCSTransport\DSPGCSTransportConfig.h" /><ClInclude Include="..\Shared\DSPGCSTransport\DSPGCSTransportFactory.h" /><ClInclude Include="..\Shared\DSPGCSTransport\IDSPGCSTransport.h" /><ClInclude Include="tests\LoopbackDSPGCSTransport.h" /><ClInclude Include="CommandManager.h" /><ClInclude Include="DroneManager.h" /><ClInclude Include="DroneSession.h" /><ClInclude Include="SafetyConfig.h" /></ItemGroup>
-  <ItemGroup><None Include="config\DSPGCSTransport.ini" /><None Include="tests\config\ReservedUDPTransport.ini" /></ItemGroup>
+  <ItemGroup><ClInclude Include="..\Shared\DSPGCSProtocol\DSPGCSProtocol.h" /><ClInclude Include="..\Shared\DSPGCSTransport\DSPGCSTransportConfig.h" /><ClInclude Include="..\Shared\DSPGCSTransport\DSPGCSTransportFactory.h" /><ClInclude Include="..\Shared\DSPGCSTransport\IDSPGCSTransport.h" /><ClInclude Include="acceptance\LoopbackDSPGCSTransport.h" /><ClInclude Include="CommandManager.h" /><ClInclude Include="DroneManager.h" /><ClInclude Include="DroneSession.h" /><ClInclude Include="SafetyConfig.h" /></ItemGroup>
+  <ItemGroup><None Include="config\DSPGCSTransport.ini" /><None Include="acceptance\config\ReservedUDPTransport.ini" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

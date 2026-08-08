@@ -383,3 +383,21 @@ Console在万机持续MAVLink流量下无法维持全部Session Online。
 - Niagara update time
 
 再决定优化位置。
+
+## 19. Test Architecture
+
+测试资产分为三层，任何测试都不得进入 Production 运行调用链：
+
+- **Production**：`ConsoleGCS/DroneGCS.vcxproj` 与 Unreal `DroneShowPlatform1` Module，提供实际运行能力。
+- **Regression Test**：Console 使用单一 `ConsoleGCSTests` 可执行工程；UE 使用 `Private/Tests/` 下的 `DroneGCS.*` Automation Tests。
+- **Acceptance Tool**：`DSPGCSAcceptance` 是独立跨进程 Loopback 验收工具，用于 UE 手工联调，不是单元测试，也不由 Production 自动启动。
+
+Console 回归源码按领域组织：
+
+- `ConsolePipelineTests.cpp`：配置、MAVLink UDP、Endpoint Identity、Session 生命周期、GPS 权威、ACK 路由、DSP Snapshot/Chunk。
+- `CommandTests.cpp`：MAVLink Command packet、LAND=21、SET_MODE、CommandManager SAFE_TEST 行为。
+- `DSPCommandTests.cpp`：DSP Command/Result envelope、多目标命令与安全策略。
+
+UE 回归继续按 Fleet、DSP Chunk、Telemetry Link、UI Selection、Visualization 领域拆分。长期保护的核心语义包括 Endpoint Identity、Offline Session 保留与 Recovery、GPS #24/#33 职责、Command/ACK 路由、1000 架 Snapshot 原子重组、Telemetry Link Lost、DroneOrder/Selection/FleetGeoOrigin、ParticleIndex 稳定。
+
+具体运行方式见 `Docs/Test_Architecture_CN.md`。

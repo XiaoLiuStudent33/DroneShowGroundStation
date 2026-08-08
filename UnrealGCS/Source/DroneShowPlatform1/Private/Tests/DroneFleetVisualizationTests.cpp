@@ -231,7 +231,7 @@ bool FDroneFleetVisualizationBridgeTest::RunTest(const FString& Parameters)
 	UE_LOG(
 		LogTemp,
 		Display,
-		TEXT("[DRONE_FLEET_VIZ_TEST] phase4Cesium=PASS originLocked=PASS invalidGPSZero=PASS gpsRecovery=PASS fleet100=PASS"));
+		TEXT("[DRONE_FLEET_VIZ_TEST] cesium=PASS originLocked=PASS invalidGPSZero=PASS gpsRecovery=PASS fleet100=PASS"));
 
 	World->DestroyActor(Visualization);
 	GameInstance->Shutdown();

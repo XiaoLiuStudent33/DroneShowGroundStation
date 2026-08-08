@@ -28,6 +28,9 @@ extern "C"
 #include "ardupilotmega/mavlink.h"
 }
 
+int RunCommandTests();
+int RunDSPCommandTests();
+
 namespace
 {
     void Expect(const bool condition, const std::string& message)
@@ -684,7 +687,7 @@ RemotePort=12002
         {
             request.targetDroneIds.push_back(session->GetDroneId());
         }
-        request.source = "Phase7.1MultiTargetEndpointTest";
+        request.source = "EndpointCommandRoutingTest";
         Expect(
             commandManager.Submit(request),
             "multi-target ARM tasks were not queued");
@@ -755,7 +758,7 @@ RemotePort=12002
     }
 }
 
-int main()
+int RunConsolePipelineTests()
 {
     try
     {
@@ -763,7 +766,7 @@ int main()
             SafetyConfig::REAL_COMMAND_ENABLED)
         {
             throw std::runtime_error(
-                "Discovery tests require SAFE_TEST_MODE and real commands disabled");
+                "Console pipeline tests require SAFE_TEST_MODE and real commands disabled");
         }
 
         VerifyProductionConfigurationLoading();
@@ -1363,4 +1366,23 @@ int main()
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
     }
+}
+
+int main()
+{
+    const int pipelineResult = RunConsolePipelineTests();
+    const int commandResult = RunCommandTests();
+    const int dspCommandResult = RunDSPCommandTests();
+
+    if (pipelineResult == 0 && commandResult == 0 && dspCommandResult == 0)
+    {
+        std::cout << "ConsoleGCS regression suite passed\n";
+        return 0;
+    }
+
+    std::cerr
+        << "ConsoleGCS regression suite failed: pipeline=" << pipelineResult
+        << " command=" << commandResult
+        << " dspCommand=" << dspCommandResult << '\n';
+    return 1;
 }

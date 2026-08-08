@@ -233,7 +233,7 @@ int main(int argc, char** argv)
 {
     if (!SafetyConfig::SAFE_TEST_MODE)
     {
-        std::cerr << "DSP-GCS loopback host refuses to start unless SAFE_TEST_MODE=true\n";
+        std::cerr << "DSP-GCS acceptance tool refuses to start unless SAFE_TEST_MODE=true\n";
         return 2;
     }
 
@@ -423,7 +423,7 @@ int main(int argc, char** argv)
 
         if (sawSingleArm && sawMultiHover && receivedCommands >= 2)
         {
-            std::cout << "DSP-GCS LOOPBACK PASS telemetry=3 singleArm=1 multiHover=3 resultsPerDrone=1\n";
+            std::cout << "DSP-GCS ACCEPTANCE PASS telemetry=3 singleArm=1 multiHover=3 resultsPerDrone=1\n";
             transport->Stop();
             return 0;
         }
@@ -431,7 +431,7 @@ int main(int argc, char** argv)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    std::cerr << "DSP-GCS LOOPBACK TIMEOUT singleArm=" << sawSingleArm << " multiHover=" << sawMultiHover << '\n';
+    std::cerr << "DSP-GCS ACCEPTANCE TIMEOUT singleArm=" << sawSingleArm << " multiHover=" << sawMultiHover << '\n';
     transport->Stop();
     return 6;
 }
