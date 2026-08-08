@@ -233,13 +233,27 @@ Future / Planned：淡紫色 Offline 表现和粒子 DisplayID 数字显示尚�
 |---|---|---|
 | Production | Console MAVLink/Discovery/Session/Command/DSP；UE Production Provider、Adapter、Fleet、UI、Cesium/Niagara | 当前真实运行链 |
 | Production / Loopback | Console/UE `DSPGCSLoopbackTransport` | 当前 Production 同机 DSP 通道正在使用 |
-| Mock | `MockDroneDataSubsystem` | `UseMockData=False`，当前关闭 |
-| Acceptance / Loopback Test | `DSPGCSLoopbackProviderSubsystem` | `[DSPGCS.Transport] Enabled=False`，当前关闭 |
+| Developer Mock | `Public/Developer/Mock/MockDroneDataSubsystem.h` | 仅供无 Console 时开发 UI/Fleet；`[DroneGCS.Developer.Mock] Enabled=False`，缺失配置也保持关闭 |
+| Developer Acceptance | `Public/Developer/Acceptance/DSPGCSLoopbackProviderSubsystem.h` | 与 Console `DSPGCSAcceptance` 配对进行跨进程验收；`[DroneGCS.Developer.Acceptance] Enabled=False` |
 | Removed in Cleanup Phase 3A | Console GCS1 `CommandProtocol/UdpCommandServer/DroneControlService` | Console 端旧 10006 文本服务已移除；当前唯一 Production 命令入口为 `DSPGCSProductionCommandReceiver` |
 | Removed in Cleanup Phase 3B | UE `DroneCommandSubsystem/GCSCommandTypes` | 旧 10006/GCS1 命令客户端与 `[DroneGCS.Network]` 配置已移除；当前唯一 UE Production 命令入口为 `DSPGCSProductionCommandProviderSubsystem` |
 | Removed in Cleanup Phase 3C | Console Legacy Single Session / fixed Target / per-Session Socket | `target_ip/target_port/local_port`、`RunLegacySingleSession` 与独立 `UdpClient` Socket 已移除；Session 只能由 `DroneManager` 按实际 Remote Endpoint 建立 |
 | Removed in Cleanup Phase 3D | UE `DroneActor/BP_DroneController` 单机可视化 | C++ 类、无引用 Blueprint 和主地图中的旧 Actor 实例已移除；唯一 Production 可视化入口为 `DroneFleetVisualizationActor` |
 | Test Only | Console test projects、UE Automation Tests | 不进入 Production |
+
+Production 不依赖 Developer Mock、Developer Acceptance 或 Regression Test。Developer Provider 只能复用 Production interface；Production Provider 启动失败时进入 `Disconnected/Link Lost`，不会回退到 Mock。当前只有两个 Developer UCLASS，独立 Module 会额外引入 `Build.cs`、模块加载和 Standalone/Commandlet 编译边界，因此 Cleanup Phase 3H 采用 `Public|Private/Developer/{Mock,Acceptance}` 物理隔离，不增加 Module，也不使用未经证明的 `WITH_EDITOR` 条件。
+
+开发者入口如下：
+
+| 目标 | 直接入口 |
+|---|---|
+| 正式 Telemetry Provider | `DSPGCSProductionTelemetryProviderSubsystem` |
+| 正式 Command Provider | `DSPGCSProductionCommandProviderSubsystem` |
+| 正式 DSP Transport | `DSPGCSLoopbackTransport`（名称含 Loopback，但它是 localhost Production UDP） |
+| UE Mock | `Source/DroneShowPlatform1/{Public,Private}/Developer/Mock/` |
+| UE Acceptance | `Source/DroneShowPlatform1/{Public,Private}/Developer/Acceptance/` |
+| UE Regression Test | `Source/DroneShowPlatform1/Private/Tests/` |
+| Console Acceptance Tool | `ConsoleGCS/acceptance/` + `DSPGCSAcceptance.vcxproj` |
 
 ## 16. 当前 IP 与端口
 
@@ -393,7 +407,7 @@ Console在万机持续MAVLink流量下无法维持全部Session Online。
 
 - **Production**：`ConsoleGCS/DroneGCS.vcxproj` 与 Unreal `DroneShowPlatform1` Module，提供实际运行能力。
 - **Regression Test**：Console 使用单一 `ConsoleGCSTests` 可执行工程；UE 使用 `Private/Tests/` 下的 `DroneGCS.*` Automation Tests。
-- **Acceptance Tool**：`DSPGCSAcceptance` 是独立跨进程 Loopback 验收工具，用于 UE 手工联调，不是单元测试，也不由 Production 自动启动。
+- **Acceptance Tool**：Console `DSPGCSAcceptance` 与 UE `Developer/Acceptance/DSPGCSLoopbackProviderSubsystem` 是独立跨进程 Loopback 验收对，不是单元测试，也不由 Production 自动启动。
 
 Console 回归源码按领域组织：
 

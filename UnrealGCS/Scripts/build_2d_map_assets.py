@@ -1,7 +1,13 @@
 import unreal
+from pathlib import Path
 
 
-SOURCE_IMAGE = r"C:\Users\13092\Documents\无人机地面站\UnrealGCS\SourceData\Map\T_GCS_VenueMap_31.932471N_118.638531E_2km.jpg"
+SOURCE_IMAGE = str(
+    Path(__file__).resolve().parents[1]
+    / "SourceData"
+    / "Map"
+    / "T_GCS_VenueMap_31.932471N_118.638531E_2km.jpg"
+)
 TEXTURE_PATH = "/Game/Map/Textures"
 MATERIAL_PATH = "/Game/Map/Materials"
 TEXTURE_NAME = "T_GCS_VenueMap"

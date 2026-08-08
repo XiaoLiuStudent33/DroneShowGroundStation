@@ -1,10 +1,10 @@
 /**
  * @brief 实现旧 Stage 4.2 Loopback acceptance 命令/遥测验证流程。
  *
- * 分类：Acceptance / Loopback Test；当前 Production 配置关闭。
+ * 分类：Developer Acceptance；与 Console DSPGCSAcceptance 配对，默认关闭。
  * 它是测试 Provider，而 FDSPGCSLoopbackTransport 同时仍是 Production Transport。
  */
-#include "DSPGCSLoopbackProviderSubsystem.h"
+#include "Developer/Acceptance/DSPGCSLoopbackProviderSubsystem.h"
 
 #include "Async/Async.h"
 #include "DSPGCSProtocol.h"
@@ -62,8 +62,8 @@ void UDSPGCSLoopbackProviderSubsystem::Initialize(FSubsystemCollectionBase& Coll
 	Super::Initialize(Collection);
 	Collection.InitializeDependency<UGCSServerAdapterSubsystem>();
 
-	GConfig->GetBool(TEXT("DSPGCS.Transport"), TEXT("Enabled"), bEnabled, GGameIni);
-	GConfig->GetBool(TEXT("DSPGCS.Transport"), TEXT("SafeTestMode"), bSafeTestMode, GGameIni);
+	GConfig->GetBool(TEXT("DroneGCS.Developer.Acceptance"), TEXT("Enabled"), bEnabled, GGameIni);
+	GConfig->GetBool(TEXT("DroneGCS.Developer.Acceptance"), TEXT("SafeTestMode"), bSafeTestMode, GGameIni);
 	if (!bEnabled)
 	{
 		return;
@@ -125,11 +125,11 @@ bool UDSPGCSLoopbackProviderSubsystem::CreateTransport()
 	FString UnrealBindIPString = ConsoleIPString;
 	int32 ConsolePort = dspgcs::DSPGCSDefaults::ConsoleBindPort;
 	int32 UnrealPort = dspgcs::DSPGCSDefaults::UnrealBindPort;
-	GConfig->GetString(TEXT("DSPGCS.Transport"), TEXT("TransportType"), TransportTypeString, GGameIni);
-	GConfig->GetString(TEXT("DSPGCS.Transport"), TEXT("RemoteAddress"), ConsoleIPString, GGameIni);
-	GConfig->GetString(TEXT("DSPGCS.Transport"), TEXT("BindAddress"), UnrealBindIPString, GGameIni);
-	GConfig->GetInt(TEXT("DSPGCS.Transport"), TEXT("RemotePort"), ConsolePort, GGameIni);
-	GConfig->GetInt(TEXT("DSPGCS.Transport"), TEXT("BindPort"), UnrealPort, GGameIni);
+	GConfig->GetString(TEXT("DroneGCS.Developer.Acceptance"), TEXT("TransportType"), TransportTypeString, GGameIni);
+	GConfig->GetString(TEXT("DroneGCS.Developer.Acceptance"), TEXT("RemoteAddress"), ConsoleIPString, GGameIni);
+	GConfig->GetString(TEXT("DroneGCS.Developer.Acceptance"), TEXT("BindAddress"), UnrealBindIPString, GGameIni);
+	GConfig->GetInt(TEXT("DroneGCS.Developer.Acceptance"), TEXT("RemotePort"), ConsolePort, GGameIni);
+	GConfig->GetInt(TEXT("DroneGCS.Developer.Acceptance"), TEXT("BindPort"), UnrealPort, GGameIni);
 
 	if (!dspgcs::TryParseTransportType(TCHAR_TO_UTF8(*TransportTypeString), TransportConfig.type))
 	{

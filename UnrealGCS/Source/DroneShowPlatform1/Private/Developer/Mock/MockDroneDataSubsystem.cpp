@@ -1,9 +1,9 @@
 /**
  * @brief 实现可配置的 Mock Fleet 快照与更新。
  *
- * 分类：Mock；用于无 Console/DSP 时的开发验证，当前 Production 配置关闭。
+ * 分类：Developer Mock；用于无 Console/DSP 时的 UI/Fleet 开发，绝不作为 Production fallback。
  */
-#include "MockDroneDataSubsystem.h"
+#include "Developer/Mock/MockDroneDataSubsystem.h"
 
 #include "GCSServerAdapterSubsystem.h"
 #include "Misc/ConfigCacheIni.h"
@@ -13,16 +13,18 @@ void UMockDroneDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Super::Initialize(Collection);
 	Collection.InitializeDependency<UGCSServerAdapterSubsystem>();
 
-	bool bUseMockData = true;
+	bool bEnabled = false;
 	GConfig->GetBool(
-		TEXT("DroneGCS.Data"),
-		TEXT("UseMockData"),
-		bUseMockData,
+		TEXT("DroneGCS.Developer.Mock"),
+		TEXT("Enabled"),
+		bEnabled,
 		GGameIni);
-	if (!bUseMockData)
+	if (!bEnabled)
 	{
 		return;
 	}
+
+	UE_LOG(LogTemp, Display, TEXT("[Developer Mock] Enabled: publishing local UI/Fleet data."));
 
 	UGCSServerAdapterSubsystem* Adapter =
 		GetGameInstance()->GetSubsystem<UGCSServerAdapterSubsystem>();

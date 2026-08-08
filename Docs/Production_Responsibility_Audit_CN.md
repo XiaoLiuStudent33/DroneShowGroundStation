@@ -76,8 +76,8 @@ UMG -> UGCSUIBridgeSubsystem -> UDSPGCSProductionCommandProviderSubsystem
 | `UGCSDroneRowView` | 单行 DroneID 到选中 Overlay 的映射 | row ID/overlay/selected | row bind/detail selection | row visual | UIBridge | UMG | GameThread | 是，Blueprint row view seam | 无 | 否 | 否 | 是 | 低 | R0；薄但有解耦价值 |
 | `ADroneFleetVisualizationActor` | Stable DroneOrder 到 Cesium World/Niagara arrays | actor/component/cache/arrays/origin world | Fleet events | one Niagara component arrays | level/FleetManager | Cesium/Niagara | GameThread/event-driven | 是，visualization boundary | 无 per-drone path | 否 | 否 | 是 | 高 | R0 |
 | `FDroneData` / `GCSDataTypes` | UE 领域 DTO、Snapshot/Delta contract、consumer GPS guard | 值类型 | Provider DTO | Adapter/Fleet/UI/Viz | 全 UE 数据链 | Core types | 跨线程复制，GameThread消费 | 是 | Console FlightData 是跨进程前模型 | 否 | 否 | 是 | 高 | R0 |
-| `UMockDroneDataSubsystem` | 本地 UI 开发 Mock Snapshot | adapter ref | fixed seeds | Adapter snapshot | subsystem lifecycle | Adapter | GameThread | 是，development provider | 不与 Production 同时启用 | 否 | 否 | 是（开发） | 低 | R0；`UseMockData=False` |
-| `UDSPGCSLoopbackProviderSubsystem` | Stage 4 Acceptance 遥测/命令验收 | transport/acceptance counters | DSP frame | Adapter/acceptance commands | subsystem lifecycle | Protocol/Factory/Adapter | receive worker + GameThread | 是，acceptance tool | `ToFleetDrone` 与 Production 类似，但不应反向塑造 Production | 否 | 可未来移 Developer module | 是（验收） | 中 | R2 可强化打包隔离；当前 `Enabled=False` |
+| `UMockDroneDataSubsystem`（`Developer/Mock`） | 本地 UI 开发 Mock Snapshot | adapter ref | fixed seeds | Adapter snapshot | subsystem lifecycle | Adapter | GameThread | 是，developer mock | 不与 Production 同时启用 | 否 | 否 | 是（开发） | 低 | Phase 3H Resolved；显式配置且缺失时均默认关闭 |
+| `UDSPGCSLoopbackProviderSubsystem`（`Developer/Acceptance`） | Stage 4 跨进程遥测/命令验收 | transport/acceptance counters | DSP frame | Adapter/acceptance commands | subsystem lifecycle | Protocol/Factory/Adapter | receive worker + GameThread | 是，acceptance tool | `ToFleetDrone` 与 Production 类似，但不应反向塑造 Production | 否 | 否 | 是（验收） | 低 | Phase 3H Resolved；与 Console `DSPGCSAcceptance` 配对，显式配置且默认关闭 |
 
 ## 4. 重复规则审计
 
@@ -147,7 +147,7 @@ LOC 为当前 header+cpp 物理行数；方法/成员按头文件可见声明计
 
 ## 7. Top Maintenance Risks
 
-1. Mock/Acceptance Provider 仍编译在 Runtime Module，虽然默认关闭；配置误开或未来打包规则变化时边界弱于独立 Developer Module。
+1. Developer Provider 仍编译在 Runtime Module；Phase 3H 已用独立目录、独立配置段和“缺失配置仍关闭”消除误启用风险。若未来 Developer 类显著增长，再评估独立 Module。
 2. `GCSUIBridgeSubsystem` 虽已移出纯展示 helper，仍同时协调导航、分页、详情、选择和命令；后续只按真实变化再评估，不拆多个 Subsystem。
 3. `ConsoleGCSApplication` 作为 composition root 同时组装网络、DSP、线程和主循环；新增服务前应控制继续增长。
 4. UE 分片重组仍位于 Telemetry Provider 内；只有协议复杂度继续增长时才提取纯 assembler。
@@ -180,7 +180,7 @@ LOC 为当前 header+cpp 物理行数；方法/成员按头文件可见声明计
 
 ### R2 Phase 3G 结果
 
-本阶段指定的五项均已 Resolved。Mock/Acceptance Provider 的 Developer Module 隔离仍为 R2 候选，本阶段未处理。
+本阶段指定的五项均已 Resolved。Phase 3H 随后完成 Mock/Acceptance 轻量边界隔离；当前规模不创建 Developer Module。
 
 ### R3 暂时不要动
 
@@ -189,7 +189,7 @@ LOC 为当前 header+cpp 物理行数；方法/成员按头文件可见声明计
 - Adapter/FleetManager 合并或删除 Transport interface。
 - DSP Wire Format、MAVLink message、Cesium/Niagara、Selection、FleetGeoOrigin 和性能参数。
 
-## 10. Target Architecture（逻辑分区，不移动目录）
+## 10. Target Architecture
 
 ```text
 Console
@@ -202,14 +202,36 @@ Command    CommandManager / CommandDispatcher / FlightControl / HoverTest
 DSP        ProductionTelemetryProvider / ProductionCommandReceiver / Transport
 UI         ConsoleUI
 
-Unreal
+Unreal Production
 DSP        Production Providers / Transport / Factory
 Fleet      GCSServerAdapter / FleetManager / DroneData contracts
 Command    ProductionCommandProvider
 UI         GCSUIBridge / GCSDroneRowView
 Visualization DroneFleetVisualizationActor / Cesium / Niagara
-Development Mock Provider
-Acceptance Loopback Provider
+
+Unreal Developer
+Mock       Public|Private/Developer/Mock
+Acceptance Public|Private/Developer/Acceptance
+
+Unreal Tests
+Regression Private/Tests
 ```
 
-该目标保留边界并减少重复 Owner；Phase 3F 不移动目录、不重命名公共类、不改变 Production 业务行为。
+该结构保留边界并减少重复 Owner；Cleanup Phase 3H 只移动 Developer Provider，不移动 Production 目录、不重命名公共类、不改变 Production 业务行为。
+
+## 11. Cleanup Phase 3H：Developer Runtime 边界
+
+| Class / File | Category | Current Purpose | Enabled By | Default Enabled | Production / Asset / Test Reference | Runtime State | Shipping Needed | Action / Risk |
+|---|---|---|---|---|---|---|---|---|
+| `FDSPGCSLoopbackTransport` | Production | localhost UDP 双向 DSP Transport | Production Provider | 是 | Production Provider / 无资产引用 | socket receiver | 是 | 保留；`Loopback` 描述同机地址，不表示 Test |
+| `UDSPGCSProductionTelemetryProviderSubsystem` | Production | decode、chunk reassembly、link health | Production config | 是 | Production | transport/assembly/link | 是 | 保留 |
+| `UDSPGCSProductionCommandProviderSubsystem` | Production | Command request/result | UI Bridge | 是 | Production | pending command | 是 | 保留 |
+| `Developer/Mock/UMockDroneDataSubsystem` | Developer Mock | 无 Console 时提供 5 架固定 Fleet 数据供 UI 开发 | `[DroneGCS.Developer.Mock] Enabled=True` | 否；配置缺失也否 | 无 Production、Blueprint、Map、Automation 引用 | 仅显式启用时注册 Provider | 否（当前开发用途） | 保留；低风险 |
+| `Developer/Acceptance/UDSPGCSLoopbackProviderSubsystem` | Developer Acceptance | 配合 Console 工具做 3 架遥测、命令和结果跨进程验收 | `[DroneGCS.Developer.Acceptance] Enabled=True` | 否 | 无 Production、Blueprint、Map、Automation 引用 | 仅显式启用时创建验收 Transport | 否（当前验收用途） | 保留；低风险 |
+| `ConsoleGCS/DSPGCSAcceptance.vcxproj` | Acceptance Tool | Console/UE 跨进程协议验收 host | 独立 exe 手工启动 | 否 | 不由 `DroneGCS.exe` 或 Regression Test 链接 | 独立进程 | 否 | 保留独立 Project |
+
+依赖方向固定为：`Production` 不依赖 `Mock/Acceptance/Test`；`Developer Mock/Acceptance` 依赖 Production interface；`Regression Test` 依赖 Production。Production Provider 初始化失败只产生 `Disconnected/Error/Link Lost`，不存在自动切换 Mock 的 fallback。
+
+当前只有两个 Developer UCLASS。为它们新增 Module 会引入额外 `Build.cs`、`.uproject` 模块声明、加载时机和 Standalone/Commandlet 测试边界，维护成本高于收益，因此本阶段不创建 Developer Module，也不加未经验证的 `WITH_EDITOR` 编译条件。
+
+`DSPGCSLoopbackTransport` 将来可评估重命名为 `DSPGCSUdpTransport`，以减少人工误判；这是涉及 Production 公共名称的后续 R2 候选，本阶段不实施。

@@ -1,8 +1,8 @@
 /**
  * @brief 向 GCSServerAdapter 提供本地假数据的开发验证 Provider。
  *
- * 分类：Mock。
- * 当前 Production 配置 UseMockData=False，Subsystem 初始化后不会发布 Mock Fleet。
+ * 分类：Developer Mock。
+ * 仅由 [DroneGCS.Developer.Mock] Enabled=True 显式启用；缺失配置时保持关闭。
  */
 #pragma once
 
