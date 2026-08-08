@@ -1,6 +1,6 @@
-# Production 职责审计（Cleanup Phase 3F）
+# Production 职责审计（Architecture Freeze 基线）
 
-审计基线：`master`，`5bd0060 Cleanup Phase 3E: consolidate regression test suite`。本文件只描述当前代码与下一阶段候选，不改变 Endpoint、Session、MAVLink、DSP、Fleet、Cesium 或 Niagara 语义。
+最终审计基线：`master`，Cleanup Phase 3A~3H 已完成。本文描述 Architecture Freeze 时的当前代码；冻结规则与维护入口见 [`Architecture_Freeze_CN.md`](Architecture_Freeze_CN.md)。
 
 ## 1. 统计口径与 Production 主链
 

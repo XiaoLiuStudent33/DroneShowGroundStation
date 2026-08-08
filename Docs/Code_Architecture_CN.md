@@ -91,6 +91,8 @@ Offline 只改变在线状态。必须继续保留：
 - `GLOBAL_POSITION_INT #33` 只更新相对高度和融合运动状态，不得覆盖绝对经纬高。
 - 海拔 `0m` 可以是合法海平面高度，不能单独判定 GPS 无效。
 
+Inbound ArduPilot Copter `custom_mode` 的显示映射由 `MavlinkParser::GetModeName` 唯一维护：`STABILIZE=0`、`ACRO=1`、`ALT_HOLD=2`、`AUTO=3`、`GUIDED=4`、`LOITER=5`、`RTL=6`、`CIRCLE=7`、`LAND=9`、`SPORT=13`、`POSHOLD=16`、`BRAKE=17`。Outbound `SET_MODE` 白名单属于命令安全规则，不与 Inbound 显示映射合并。
+
 ## 7. MAVLink Outbound
 
 | Message ID | Name | 当前用途 |
@@ -352,18 +354,11 @@ Safety Policy 继续要求真实命令开关、Production MAVLink、DSP Command 
 
 Future / Planned：如果 DSP-GCS 需要跨机器部署，可新增共享 Deployment Profile 生成两端配置；在此之前不让 UE 直接依赖 Console 私有配置文件。
 
-## 18. Future / Planned 整理方向
+## 18. Architecture Freeze 与 Future Only
 
-Production 职责、重复规则、保留边界和 R0/R1/R2/R3 计划见 [`Production_Responsibility_Audit_CN.md`](Production_Responsibility_Audit_CN.md)。Cleanup Phase 3G 已完成五项 R2 收敛：Datagram decode 只由 `MavlinkReadOnlyIngress` 负责；Drone nullable 查询统一为 `FindDrone`；`FlightControl` 不再暴露正式命令旁路；`GCSServerAdapterSubsystem` 成为唯一 Fleet GameThread 提交边界；`FGCSUIWidgetPresenter` 承担无状态 Widget 查找与展示，`GCSUIBridgeSubsystem` 继续拥有 UI 生命周期、Selection、Command 和 Fleet 事件协调。
+最终冻结规则、Production 调用树和 Developer Entry Map 见 [`Architecture_Freeze_CN.md`](Architecture_Freeze_CN.md)。Production 职责证据见 [`Production_Responsibility_Audit_CN.md`](Production_Responsibility_Audit_CN.md)。Datagram decode 只由 `MavlinkReadOnlyIngress` 负责；Drone nullable 查询统一为 `FindDrone`；`FlightControl` 不暴露正式命令旁路；`GCSServerAdapterSubsystem` 是唯一 Fleet GameThread 提交边界；`FGCSUIWidgetPresenter` 只负责无状态展示，`GCSUIBridgeSubsystem` 负责 UI 协调。
 
-未来可按以下模块域整理，但本轮没有移动任何文件：
-
-```text
-Console: App / Config / Network / Mavlink / Fleet / Command / DSP / UI / Tests
-Unreal:  Core / Fleet / DSP / Command / UI / Visualization / Simulation / Acceptance / Legacy / Tests
-```
-
-未来 Cleanup 必须分阶段编译提交，且不得破坏 Endpoint 身份、Offline Session 保留、#24/#33 职责、DSP Snapshot 原子提交和 DroneOrder/ParticleIndex 稳定映射。
+Cleanup 到此结束。以后只有明确 Bug、明确新功能或测量证实的性能瓶颈可以改变冻结边界；不再以减少文件、继续抽象或目录美化为理由启动架构清理。
 
 【已知规模基线：10000 Drone】
 
