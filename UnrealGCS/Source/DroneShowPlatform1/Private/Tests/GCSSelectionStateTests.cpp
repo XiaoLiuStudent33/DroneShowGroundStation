@@ -7,6 +7,7 @@
 #include "Components/Border.h"
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
+#include "DSPGCSProductionCommandProviderSubsystem.h"
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
 #include "DroneData.h"
 #include "Engine/Engine.h"
@@ -35,12 +36,70 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 		GameInstance->GetSubsystem<UFleetManagerSubsystem>();
 	UGCSUIBridgeSubsystem* Bridge =
 		GameInstance->GetSubsystem<UGCSUIBridgeSubsystem>();
+	UDSPGCSProductionCommandProviderSubsystem* Commands =
+		GameInstance->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>();
+	UDSPGCSProductionTelemetryProviderSubsystem* ProductionTelemetry =
+		GameInstance->GetSubsystem<UDSPGCSProductionTelemetryProviderSubsystem>();
 	if (!TestNotNull(TEXT("FleetManager subsystem initialized"), Fleet)
-		|| !TestNotNull(TEXT("GCSUIBridge subsystem initialized"), Bridge))
+		|| !TestNotNull(TEXT("GCSUIBridge subsystem initialized"), Bridge)
+		|| !TestNotNull(TEXT("Production command provider initialized"), Commands)
+		|| !TestNotNull(TEXT("Production telemetry provider initialized"), ProductionTelemetry))
 	{
 		GameInstance->Shutdown();
 		return false;
 	}
+
+	const TArray<FString> ProviderTargets{ TEXT("Drone001") };
+	FGCSProductionCommandParameters DefaultCommandParameters;
+	TestTrue(
+		TEXT("ServerDisconnected rejects Production command"),
+		Commands->SubmitCommand(
+			EGCSProductionCommandType::Arm,
+			ProviderTargets,
+			DefaultCommandParameters).IsEmpty());
+
+	ProductionTelemetry->MarkValidTelemetryReceivedAt(FPlatformTime::Seconds());
+	TestTrue(TEXT("Production command provider enabled"), Commands->IsEnabled());
+	TestTrue(TEXT("Production telemetry link connected"), ProductionTelemetry->IsTelemetryLinkConnected());
+	const auto SubmitAndRequireID = [this, Commands, &ProviderTargets](
+		const TCHAR* Label,
+		const EGCSProductionCommandType Type,
+		const FGCSProductionCommandParameters& CommandParameters)
+	{
+		TestFalse(
+			Label,
+			Commands->SubmitCommand(Type, ProviderTargets, CommandParameters).IsEmpty());
+	};
+
+	SubmitAndRequireID(TEXT("ARM uses Production Provider"), EGCSProductionCommandType::Arm, DefaultCommandParameters);
+	SubmitAndRequireID(TEXT("DISARM uses Production Provider"), EGCSProductionCommandType::Disarm, DefaultCommandParameters);
+
+	FGCSProductionCommandParameters GuidedParameters;
+	GuidedParameters.CustomMode = 4;
+	GuidedParameters.ModeName = TEXT("GUIDED");
+	SubmitAndRequireID(TEXT("GUIDED uses Production SET_MODE"), EGCSProductionCommandType::SetMode, GuidedParameters);
+
+	FGCSProductionCommandParameters StabilizeParameters;
+	StabilizeParameters.CustomMode = 0;
+	StabilizeParameters.ModeName = TEXT("STABILIZE");
+	SubmitAndRequireID(TEXT("STABILIZE uses Production SET_MODE"), EGCSProductionCommandType::SetMode, StabilizeParameters);
+
+	FGCSProductionCommandParameters AutoParameters;
+	AutoParameters.CustomMode = 3;
+	AutoParameters.ModeName = TEXT("AUTO");
+	SubmitAndRequireID(TEXT("AUTO uses Production SET_MODE"), EGCSProductionCommandType::SetMode, AutoParameters);
+
+	FGCSProductionCommandParameters TakeoffParameters;
+	TakeoffParameters.TakeoffAltitudeMeters = 1.0f;
+	SubmitAndRequireID(TEXT("TAKEOFF uses Production Provider"), EGCSProductionCommandType::Takeoff, TakeoffParameters);
+	SubmitAndRequireID(TEXT("LAND uses Production Provider"), EGCSProductionCommandType::Land, DefaultCommandParameters);
+	SubmitAndRequireID(TEXT("RTL uses Production Provider"), EGCSProductionCommandType::RTL, DefaultCommandParameters);
+
+	Commands->SetControlMode(EGCSGroundStationControlMode::Autonomous);
+	FGCSProductionCommandParameters HoverParameters;
+	HoverParameters.HoverAltitudeMeters = 5.0f;
+	SubmitAndRequireID(TEXT("HOVER uses Production Provider"), EGCSProductionCommandType::HoverTest, HoverParameters);
+	SubmitAndRequireID(TEXT("STOP uses Production LAND"), EGCSProductionCommandType::Land, DefaultCommandParameters);
 
 	for (int32 Index = 1; Index <= 4; ++Index)
 	{

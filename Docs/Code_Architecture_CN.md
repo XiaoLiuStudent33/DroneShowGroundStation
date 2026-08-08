@@ -223,7 +223,7 @@ Future / Planned：淡紫色 Offline 表现和粒子 DisplayID 数字显示尚�
 | Mock | `MockDroneDataSubsystem` | `UseMockData=False`，当前关闭 |
 | Acceptance / Loopback Test | `DSPGCSLoopbackProviderSubsystem` | `[DSPGCS.Transport] Enabled=False`，当前关闭 |
 | Removed in Cleanup Phase 3A | Console GCS1 `CommandProtocol/UdpCommandServer/DroneControlService` | Console 端旧 10006 文本服务已移除；当前唯一 Production 命令入口为 `DSPGCSProductionCommandReceiver` |
-| Legacy / Disabled | UE `DroneCommandSubsystem/GCSCommandTypes` | 旧 10006 客户端仍保留且 `Enabled=False`，等待 Cleanup Phase 3B 单独处理 |
+| Removed in Cleanup Phase 3B | UE `DroneCommandSubsystem/GCSCommandTypes` | 旧 10006/GCS1 命令客户端与 `[DroneGCS.Network]` 配置已移除；当前唯一 UE Production 命令入口为 `DSPGCSProductionCommandProviderSubsystem` |
 | Legacy Single-Drone Visualization | `DroneActor` | 不参与 Fleet/Niagara；当前地图/Blueprint 仍引用，Runtime 可能 Tick |
 | Test Only | Console test projects、UE Automation Tests | 不进入 Production |
 
@@ -235,7 +235,7 @@ Future / Planned：淡紫色 Offline 表现和粒子 DisplayID 数字显示尚�
 | `127.0.0.1:12001` | Console DSP-GCS bind；接收 UE command，发送端身份 |
 | `127.0.0.1:12002` | UE DSP-GCS bind；接收 Console telemetry/result |
 | `10005` | `gcs-config.ini.example` 示例端口，不是当前 Production |
-| `10006` | 旧 GCS1 文本命令链端口；Console 服务已在 Cleanup Phase 3A 移除，UE Legacy 客户端配置仍保留且禁用 |
+| `10006` | 旧 GCS1 文本命令链端口；Console 服务与 UE 客户端已分别在 Cleanup Phase 3A/3B 移除，当前 Runtime 不再使用该端口 |
 
 `127.0.0.1` 当前也是 Production DSP 同机通信地址，不能统一标为测试地址。
 
@@ -305,7 +305,7 @@ Safety Policy 继续要求真实命令开关、Production MAVLink、DSP Command 
 ### 17.6 特殊端口
 
 - `10005` 只在 `gcs-config.ini.example` 中作为示例值；不会进入当前 Production 启动日志。
-- `10006` 只属于 `[DroneGCS.Network]` Legacy GCS1 文本命令客户端；Console 端服务已在 Cleanup Phase 3A 移除，UE 客户端仍为 `Enabled=False` 并等待 Phase 3B。
+- `10006` 曾属于 `[DroneGCS.Network]` Legacy GCS1 文本命令客户端；Console 服务与 UE 客户端已分别在 Cleanup Phase 3A/3B 移除，当前 Runtime 源码和配置均不再使用该 UDP 端口。
 - `127.0.0.1` 是当前 Console 与 UE 同机运行的 Production DSP 地址，不是 Test Address。
 
 Future / Planned：如果 DSP-GCS 需要跨机器部署，可新增共享 Deployment Profile 生成两端配置；在此之前不让 UE 直接依赖 Console 私有配置文件。
