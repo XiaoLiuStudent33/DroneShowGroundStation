@@ -212,6 +212,18 @@ Fleet DroneOrder
 
 `DroneOrder[Index] -> ParticleIndex -> DroneID` 必须稳定。Offline 保留粒子和索引。禁止 per-drone Actor、per-drone NiagaraComponent 和 per-drone Tick。
 
+Cleanup Phase 3D 后，UE 唯一 Production 可视化链固定为：
+
+```text
+FleetManagerSubsystem
+-> DroneFleetVisualizationActor
+-> CesiumGeoreference
+-> User.DronePositions
+-> NS_DroneFleet
+```
+
+旧 `DroneActor`、`BP_DroneController` 及地图中的单机 Actor 实例已移除。Production 不创建 per-drone Actor，也不保留单机悬停、旋转或本地状态模拟路径。
+
 Future / Planned：淡紫色 Offline 表现和粒子 DisplayID 数字显示尚未确认正式实现，不能当作当前能力。
 
 ## 15. Production / Mock / Loopback / Legacy
@@ -225,7 +237,7 @@ Future / Planned：淡紫色 Offline 表现和粒子 DisplayID 数字显示尚�
 | Removed in Cleanup Phase 3A | Console GCS1 `CommandProtocol/UdpCommandServer/DroneControlService` | Console 端旧 10006 文本服务已移除；当前唯一 Production 命令入口为 `DSPGCSProductionCommandReceiver` |
 | Removed in Cleanup Phase 3B | UE `DroneCommandSubsystem/GCSCommandTypes` | 旧 10006/GCS1 命令客户端与 `[DroneGCS.Network]` 配置已移除；当前唯一 UE Production 命令入口为 `DSPGCSProductionCommandProviderSubsystem` |
 | Removed in Cleanup Phase 3C | Console Legacy Single Session / fixed Target / per-Session Socket | `target_ip/target_port/local_port`、`RunLegacySingleSession` 与独立 `UdpClient` Socket 已移除；Session 只能由 `DroneManager` 按实际 Remote Endpoint 建立 |
-| Legacy Single-Drone Visualization | `DroneActor` | 不参与 Fleet/Niagara；当前地图/Blueprint 仍引用，Runtime 可能 Tick |
+| Removed in Cleanup Phase 3D | UE `DroneActor/BP_DroneController` 单机可视化 | C++ 类、无引用 Blueprint 和主地图中的旧 Actor 实例已移除；唯一 Production 可视化入口为 `DroneFleetVisualizationActor` |
 | Test Only | Console test projects、UE Automation Tests | 不进入 Production |
 
 ## 16. 当前 IP 与端口

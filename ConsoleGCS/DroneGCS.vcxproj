@@ -158,7 +158,6 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="MavlinkCommand.cpp" />
     <ClCompile Include="MavlinkParser.cpp" />
-    <ClCompile Include="test.cpp" />
     <ClCompile Include="UdpClient.cpp" />
   </ItemGroup>
   <ItemGroup>
