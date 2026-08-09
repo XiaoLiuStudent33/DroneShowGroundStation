@@ -16,6 +16,7 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/PanelWidget.h"
 #include "JsonObjectConverter.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Components/Button.h"
@@ -26,6 +27,128 @@
 #include "Kismet/GameplayStatics.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "K2Node_Event.h"
+#include "ScopedTransaction.h"
+
+namespace
+{
+void AddCanvasSlotFields(const TSharedPtr<FJsonObject>& WidgetObject, const UCanvasPanelSlot* CanvasSlot)
+{
+	const FVector2D Position = CanvasSlot->GetPosition();
+	const FVector2D Size = CanvasSlot->GetSize();
+	const FAnchors Anchors = CanvasSlot->GetAnchors();
+	const FVector2D Alignment = CanvasSlot->GetAlignment();
+
+	WidgetObject->SetNumberField(TEXT("position_x"), Position.X);
+	WidgetObject->SetNumberField(TEXT("position_y"), Position.Y);
+	WidgetObject->SetNumberField(TEXT("size_x"), Size.X);
+	WidgetObject->SetNumberField(TEXT("size_y"), Size.Y);
+	WidgetObject->SetNumberField(TEXT("anchor_min_x"), Anchors.Minimum.X);
+	WidgetObject->SetNumberField(TEXT("anchor_min_y"), Anchors.Minimum.Y);
+	WidgetObject->SetNumberField(TEXT("anchor_max_x"), Anchors.Maximum.X);
+	WidgetObject->SetNumberField(TEXT("anchor_max_y"), Anchors.Maximum.Y);
+	WidgetObject->SetNumberField(TEXT("alignment_x"), Alignment.X);
+	WidgetObject->SetNumberField(TEXT("alignment_y"), Alignment.Y);
+	WidgetObject->SetNumberField(TEXT("z_order"), CanvasSlot->GetZOrder());
+	WidgetObject->SetBoolField(TEXT("auto_size"), CanvasSlot->GetAutoSize());
+}
+
+void AppendWidgetTree(UWidget* Widget, const FString& ParentName, TArray<TSharedPtr<FJsonValue>>& Widgets)
+{
+	if (!Widget)
+	{
+		return;
+	}
+
+	TSharedPtr<FJsonObject> WidgetObject = MakeShared<FJsonObject>();
+	WidgetObject->SetStringField(TEXT("name"), Widget->GetName());
+	WidgetObject->SetStringField(TEXT("class"), Widget->GetClass()->GetName());
+	if (ParentName.IsEmpty())
+	{
+		WidgetObject->SetField(TEXT("parent_name"), MakeShared<FJsonValueNull>());
+	}
+	else
+	{
+		WidgetObject->SetStringField(TEXT("parent_name"), ParentName);
+	}
+
+	if (Widget->Slot)
+	{
+		WidgetObject->SetStringField(TEXT("slot_class"), Widget->Slot->GetClass()->GetName());
+		if (const UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Widget->Slot))
+		{
+			AddCanvasSlotFields(WidgetObject, CanvasSlot);
+		}
+	}
+	else
+	{
+		WidgetObject->SetField(TEXT("slot_class"), MakeShared<FJsonValueNull>());
+	}
+
+	const UEnum* VisibilityEnum = StaticEnum<ESlateVisibility>();
+	WidgetObject->SetStringField(
+		TEXT("visibility"),
+		VisibilityEnum
+			? VisibilityEnum->GetNameStringByValue(static_cast<int64>(Widget->GetVisibility()))
+			: TEXT("unsupported"));
+	if (const UTextBlock* TextBlock = Cast<UTextBlock>(Widget))
+	{
+		WidgetObject->SetNumberField(TEXT("font_size"), TextBlock->GetFont().Size);
+	}
+	Widgets.Add(MakeShared<FJsonValueObject>(WidgetObject));
+
+	if (UPanelWidget* PanelWidget = Cast<UPanelWidget>(Widget))
+	{
+		for (int32 ChildIndex = 0; ChildIndex < PanelWidget->GetChildrenCount(); ++ChildIndex)
+		{
+			AppendWidgetTree(PanelWidget->GetChildAt(ChildIndex), Widget->GetName(), Widgets);
+		}
+	}
+}
+
+bool ReadOptionalNumber(
+	const FJsonObject& Params,
+	const TCHAR* FieldName,
+	TOptional<double>& OutValue,
+	FString& OutError)
+{
+	if (!Params.HasField(FieldName))
+	{
+		return true;
+	}
+
+	double Value = 0.0;
+	if (!Params.TryGetNumberField(FieldName, Value))
+	{
+		OutError = FString::Printf(TEXT("Field '%s' must be numeric"), FieldName);
+		return false;
+	}
+
+	OutValue = Value;
+	return true;
+}
+
+bool ReadOptionalBool(
+	const FJsonObject& Params,
+	const TCHAR* FieldName,
+	TOptional<bool>& OutValue,
+	FString& OutError)
+{
+	if (!Params.HasField(FieldName))
+	{
+		return true;
+	}
+
+	bool Value = false;
+	if (!Params.TryGetBoolField(FieldName, Value))
+	{
+		OutError = FString::Printf(TEXT("Field '%s' must be boolean"), FieldName);
+		return false;
+	}
+
+	OutValue = Value;
+	return true;
+}
+}
 
 FUnrealMCPUMGCommands::FUnrealMCPUMGCommands()
 {
@@ -56,6 +179,26 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleCommand(const FString& Comm
 	else if (CommandName == TEXT("set_text_block_binding"))
 	{
 		return HandleSetTextBlockBinding(Params);
+	}
+	else if (CommandName == TEXT("get_widget_tree"))
+	{
+		return HandleGetWidgetTree(Params);
+	}
+	else if (CommandName == TEXT("set_canvas_slot_layout"))
+	{
+		return HandleSetCanvasSlotLayout(Params);
+	}
+	else if (CommandName == TEXT("save_asset"))
+	{
+		return HandleSaveAsset(Params);
+	}
+	else if (CommandName == TEXT("duplicate_asset"))
+	{
+		return HandleDuplicateAsset(Params);
+	}
+	else if (CommandName == TEXT("set_text_block_font_size"))
+	{
+		return HandleSetTextBlockFontSize(Params);
 	}
 
 	return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown UMG command: %s"), *CommandName));
@@ -662,4 +805,296 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleSetTextBlockBinding(const T
 	Response->SetBoolField(TEXT("success"), true);
 	Response->SetStringField(TEXT("binding_name"), BindingName);
 	return Response;
-} 
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleGetWidgetTree(const TSharedPtr<FJsonObject>& Params)
+{
+	UE_LOG(LogTemp, Display, TEXT("[MCP][GetWidgetTree] Enter IsInGameThread=%s"), IsInGameThread() ? TEXT("true") : TEXT("false"));
+
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter"));
+	}
+
+	UWidgetBlueprint* WidgetBlueprint = Cast<UWidgetBlueprint>(UEditorAssetLibrary::LoadAsset(AssetPath));
+	if (!WidgetBlueprint)
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Failed to load Widget Blueprint: %s"), *AssetPath));
+	}
+	if (!WidgetBlueprint->WidgetTree || !WidgetBlueprint->WidgetTree->RootWidget)
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Widget Blueprint has no Widget Tree root: %s"), *AssetPath));
+	}
+
+	TArray<TSharedPtr<FJsonValue>> Widgets;
+	AppendWidgetTree(WidgetBlueprint->WidgetTree->RootWidget, FString(), Widgets);
+
+	TSharedPtr<FJsonObject> Response = MakeShared<FJsonObject>();
+	Response->SetBoolField(TEXT("success"), true);
+	Response->SetStringField(TEXT("asset_path"), AssetPath);
+	Response->SetArrayField(TEXT("widgets"), Widgets);
+	return Response;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleSetCanvasSlotLayout(const TSharedPtr<FJsonObject>& Params)
+{
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter"));
+	}
+
+	FString WidgetName;
+	if (!Params->TryGetStringField(TEXT("widget_name"), WidgetName))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
+	}
+
+	TOptional<double> PositionX;
+	TOptional<double> PositionY;
+	TOptional<double> SizeX;
+	TOptional<double> SizeY;
+	TOptional<double> AnchorMinX;
+	TOptional<double> AnchorMinY;
+	TOptional<double> AnchorMaxX;
+	TOptional<double> AnchorMaxY;
+	TOptional<double> AlignmentX;
+	TOptional<double> AlignmentY;
+	TOptional<double> ZOrder;
+	TOptional<bool> AutoSize;
+	FString Error;
+
+	if (!ReadOptionalNumber(*Params, TEXT("position_x"), PositionX, Error)
+		|| !ReadOptionalNumber(*Params, TEXT("position_y"), PositionY, Error)
+		|| !ReadOptionalNumber(*Params, TEXT("size_x"), SizeX, Error)
+		|| !ReadOptionalNumber(*Params, TEXT("size_y"), SizeY, Error)
+		|| !ReadOptionalNumber(*Params, TEXT("anchor_min_x"), AnchorMinX, Error)
+		|| !ReadOptionalNumber(*Params, TEXT("anchor_min_y"), AnchorMinY, Error)
+		|| !ReadOptionalNumber(*Params, TEXT("anchor_max_x"), AnchorMaxX, Error)
+		|| !ReadOptionalNumber(*Params, TEXT("anchor_max_y"), AnchorMaxY, Error)
+		|| !ReadOptionalNumber(*Params, TEXT("alignment_x"), AlignmentX, Error)
+		|| !ReadOptionalNumber(*Params, TEXT("alignment_y"), AlignmentY, Error)
+		|| !ReadOptionalNumber(*Params, TEXT("z_order"), ZOrder, Error)
+		|| !ReadOptionalBool(*Params, TEXT("auto_size"), AutoSize, Error))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(Error);
+	}
+
+	const bool bHasLayoutField = PositionX.IsSet() || PositionY.IsSet()
+		|| SizeX.IsSet() || SizeY.IsSet()
+		|| AnchorMinX.IsSet() || AnchorMinY.IsSet()
+		|| AnchorMaxX.IsSet() || AnchorMaxY.IsSet()
+		|| AlignmentX.IsSet() || AlignmentY.IsSet()
+		|| ZOrder.IsSet() || AutoSize.IsSet();
+	if (!bHasLayoutField)
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No Canvas slot layout fields were provided"));
+	}
+
+	UWidgetBlueprint* WidgetBlueprint = Cast<UWidgetBlueprint>(UEditorAssetLibrary::LoadAsset(AssetPath));
+	if (!WidgetBlueprint || !WidgetBlueprint->WidgetTree)
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Failed to load Widget Blueprint: %s"), *AssetPath));
+	}
+
+	UWidget* Widget = WidgetBlueprint->WidgetTree->FindWidget(FName(*WidgetName));
+	if (!Widget)
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Widget not found: %s"), *WidgetName));
+	}
+
+	UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Widget->Slot);
+	if (!CanvasSlot)
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Widget '%s' does not use a CanvasPanelSlot"), *WidgetName));
+	}
+
+	const FScopedTransaction Transaction(NSLOCTEXT("UnrealMCP", "SetCanvasSlotLayout", "Set Canvas Slot Layout"));
+	WidgetBlueprint->Modify();
+	Widget->Modify();
+	CanvasSlot->Modify();
+
+	if (PositionX.IsSet() || PositionY.IsSet())
+	{
+		FVector2D Position = CanvasSlot->GetPosition();
+		Position.X = PositionX.IsSet() ? static_cast<float>(PositionX.GetValue()) : Position.X;
+		Position.Y = PositionY.IsSet() ? static_cast<float>(PositionY.GetValue()) : Position.Y;
+		CanvasSlot->SetPosition(Position);
+	}
+	if (SizeX.IsSet() || SizeY.IsSet())
+	{
+		FVector2D Size = CanvasSlot->GetSize();
+		Size.X = SizeX.IsSet() ? static_cast<float>(SizeX.GetValue()) : Size.X;
+		Size.Y = SizeY.IsSet() ? static_cast<float>(SizeY.GetValue()) : Size.Y;
+		CanvasSlot->SetSize(Size);
+	}
+	if (AnchorMinX.IsSet() || AnchorMinY.IsSet() || AnchorMaxX.IsSet() || AnchorMaxY.IsSet())
+	{
+		FAnchors Anchors = CanvasSlot->GetAnchors();
+		Anchors.Minimum.X = AnchorMinX.IsSet() ? static_cast<float>(AnchorMinX.GetValue()) : Anchors.Minimum.X;
+		Anchors.Minimum.Y = AnchorMinY.IsSet() ? static_cast<float>(AnchorMinY.GetValue()) : Anchors.Minimum.Y;
+		Anchors.Maximum.X = AnchorMaxX.IsSet() ? static_cast<float>(AnchorMaxX.GetValue()) : Anchors.Maximum.X;
+		Anchors.Maximum.Y = AnchorMaxY.IsSet() ? static_cast<float>(AnchorMaxY.GetValue()) : Anchors.Maximum.Y;
+		CanvasSlot->SetAnchors(Anchors);
+	}
+	if (AlignmentX.IsSet() || AlignmentY.IsSet())
+	{
+		FVector2D Alignment = CanvasSlot->GetAlignment();
+		Alignment.X = AlignmentX.IsSet() ? static_cast<float>(AlignmentX.GetValue()) : Alignment.X;
+		Alignment.Y = AlignmentY.IsSet() ? static_cast<float>(AlignmentY.GetValue()) : Alignment.Y;
+		CanvasSlot->SetAlignment(Alignment);
+	}
+	if (ZOrder.IsSet())
+	{
+		CanvasSlot->SetZOrder(static_cast<int32>(ZOrder.GetValue()));
+	}
+	if (AutoSize.IsSet())
+	{
+		CanvasSlot->SetAutoSize(AutoSize.GetValue());
+	}
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(WidgetBlueprint);
+	WidgetBlueprint->MarkPackageDirty();
+
+	TSharedPtr<FJsonObject> Response = MakeShared<FJsonObject>();
+	Response->SetBoolField(TEXT("success"), true);
+	Response->SetStringField(TEXT("asset_path"), AssetPath);
+	Response->SetStringField(TEXT("widget_name"), WidgetName);
+	AddCanvasSlotFields(Response, CanvasSlot);
+	return Response;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleSaveAsset(const TSharedPtr<FJsonObject>& Params)
+{
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter"));
+	}
+
+	if (!UEditorAssetLibrary::LoadAsset(AssetPath))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Failed to load asset: %s"), *AssetPath));
+	}
+	if (!UEditorAssetLibrary::SaveAsset(AssetPath, false))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Failed to save asset: %s"), *AssetPath));
+	}
+
+	TSharedPtr<FJsonObject> Response = MakeShared<FJsonObject>();
+	Response->SetBoolField(TEXT("success"), true);
+	Response->SetStringField(TEXT("asset_path"), AssetPath);
+	return Response;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleDuplicateAsset(const TSharedPtr<FJsonObject>& Params)
+{
+	FString SourceAsset;
+	if (!Params->TryGetStringField(TEXT("source_asset"), SourceAsset))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'source_asset' parameter"));
+	}
+
+	FString DestinationAsset;
+	if (!Params->TryGetStringField(TEXT("destination_asset"), DestinationAsset))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'destination_asset' parameter"));
+	}
+
+	if (!UEditorAssetLibrary::DoesAssetExist(SourceAsset))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Source asset does not exist: %s"), *SourceAsset));
+	}
+	if (UEditorAssetLibrary::DoesAssetExist(DestinationAsset))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Destination asset already exists: %s"), *DestinationAsset));
+	}
+
+	UObject* DuplicatedAsset = UEditorAssetLibrary::DuplicateAsset(SourceAsset, DestinationAsset);
+	if (!DuplicatedAsset || !UEditorAssetLibrary::DoesAssetExist(DestinationAsset))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Failed to duplicate asset from %s to %s"), *SourceAsset, *DestinationAsset));
+	}
+
+	TSharedPtr<FJsonObject> Response = MakeShared<FJsonObject>();
+	Response->SetBoolField(TEXT("success"), true);
+	Response->SetStringField(TEXT("source_asset"), SourceAsset);
+	Response->SetStringField(TEXT("destination_asset"), DestinationAsset);
+	return Response;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleSetTextBlockFontSize(const TSharedPtr<FJsonObject>& Params)
+{
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter"));
+	}
+
+	FString WidgetName;
+	if (!Params->TryGetStringField(TEXT("widget_name"), WidgetName))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
+	}
+
+	double FontSizeValue = 0.0;
+	if (!Params->TryGetNumberField(TEXT("font_size"), FontSizeValue))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing or invalid 'font_size' parameter"));
+	}
+	const int32 FontSize = static_cast<int32>(FontSizeValue);
+	if (FontSize <= 0 || !FMath::IsNearlyEqual(FontSizeValue, static_cast<double>(FontSize)))
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("'font_size' must be a positive integer"));
+	}
+
+	UWidgetBlueprint* WidgetBlueprint = Cast<UWidgetBlueprint>(UEditorAssetLibrary::LoadAsset(AssetPath));
+	if (!WidgetBlueprint || !WidgetBlueprint->WidgetTree)
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Failed to load Widget Blueprint: %s"), *AssetPath));
+	}
+
+	UWidget* Widget = WidgetBlueprint->WidgetTree->FindWidget(FName(*WidgetName));
+	if (!Widget)
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Widget not found: %s"), *WidgetName));
+	}
+
+	UTextBlock* TextBlock = Cast<UTextBlock>(Widget);
+	if (!TextBlock)
+	{
+		return FUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Widget '%s' is not a TextBlock"), *WidgetName));
+	}
+
+	const FScopedTransaction Transaction(NSLOCTEXT("UnrealMCP", "SetTextBlockFontSize", "Set TextBlock Font Size"));
+	WidgetBlueprint->Modify();
+	TextBlock->Modify();
+
+	FSlateFontInfo Font = TextBlock->GetFont();
+	Font.Size = FontSize;
+	TextBlock->SetFont(Font);
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(WidgetBlueprint);
+	WidgetBlueprint->MarkPackageDirty();
+
+	TSharedPtr<FJsonObject> Response = MakeShared<FJsonObject>();
+	Response->SetBoolField(TEXT("success"), true);
+	Response->SetStringField(TEXT("asset_path"), AssetPath);
+	Response->SetStringField(TEXT("widget_name"), WidgetName);
+	Response->SetNumberField(TEXT("font_size"), TextBlock->GetFont().Size);
+	return Response;
+}

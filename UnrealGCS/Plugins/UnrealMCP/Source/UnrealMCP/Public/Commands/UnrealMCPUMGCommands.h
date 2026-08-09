@@ -79,4 +79,19 @@ private:
      * @return JSON response with the binding details
      */
     TSharedPtr<FJsonObject> HandleSetTextBlockBinding(const TSharedPtr<FJsonObject>& Params);
-}; 
+
+    /** Read an existing Widget Blueprint's widget hierarchy and Canvas slot layout. */
+    TSharedPtr<FJsonObject> HandleGetWidgetTree(const TSharedPtr<FJsonObject>& Params);
+
+    /** Update explicitly provided layout fields on an existing Canvas Panel slot. */
+    TSharedPtr<FJsonObject> HandleSetCanvasSlotLayout(const TSharedPtr<FJsonObject>& Params);
+
+    /** Save an existing asset through the Unreal Editor asset API. */
+    TSharedPtr<FJsonObject> HandleSaveAsset(const TSharedPtr<FJsonObject>& Params);
+
+    /** Duplicate an existing asset through the Unreal Editor asset API. */
+    TSharedPtr<FJsonObject> HandleDuplicateAsset(const TSharedPtr<FJsonObject>& Params);
+
+    /** Update only the font size of an existing TextBlock. */
+    TSharedPtr<FJsonObject> HandleSetTextBlockFontSize(const TSharedPtr<FJsonObject>& Params);
+};

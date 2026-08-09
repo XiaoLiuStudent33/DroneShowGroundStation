@@ -274,7 +274,12 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
                      CommandType == TEXT("add_button_to_widget") ||
                      CommandType == TEXT("bind_widget_event") ||
                      CommandType == TEXT("set_text_block_binding") ||
-                     CommandType == TEXT("add_widget_to_viewport"))
+                     CommandType == TEXT("add_widget_to_viewport") ||
+                     CommandType == TEXT("get_widget_tree") ||
+                     CommandType == TEXT("set_canvas_slot_layout") ||
+                     CommandType == TEXT("save_asset") ||
+                     CommandType == TEXT("duplicate_asset") ||
+                     CommandType == TEXT("set_text_block_font_size"))
             {
                 ResultJson = UMGCommands->HandleCommand(CommandType, Params);
             }

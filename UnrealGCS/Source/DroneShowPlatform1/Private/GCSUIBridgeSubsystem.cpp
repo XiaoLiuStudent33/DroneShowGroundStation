@@ -19,6 +19,7 @@
 #include "GCSUIWidgetPresenter.h"
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
+#include "Widgets/Input/SButton.h"
 #include "Widgets/SWidget.h"
 
 void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
@@ -29,6 +30,10 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	TopBarWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_TopBar"));
 	LeftToolbarWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_LeftToolbar"));
 	FleetPanelWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_FleetPanel"));
+	UUserWidget* RightToolbar =
+		FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_RightToolbar"));
+	TWeakObjectPtr<UUserWidget> RightPanel =
+		FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_RightPanel"));
 	UUserWidget* DroneDetail = FGCSUIWidgetPresenter::ResolveDroneDetail(MainWidget);
 
 	if (!DroneDetail)
@@ -44,6 +49,25 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	CreateNavigationPages();
 	BindNavigationButtons();
 	ShowMainPage(EGCSMainPage::Fleet);
+	FGCSUIWidgetPresenter::SetWidgetVisible(RightPanel, false);
+
+	if (UButton* ViewButton =
+		FGCSUIWidgetPresenter::FindButton(RightToolbar, TEXT("BTN_View")))
+	{
+		StaticCastSharedRef<SButton>(ViewButton->TakeWidget())->SetOnClicked(
+			FOnClicked::CreateLambda(
+				[RightPanel]()
+				{
+					if (UUserWidget* Panel = RightPanel.Get())
+					{
+						Panel->SetVisibility(
+							Panel->GetVisibility() == ESlateVisibility::Collapsed
+								? ESlateVisibility::Visible
+								: ESlateVisibility::Collapsed);
+					}
+					return FReply::Handled();
+				}));
+	}
 
 	// Preserve the authored DroneDetail layout. The hover altitude and ground
 	// station mode controls remain in this asset, while fleet selection now
@@ -52,9 +76,9 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	{
 		FVector2D DetailSize = DetailSlot->GetSize();
 
-		if (DetailSize.Y < 620.0f)
+		if (DetailSize.Y < 500.0f)
 		{
-			DetailSize.Y = 620.0f;
+			DetailSize.Y = 500.0f;
 			DetailSlot->SetSize(DetailSize);
 		}
 	}

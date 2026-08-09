@@ -140,6 +140,9 @@ uint32 FMCPServerRunnable::Run()
                         }
                     }
                 }
+
+                ClientSocket->Close();
+                ClientSocket.Reset();
             }
             else
             {
@@ -318,4 +321,4 @@ void FMCPServerRunnable::ProcessMessage(TSharedPtr<FSocket> Client, const FStrin
     {
         UE_LOG(LogTemp, Error, TEXT("MCPServerRunnable: Failed to send response"));
     }
-} 
+}
