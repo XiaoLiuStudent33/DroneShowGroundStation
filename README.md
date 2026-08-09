@@ -1,48 +1,145 @@
-# 无人机表演地面站
+# DroneShowGroundStation
 
-本工作区包含两个现有工程的开发副本：
+无人机表演地面站项目。
 
-- `ConsoleGCS/`：VS2022 C++ 控制台地面站及 MAVLink/UDP 通信实现。
-- `UnrealGCS/`：Unreal Engine 5.5.4 前端工程。
-- `Docs/`：架构、协议、测试和开发计划文档。
-- `Tools/`：后续仿真、数据转换和压力测试工具。
+当前正式工作目录：
 
-原始工程：
+C:\Users\13092\Documents\DroneGCS
 
-- `D:\VSProject\DroneGCS1\DroneGCS`
-- `D:\EpicProject\DroneShowPlatform1`
+## 工程结构
 
-`Binaries`、`Intermediate`、`DerivedDataCache`、`Saved`、`.vs` 和本地构建输出未导入，可由 Visual Studio 或 Unreal Engine 重新生成。
+- `ConsoleGCS/`
+  - C++ 后端地面站
+  - MAVLink / UDP
+  - Drone Session / Command
+  - DSP-GCS Console 端
 
-## 控制台网络配置
+- `UnrealGCS/`
+  - Unreal Engine 5.5.4 前端
+  - Fleet UI
+  - DSP-GCS UE 端
+  - Cesium / Niagara 可视化
 
-控制台程序启动时必须读取网络配置，默认文件名为
-`ConsoleGCS/gcs-config.ini`。先复制示例文件：
+- `Shared/`
+  - Console 与 Unreal 共用的 DSP-GCS Protocol / Transport
 
-```powershell
-Copy-Item .\ConsoleGCS\gcs-config.ini.example .\ConsoleGCS\gcs-config.ini
-```
+- `Docs/`
+  - 当前架构、测试和维护文档
 
-确认目标 IP、目标端口和本地端口后，在 `ConsoleGCS` 目录中运行程序。
-也可以把其他配置文件路径作为第一个命令行参数传入。
+- `Tools/`
+  - 辅助工具
 
-`gcs-config.ini` 属于本机配置，默认不会提交到 Git。示例文件使用
-`127.0.0.1`，避免未检查配置时连接真实无人机。
+## 当前架构文档
 
-当前工作区已经创建了同样指向 `127.0.0.1` 的本地
-`ConsoleGCS/gcs-config.ini`，可以直接调试控制台界面。连接 SITL 或测试设备前，
-需要手动核对并修改该文件。
+### 最高架构准则
 
-## 控制台测试
+`Docs/Architecture_Freeze_CN.md`
 
-解决方案中包含 `CommandDispatcherTests` 测试项目，验证：
+当前 Production 架构已经冻结。
+除明确 Bug、新功能需求或有测量证据的性能瓶颈外，
+不要随意重构核心边界。
 
-- 普通解锁报文的 `param2` 为 `0`。
-- 匹配的 `COMMAND_ACK` 能正确完成请求。
-- `LAND` 等安全指令会取消尚未执行的 `TAKEOFF`。
+### 当前代码架构
 
-运行：
+`Docs/Code_Architecture_CN.md`
 
-```powershell
-.\ConsoleGCS\x64\Debug\CommandDispatcherTests.exe
-```
+用于了解：
+
+- Console / UE Production 调用链
+- MAVLink 数据流
+- DSP-GCS
+- Fleet
+- Command
+- Cesium / Niagara
+
+### Production 类职责
+
+`Docs/Production_Responsibility_Audit_CN.md`
+
+用于查询某个 Production 类：
+
+- 为什么存在
+- 负责什么
+- 为什么需要保持独立
+
+### 测试体系
+
+`Docs/Test_Architecture_CN.md`
+
+Console：
+
+- `ConsoleGCSTests` = Regression Tests
+- `DSPGCSAcceptance` = Acceptance Tool
+
+Unreal：
+
+- `Private/Tests/` = Automation Regression Tests
+
+## 核心架构原则
+
+Drone Identity：
+
+`Remote IP + UDP Source Port`
+
+MAVLink SYSID 不是 Fleet 唯一身份。
+
+Console Session：
+
+`DroneManager → DroneSession → DataManager`
+
+Production Command：
+
+`DSP Receiver → CommandManager → DroneSession → CommandDispatcher → MavlinkCommand`
+
+UE Telemetry：
+
+`DSP Transport → Production Provider → GCSServerAdapter → FleetManager`
+
+Visualization：
+
+`FleetManager → DroneFleetVisualizationActor → Cesium → Niagara`
+
+## 配置
+
+Console 本机运行配置：
+
+`ConsoleGCS/gcs-config.ini`
+
+该文件属于本机 Deployment 配置，不提交到 Git。
+
+示例：
+
+`ConsoleGCS/gcs-config.ini.example`
+
+DSP-GCS Console 配置：
+
+`ConsoleGCS/config/DSPGCSTransport.ini`
+
+Unreal 配置：
+
+`UnrealGCS/Config/DefaultGame.ini`
+
+具体配置职责以：
+
+`Docs/Architecture_Freeze_CN.md`
+和
+`Docs/Code_Architecture_CN.md`
+
+为准。
+
+## 历史资料
+
+历史设计和旧平台分析统一放在：
+
+`Docs/History/`
+
+历史文档不得作为当前 Production 架构依据。
+
+---
+
+当前实现以：
+
+1. `Docs/Architecture_Freeze_CN.md`
+2. 当前实际代码
+
+为最终准则。

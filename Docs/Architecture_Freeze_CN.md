@@ -1,5 +1,34 @@
 # DroneGCS Architecture Freeze
 
+## Architecture_Freeze_CN.md= 当前项目“宪法”
+
+## Architecture_Freeze_CN.md
+   ## ↑ 第一优先级 / 不能违反什么
+
+## Code_Architecture_CN.md
+   ## ↑ 当前代码到底怎么运行
+
+## Production_Responsibility_Audit_CN.md
+##    ↑ 为什么这些类这样分
+
+## Test_Architecture_CN.md
+##    ↑ 测试怎么组织、怎么运行
+
+
+
+## 以后给 Codex 的规则就一句：
+## 优先阅读：
+
+## 1. Docs/Architecture_Freeze_CN.md
+## 2. Docs/Code_Architecture_CN.md
+
+## 仅在需要时阅读：
+## 3. Production_Responsibility_Audit_CN.md
+## 4. Test_Architecture_CN.md
+
+## Docs/History/* 仅为历史参考，
+## 不得作为当前 Production 架构依据。
+
 本文件是 Cleanup Phase 3A~3H 完成后的维护基线。除明确 Bug、明确新功能需求或有测量证据的性能瓶颈外，不改变下列边界；“更优雅”“少几个文件”或工具建议重构均不是修改理由。
 
 ## 1. 冻结的核心边界
