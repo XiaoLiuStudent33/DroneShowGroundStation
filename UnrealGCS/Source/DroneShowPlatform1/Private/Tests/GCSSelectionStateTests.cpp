@@ -158,6 +158,21 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Command targets remain selected"), Bridge->GetSelectedCommandDroneIDs().Num(), 2);
 	UE_LOG(LogTemp, Display, TEXT("[SELECTION_TEST] RowClick Drone004 CurrentSelectedDroneID=Drone004 Detail=Drone004 Targets=[Drone001,Drone003]"));
 
+	Bridge->ReplaceCommandDroneSelection(
+		{ TEXT("Drone002"), TEXT("Drone006"), TEXT("Drone011") });
+	const TArray<FString> ReplacedTargets = Bridge->GetSelectedCommandDroneIDs();
+	TestEqual(TEXT("Marquee replacement stores global command targets"), ReplacedTargets.Num(), 3);
+	TestTrue(TEXT("Replacement includes Drone002"), ReplacedTargets.Contains(TEXT("Drone002")));
+	TestTrue(TEXT("Replacement includes cross-page Drone006"), ReplacedTargets.Contains(TEXT("Drone006")));
+	TestTrue(TEXT("Replacement includes cross-page Drone011"), ReplacedTargets.Contains(TEXT("Drone011")));
+	TestEqual(
+		TEXT("Command replacement does not change detail selection"),
+		Fleet->GetCurrentSelectedDroneID(),
+		FString(TEXT("Drone004")));
+	Bridge->ReplaceCommandDroneSelection({});
+	TestEqual(TEXT("Empty marquee clears command selection"), Bridge->GetSelectedCommandDroneIDs().Num(), 0);
+	Bridge->ReplaceCommandDroneSelection({ TEXT("Drone001"), TEXT("Drone006") });
+
 	UClass* MainWidgetClass = LoadClass<UUserWidget>(
 		nullptr,
 		TEXT("/Game/UI/WBP_GCS_Main_V2.WBP_GCS_Main_V2_C"));
@@ -165,6 +180,17 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 		? CreateWidget<UUserWidget>(GameInstance, MainWidgetClass)
 		: nullptr;
 	TestNotNull(TEXT("Main widget asset loaded"), MainWidget);
+	UBorder* SelectionRectangle = MainWidget && MainWidget->WidgetTree
+		? Cast<UBorder>(MainWidget->WidgetTree->FindWidget(TEXT("SelectionRectangle")))
+		: nullptr;
+	TestNotNull(TEXT("Main widget has authored marquee rectangle"), SelectionRectangle);
+	if (SelectionRectangle)
+	{
+		TestEqual(
+			TEXT("Marquee rectangle starts collapsed"),
+			SelectionRectangle->GetVisibility(),
+			ESlateVisibility::Collapsed);
+	}
 	UUserWidget* FleetPanel = MainWidget && MainWidget->WidgetTree
 		? Cast<UUserWidget>(MainWidget->WidgetTree->FindWidget(TEXT("CHILD_FleetPanel")))
 		: nullptr;
@@ -211,6 +237,19 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Drone001 checkbox visual is untouched"), Row1Indicator->GetBackgroundColor().Equals(Row1CheckboxColor));
 		TestTrue(TEXT("Drone002 checkbox visual is untouched"), Row2Indicator->GetBackgroundColor().Equals(Row2CheckboxColor));
 		TestEqual(TEXT("Command selection remains independent"), Bridge->GetSelectedCommandDroneIDs().Num(), 2);
+		UTextBlock* Row1CommandLabel = Cast<UTextBlock>(Row1Indicator->GetContent());
+		UTextBlock* Row2CommandLabel = Cast<UTextBlock>(Row2Indicator->GetContent());
+		UTextBlock* SelectedCountText = Cast<UTextBlock>(
+			FleetPanel->WidgetTree->FindWidget(TEXT("TXT_FleetSelectedCount")));
+		TestNotNull(TEXT("Row1 command indicator keeps direct TextBlock content"), Row1CommandLabel);
+		TestNotNull(TEXT("Row2 command indicator keeps direct TextBlock content"), Row2CommandLabel);
+		TestNotNull(TEXT("Global selected count text exists"), SelectedCountText);
+		if (Row1CommandLabel && Row2CommandLabel && SelectedCountText)
+		{
+			TestEqual(TEXT("Selected Drone001 row shows check"), Row1CommandLabel->GetText().ToString(), FString(TEXT("✓")));
+			TestEqual(TEXT("Unselected Drone002 row shows X"), Row2CommandLabel->GetText().ToString(), FString(TEXT("X")));
+			TestEqual(TEXT("Selected count is global"), SelectedCountText->GetText().ToString(), FString(TEXT("SELECTED 2")));
+		}
 		UE_LOG(LogTemp, Display, TEXT("[SELECTION_VISUAL_TEST] Drone001 overlay hidden; Drone002 overlay shown; checkbox targets unchanged"));
 	}
 
@@ -306,6 +345,15 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 				TEXT("Paging does not change command selection"),
 				Bridge->GetSelectedCommandDroneIDs().Num(),
 				2);
+			UButton* SecondPageRow1Indicator = Cast<UButton>(
+				FleetPanel->WidgetTree->FindWidget(TEXT("BTN_FleetSelectRow1")));
+			UTextBlock* SecondPageRow1Label = SecondPageRow1Indicator
+				? Cast<UTextBlock>(SecondPageRow1Indicator->GetContent())
+				: nullptr;
+			TestTrue(
+				TEXT("Cross-page Drone006 retains command check"),
+				SecondPageRow1Label
+				&& SecondPageRow1Label->GetText().ToString() == TEXT("✓"));
 		}
 
 		FGCSFleetSnapshot SparseSnapshot;

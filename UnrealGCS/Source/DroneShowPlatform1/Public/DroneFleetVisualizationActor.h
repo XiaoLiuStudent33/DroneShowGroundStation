@@ -46,6 +46,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization")
 	TArray<FVector> GetDronePositions() const { return DronePositions; }
 
+	/** Updates the Niagara label highlight from the existing command selection authority. */
+	void SetCommandSelectedDroneIDs(const TArray<FString>& DroneIDs);
+
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization|Geo")
 	bool IsOriginWorldPositionInitialized() const { return bOriginWorldPositionInitialized; }
 
@@ -77,6 +80,14 @@ private:
 	UPROPERTY(Transient)
 	TArray<FVector> DronePositions;
 
+	/** Per-particle render data: R=DisplayID, G=SelectedMask. */
+	UPROPERTY(Transient)
+	TArray<FLinearColor> DroneLabelData;
+
+	/** Derived render cache only; GCSUIBridgeSubsystem remains selection authority. */
+	TSet<FString> CommandSelectedDroneIDs;
+	bool bDroneLabelDataDirty = true;
+
 	/** 仅粒子数量变化时重建系统；普通遥测更新只批量刷新数组。 */
 	int32 LastPushedDroneCount = INDEX_NONE;
 	int32 LastLoggedFleetCount = INDEX_NONE;
@@ -103,6 +114,8 @@ private:
 	FVector ConvertDroneGPSPosition(
 		const FDroneData& Drone,
 		const FFleetGeoOrigin& FleetGeoOrigin) const;
+	void RebuildDroneLabelData();
+	void PushDroneLabelDataToNiagara();
 	void PushArraysToNiagara();
 
 	UFUNCTION()

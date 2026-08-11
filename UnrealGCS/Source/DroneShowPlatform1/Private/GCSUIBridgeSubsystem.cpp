@@ -7,6 +7,7 @@
 #include "GCSUIBridgeSubsystem.h"
 
 #include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetLayoutLibrary.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
 #include "Components/CanvasPanelSlot.h"
@@ -14,26 +15,66 @@
 #include "Components/Widget.h"
 #include "DSPGCSProductionCommandProviderSubsystem.h"
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
+#include "DroneFleetVisualizationActor.h"
+#include "EngineUtils.h"
 #include "FleetManagerSubsystem.h"
+#include "Framework/Application/IInputProcessor.h"
+#include "Framework/Application/SlateApplication.h"
 #include "GCSDroneRowView.h"
 #include "GCSUIWidgetPresenter.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
+#include "Camera/PlayerCameraManager.h"
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
+#include "Misc/App.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/SWidget.h"
 
+class FGCSMarqueeInputProcessor final : public IInputProcessor
+{
+public:
+	explicit FGCSMarqueeInputProcessor(UGCSUIBridgeSubsystem* InOwner)
+		: Owner(InOwner)
+	{
+	}
+
+	virtual void Tick(
+		const float DeltaTime,
+		FSlateApplication& SlateApp,
+		TSharedRef<ICursor> Cursor) override
+	{
+		(void)DeltaTime;
+		(void)SlateApp;
+		(void)Cursor;
+		if (UGCSUIBridgeSubsystem* Bridge = Owner.Get())
+		{
+			Bridge->PollMarqueePlayerControllerInput();
+		}
+	}
+
+private:
+	TWeakObjectPtr<UGCSUIBridgeSubsystem> Owner;
+};
+
 void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 {
+	UnregisterMarqueeInputProcessor();
 	ResetNavigationPages();
 
 	MainWidgetRef = MainWidget;
 	TopBarWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_TopBar"));
 	LeftToolbarWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_LeftToolbar"));
 	FleetPanelWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_FleetPanel"));
-	UUserWidget* RightToolbar =
+	RightToolbarWidget =
 		FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_RightToolbar"));
-	TWeakObjectPtr<UUserWidget> RightPanel =
+	RightPanelWidget =
 		FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_RightPanel"));
+	PlaybackWidget =
+		FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_Playback"));
+	SelectionRectangleWidget = MainWidget && MainWidget->WidgetTree
+		? MainWidget->WidgetTree->FindWidget(TEXT("SelectionRectangle"))
+		: nullptr;
 	UUserWidget* DroneDetail = FGCSUIWidgetPresenter::ResolveDroneDetail(MainWidget);
 
 	if (!DroneDetail)
@@ -49,11 +90,13 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	CreateNavigationPages();
 	BindNavigationButtons();
 	ShowMainPage(EGCSMainPage::Fleet);
-	FGCSUIWidgetPresenter::SetWidgetVisible(RightPanel, false);
+	FGCSUIWidgetPresenter::SetWidgetVisible(RightPanelWidget, false);
+	UpdateSelectionRectangleVisual(FVector2D::ZeroVector, FVector2D::ZeroVector, false);
 
 	if (UButton* ViewButton =
-		FGCSUIWidgetPresenter::FindButton(RightToolbar, TEXT("BTN_View")))
+		FGCSUIWidgetPresenter::FindButton(RightToolbarWidget.Get(), TEXT("BTN_View")))
 	{
+		const TWeakObjectPtr<UUserWidget> RightPanel = RightPanelWidget;
 		StaticCastSharedRef<SButton>(ViewButton->TakeWidget())->SetOnClicked(
 			FOnClicked::CreateLambda(
 				[RightPanel]()
@@ -67,6 +110,17 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 					}
 					return FReply::Handled();
 				}));
+	}
+
+	if (UButton* LocateButton =
+		FGCSUIWidgetPresenter::FindButton(RightToolbarWidget.Get(), TEXT("BTN_GPS")))
+	{
+		LocateButton->OnClicked.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleTopDownLocateClicked);
+		LocateButton->OnClicked.AddDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleTopDownLocateClicked);
 	}
 
 	// Preserve the authored DroneDetail layout. The hover altitude and ground
@@ -122,10 +176,21 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 		Fleet->OnDataBatchApplied.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetDataBatchApplied);
 		RefreshFromFleet();
 	}
+
+	if (SelectionRectangleWidget.IsValid())
+	{
+		RegisterMarqueeInputProcessor();
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("WBP_GCS_Main_V2 is missing authored SelectionRectangle."));
+	}
 }
 
 void UGCSUIBridgeSubsystem::Deinitialize()
 {
+	UnregisterMarqueeInputProcessor();
+	EndTopDownLocateLock();
 	if (UDSPGCSProductionCommandProviderSubsystem* Commands =
 		GetGameInstance()->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>())
 	{
@@ -154,11 +219,19 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 	LeftToolbarWidget.Reset();
 	FleetPanelWidget.Reset();
 	DroneDetailWidget.Reset();
+	RightToolbarWidget.Reset();
+	RightPanelWidget.Reset();
+	PlaybackWidget.Reset();
+	SelectionRectangleWidget.Reset();
 	LastCommandResultText.Reset();
 	SelectedCommandDroneIDs.Reset();
 	CurrentFleetPageDroneIDs.Reset();
 	FleetRowViews.Reset();
 	FleetPageOffset = 0;
+	bMarqueePointerDown = false;
+	bMarqueeSelecting = false;
+	bMarqueeLeftMouseWasDown = false;
+	MarqueeCurrentLocalPosition = FVector2D::ZeroVector;
 
 	Super::Deinitialize();
 }
@@ -433,6 +506,10 @@ void UGCSUIBridgeSubsystem::SetCommandDroneSelected(
 	{
 		return;
 	}
+	if (SelectedCommandDroneIDs.Contains(DroneID) == bSelected)
+	{
+		return;
+	}
 
 	// SelectedCommandDroneIDs 仅表示多机命令目标；这里不调用 Fleet->SelectDrone，
 	// 因而不会覆盖用于详情查看/当前高亮的 CurrentSelectedDroneID。
@@ -444,6 +521,7 @@ void UGCSUIBridgeSubsystem::SetCommandDroneSelected(
 	{
 		SelectedCommandDroneIDs.Remove(DroneID);
 	}
+	SyncCommandSelectionToVisualization();
 
 	const UFleetManagerSubsystem* Fleet = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>()
@@ -461,6 +539,518 @@ void UGCSUIBridgeSubsystem::SetCommandDroneSelected(
 TArray<FString> UGCSUIBridgeSubsystem::GetSelectedCommandDroneIDs() const
 {
 	return GetCommandTargetDroneIDs();
+}
+
+void UGCSUIBridgeSubsystem::ReplaceCommandDroneSelection(
+	const TArray<FString>& DroneIDs)
+{
+	SelectedCommandDroneIDs.Reset();
+	for (const FString& DroneID : DroneIDs)
+	{
+		if (!DroneID.IsEmpty())
+		{
+			SelectedCommandDroneIDs.Add(DroneID);
+		}
+	}
+	SyncCommandSelectionToVisualization();
+	RefreshFromFleet();
+}
+
+void UGCSUIBridgeSubsystem::RegisterMarqueeInputProcessor()
+{
+	if (MarqueeInputProcessor.IsValid() || !FSlateApplication::IsInitialized())
+	{
+		return;
+	}
+
+	MarqueeInputProcessor = MakeShared<FGCSMarqueeInputProcessor>(this);
+	FSlateApplication::Get().RegisterInputPreProcessor(MarqueeInputProcessor, 0);
+}
+
+void UGCSUIBridgeSubsystem::UnregisterMarqueeInputProcessor()
+{
+	if (MarqueeInputProcessor.IsValid() && FSlateApplication::IsInitialized())
+	{
+		FSlateApplication::Get().UnregisterInputPreProcessor(MarqueeInputProcessor);
+	}
+	MarqueeInputProcessor.Reset();
+	EndMarqueeCameraLock();
+	EndTopDownLocateLock();
+	UpdateSelectionRectangleVisual(FVector2D::ZeroVector, FVector2D::ZeroVector, false);
+	bMarqueePointerDown = false;
+	bMarqueeSelecting = false;
+	bMarqueeLeftMouseWasDown = false;
+}
+
+void UGCSUIBridgeSubsystem::PollMarqueePlayerControllerInput()
+{
+	UUserWidget* MainWidget = MainWidgetRef.Get();
+	APlayerController* PlayerController = MainWidget ? MainWidget->GetOwningPlayer() : nullptr;
+	UWorld* World = MainWidget ? MainWidget->GetWorld() : nullptr;
+	if (!MainWidget || !PlayerController || !World || !FApp::HasFocus())
+	{
+		EndMarqueeCameraLock();
+		EndTopDownLocateLock();
+		UpdateSelectionRectangleVisual(FVector2D::ZeroVector, FVector2D::ZeroVector, false);
+		bMarqueePointerDown = false;
+		bMarqueeSelecting = false;
+		bMarqueeLeftMouseWasDown = false;
+		return;
+	}
+
+	UpdateTopDownLocateLock(PlayerController);
+
+	const bool bLeftMouseDown = PlayerController->IsInputKeyDown(EKeys::LeftMouseButton);
+	float MouseX = 0.0f;
+	float MouseY = 0.0f;
+	const bool bMousePositionValid = PlayerController->GetMousePosition(MouseX, MouseY);
+	const FVector2D ScreenPosition = FSlateApplication::Get().GetCursorPos();
+	const FVector2D LocalPosition = bMousePositionValid
+		? UWidgetLayoutLibrary::GetMousePositionOnViewport(World)
+		: MarqueeCurrentLocalPosition;
+
+	if (bLeftMouseDown && !bMarqueeLeftMouseWasDown)
+	{
+		bMarqueeLeftMouseWasDown = true;
+		const bool bBlockedByUI = IsPointerOverBlockingGCSUI(ScreenPosition);
+		UE_LOG(
+			LogTemp,
+			Display,
+			TEXT("[GCS_MARQUEE_INPUT] MouseDown PositionValid=%s BlockedByUI=%s"),
+			bMousePositionValid ? TEXT("true") : TEXT("false"),
+			bBlockedByUI ? TEXT("true") : TEXT("false"));
+		if (!bMousePositionValid || bBlockedByUI)
+		{
+			return;
+		}
+
+		bMarqueePointerDown = true;
+		bMarqueeSelecting = false;
+		MarqueeStartScreenPosition = ScreenPosition;
+		MarqueeStartLocalPosition = LocalPosition;
+		MarqueeCurrentLocalPosition = LocalPosition;
+		UpdateSelectionRectangleVisual(LocalPosition, LocalPosition, false);
+		return;
+	}
+
+	if (bLeftMouseDown && bMarqueePointerDown && bMousePositionValid)
+	{
+		MarqueeCurrentLocalPosition = LocalPosition;
+		if (!bMarqueeSelecting
+			&& FVector2D::Distance(ScreenPosition, MarqueeStartScreenPosition)
+				>= MarqueeDragThresholdPixels)
+		{
+			bMarqueeSelecting = true;
+			BeginMarqueeCameraLock(PlayerController);
+			UE_LOG(LogTemp, Display, TEXT("[GCS_MARQUEE_INPUT] DragStart"));
+		}
+
+		if (bMarqueeSelecting)
+		{
+			UpdateSelectionRectangleVisual(
+				MarqueeStartLocalPosition,
+				MarqueeCurrentLocalPosition,
+				true);
+		}
+		return;
+	}
+
+	if (!bLeftMouseDown && bMarqueeLeftMouseWasDown)
+	{
+		bMarqueeLeftMouseWasDown = false;
+		if (!bMarqueePointerDown)
+		{
+			return;
+		}
+
+		UE_LOG(LogTemp, Display, TEXT("[GCS_MARQUEE_INPUT] MouseUp"));
+		if (bMarqueeSelecting)
+		{
+			CompleteMarqueeSelection(
+				MarqueeStartLocalPosition,
+				MarqueeCurrentLocalPosition);
+		}
+		UpdateSelectionRectangleVisual(FVector2D::ZeroVector, FVector2D::ZeroVector, false);
+		bMarqueePointerDown = false;
+		bMarqueeSelecting = false;
+		EndMarqueeCameraLock();
+	}
+}
+
+void UGCSUIBridgeSubsystem::BeginMarqueeCameraLock(APlayerController* PlayerController)
+{
+	if (bMarqueeCameraLocked || !PlayerController)
+	{
+		return;
+	}
+
+	MarqueeCameraLockPlayerController = PlayerController;
+	PlayerController->SetIgnoreLookInput(true);
+	bMarqueeCameraLocked = true;
+}
+
+void UGCSUIBridgeSubsystem::EndMarqueeCameraLock()
+{
+	if (!bMarqueeCameraLocked)
+	{
+		MarqueeCameraLockPlayerController.Reset();
+		return;
+	}
+
+	if (APlayerController* PlayerController = MarqueeCameraLockPlayerController.Get())
+	{
+		PlayerController->SetIgnoreLookInput(false);
+	}
+	MarqueeCameraLockPlayerController.Reset();
+	bMarqueeCameraLocked = false;
+}
+
+void UGCSUIBridgeSubsystem::HandleTopDownLocateClicked()
+{
+	UUserWidget* MainWidget = MainWidgetRef.Get();
+	UWorld* World = MainWidget ? MainWidget->GetWorld() : nullptr;
+	APlayerController* PlayerController = MainWidget ? MainWidget->GetOwningPlayer() : nullptr;
+	APawn* CameraPawn = PlayerController ? PlayerController->GetPawn() : nullptr;
+	APlayerCameraManager* CameraManager = PlayerController
+		? PlayerController->PlayerCameraManager
+		: nullptr;
+	if (!World || !PlayerController || !CameraPawn || !CameraManager)
+	{
+		return;
+	}
+
+	FBox FleetBounds(EForceInit::ForceInit);
+	for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
+	{
+		for (const FVector& WorldPosition : It->GetDronePositions())
+		{
+			if (!WorldPosition.IsNearlyZero() && !WorldPosition.ContainsNaN())
+			{
+				FleetBounds += WorldPosition;
+			}
+		}
+		break;
+	}
+	if (!FleetBounds.IsValid)
+	{
+		return;
+	}
+
+	int32 ViewportWidth = 0;
+	int32 ViewportHeight = 0;
+	PlayerController->GetViewportSize(ViewportWidth, ViewportHeight);
+	const float AspectRatio = ViewportHeight > 0
+		? static_cast<float>(ViewportWidth) / static_cast<float>(ViewportHeight)
+		: (16.0f / 9.0f);
+	const float HalfHorizontalFovRadians = FMath::DegreesToRadians(
+		FMath::Clamp(CameraManager->GetFOVAngle(), 5.0f, 170.0f) * 0.5f);
+	const float TanHalfHorizontalFov = FMath::Max(
+		FMath::Tan(HalfHorizontalFovRadians),
+		KINDA_SMALL_NUMBER);
+	const float TanHalfVerticalFov = FMath::Max(
+		TanHalfHorizontalFov / FMath::Max(AspectRatio, KINDA_SMALL_NUMBER),
+		KINDA_SMALL_NUMBER);
+	const FVector FleetExtent = FleetBounds.GetExtent();
+	const float PlanarRadius = FVector2D(FleetExtent.X, FleetExtent.Y).Size();
+	const float RequiredHeight = FMath::Max(
+		1000.0f,
+		(PlanarRadius / FMath::Min(TanHalfHorizontalFov, TanHalfVerticalFov)) * 1.15f);
+	const FVector FleetCenter = FleetBounds.GetCenter();
+
+	TopDownLockedCameraLocation = FVector(
+		FleetCenter.X,
+		FleetCenter.Y,
+		FleetBounds.Max.Z + RequiredHeight);
+	TopDownLockedCameraRotation = FRotator(-90.0f, 0.0f, 0.0f);
+	CameraPawn->SetActorLocation(
+		TopDownLockedCameraLocation,
+		false,
+		nullptr,
+		ETeleportType::TeleportPhysics);
+	CameraPawn->SetActorRotation(
+		TopDownLockedCameraRotation,
+		ETeleportType::TeleportPhysics);
+	PlayerController->SetControlRotation(TopDownLockedCameraRotation);
+	bTopDownLocateLocked = true;
+}
+
+void UGCSUIBridgeSubsystem::UpdateTopDownLocateLock(APlayerController* PlayerController)
+{
+	if (!bTopDownLocateLocked || !PlayerController)
+	{
+		return;
+	}
+
+	if (PlayerController->IsInputKeyDown(EKeys::RightMouseButton)
+		|| PlayerController->IsInputKeyDown(EKeys::W)
+		|| PlayerController->IsInputKeyDown(EKeys::A)
+		|| PlayerController->IsInputKeyDown(EKeys::S)
+		|| PlayerController->IsInputKeyDown(EKeys::D))
+	{
+		EndTopDownLocateLock();
+		return;
+	}
+
+	if (APawn* CameraPawn = PlayerController->GetPawn())
+	{
+		CameraPawn->SetActorLocation(
+			TopDownLockedCameraLocation,
+			false,
+			nullptr,
+			ETeleportType::TeleportPhysics);
+		CameraPawn->SetActorRotation(
+			TopDownLockedCameraRotation,
+			ETeleportType::TeleportPhysics);
+	}
+	PlayerController->SetControlRotation(TopDownLockedCameraRotation);
+}
+
+void UGCSUIBridgeSubsystem::EndTopDownLocateLock()
+{
+	bTopDownLocateLocked = false;
+}
+
+void UGCSUIBridgeSubsystem::HandleMarqueeMouseButtonDown(
+	const FPointerEvent& MouseEvent)
+{
+	if (MouseEvent.GetEffectingButton() != EKeys::LeftMouseButton)
+	{
+		return;
+	}
+
+	UUserWidget* MainWidget = MainWidgetRef.Get();
+	const FVector2D ScreenPosition = MouseEvent.GetScreenSpacePosition();
+	if (!MainWidget
+		|| !MainWidget->IsVisible()
+		|| !MainWidget->GetCachedGeometry().IsUnderLocation(ScreenPosition)
+		|| IsPointerOverBlockingGCSUI(ScreenPosition))
+	{
+		return;
+	}
+
+	bMarqueePointerDown = true;
+	bMarqueeSelecting = false;
+	MarqueeStartScreenPosition = ScreenPosition;
+	MarqueeStartLocalPosition = ScreenToMainWidgetLocal(ScreenPosition);
+	UpdateSelectionRectangleVisual(
+		MarqueeStartLocalPosition,
+		MarqueeStartLocalPosition,
+		false);
+}
+
+void UGCSUIBridgeSubsystem::HandleMarqueeMouseMove(
+	const FPointerEvent& MouseEvent)
+{
+	if (!bMarqueePointerDown)
+	{
+		return;
+	}
+
+	const FVector2D ScreenPosition = MouseEvent.GetScreenSpacePosition();
+	if (!bMarqueeSelecting
+		&& FVector2D::Distance(ScreenPosition, MarqueeStartScreenPosition)
+			>= MarqueeDragThresholdPixels)
+	{
+		bMarqueeSelecting = true;
+	}
+
+	if (bMarqueeSelecting)
+	{
+		UpdateSelectionRectangleVisual(
+			MarqueeStartLocalPosition,
+			ScreenToMainWidgetLocal(ScreenPosition),
+			true);
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleMarqueeMouseButtonUp(
+	const FPointerEvent& MouseEvent)
+{
+	if (MouseEvent.GetEffectingButton() != EKeys::LeftMouseButton
+		|| !bMarqueePointerDown)
+	{
+		return;
+	}
+
+	const FVector2D EndPosition =
+		ScreenToMainWidgetLocal(MouseEvent.GetScreenSpacePosition());
+	if (bMarqueeSelecting)
+	{
+		UpdateSelectionRectangleVisual(
+			MarqueeStartLocalPosition,
+			EndPosition,
+			true);
+		CompleteMarqueeSelection(MarqueeStartLocalPosition, EndPosition);
+	}
+
+	UpdateSelectionRectangleVisual(FVector2D::ZeroVector, FVector2D::ZeroVector, false);
+	bMarqueePointerDown = false;
+	bMarqueeSelecting = false;
+}
+
+bool UGCSUIBridgeSubsystem::IsPointerOverBlockingGCSUI(
+	const FVector2D& ScreenPosition) const
+{
+	for (const TWeakObjectPtr<UUserWidget>& WidgetRef :
+		{ TopBarWidget,
+		  LeftToolbarWidget,
+		  FleetPanelWidget,
+		  DroneDetailWidget,
+		  RightToolbarWidget,
+		  RightPanelWidget,
+		  PlaybackWidget,
+		  MapPageWidget,
+		  SettingsPageWidget,
+		  LogsPageWidget })
+	{
+		const UUserWidget* Widget = WidgetRef.Get();
+		if (Widget
+			&& Widget->IsVisible()
+			&& Widget->GetCachedGeometry().IsUnderLocation(ScreenPosition))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+FVector2D UGCSUIBridgeSubsystem::ScreenToMainWidgetLocal(
+	const FVector2D& ScreenPosition) const
+{
+	const UUserWidget* MainWidget = MainWidgetRef.Get();
+	if (!MainWidget)
+	{
+		return FVector2D::ZeroVector;
+	}
+
+	const FGeometry& Geometry = MainWidget->GetCachedGeometry();
+	FVector2D LocalPosition = Geometry.AbsoluteToLocal(ScreenPosition);
+	const FVector2D LocalSize = Geometry.GetLocalSize();
+	LocalPosition.X = FMath::Clamp(LocalPosition.X, 0.0f, LocalSize.X);
+	LocalPosition.Y = FMath::Clamp(LocalPosition.Y, 0.0f, LocalSize.Y);
+	return LocalPosition;
+}
+
+void UGCSUIBridgeSubsystem::UpdateSelectionRectangleVisual(
+	const FVector2D& StartPosition,
+	const FVector2D& CurrentPosition,
+	const bool bVisible) const
+{
+	UWidget* Rectangle = SelectionRectangleWidget.Get();
+	if (!Rectangle)
+	{
+		return;
+	}
+
+	if (!bVisible)
+	{
+		Rectangle->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+
+	if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Rectangle->Slot))
+	{
+		Slot->SetAnchors(FAnchors(0.0f, 0.0f));
+		Slot->SetAlignment(FVector2D::ZeroVector);
+		Slot->SetZOrder(200);
+		const FVector2D Minimum(
+			FMath::Min(StartPosition.X, CurrentPosition.X),
+			FMath::Min(StartPosition.Y, CurrentPosition.Y));
+		const FVector2D Maximum(
+			FMath::Max(StartPosition.X, CurrentPosition.X),
+			FMath::Max(StartPosition.Y, CurrentPosition.Y));
+		Slot->SetPosition(Minimum);
+		Slot->SetSize(Maximum - Minimum);
+		Slot->SetAutoSize(false);
+	}
+	Rectangle->SetVisibility(ESlateVisibility::HitTestInvisible);
+}
+
+void UGCSUIBridgeSubsystem::CompleteMarqueeSelection(
+	const FVector2D& StartPosition,
+	const FVector2D& EndPosition)
+{
+	UUserWidget* MainWidget = MainWidgetRef.Get();
+	APlayerController* PlayerController = MainWidget ? MainWidget->GetOwningPlayer() : nullptr;
+	UWorld* World = MainWidget ? MainWidget->GetWorld() : nullptr;
+	UFleetManagerSubsystem* Fleet = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>()
+		: nullptr;
+	if (!PlayerController || !World || !Fleet || !PlayerController->PlayerCameraManager)
+	{
+		return;
+	}
+
+	ADroneFleetVisualizationActor* Visualization = nullptr;
+	for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
+	{
+		Visualization = *It;
+		break;
+	}
+	if (!Visualization)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[GCS_MARQUEE] Fleet visualization actor not found."));
+		return;
+	}
+
+	const TArray<FString> DroneIDs = Visualization->GetParticleDroneIDs();
+	const TArray<FVector> WorldPositions = Visualization->GetDronePositions();
+	const int32 CandidateCount = FMath::Min(DroneIDs.Num(), WorldPositions.Num());
+	const FVector2D Minimum(
+		FMath::Min(StartPosition.X, EndPosition.X),
+		FMath::Min(StartPosition.Y, EndPosition.Y));
+	const FVector2D Maximum(
+		FMath::Max(StartPosition.X, EndPosition.X),
+		FMath::Max(StartPosition.Y, EndPosition.Y));
+	const FVector CameraLocation = PlayerController->PlayerCameraManager->GetCameraLocation();
+	const FVector CameraForward =
+		PlayerController->PlayerCameraManager->GetCameraRotation().Vector();
+
+	TArray<FString> MarqueeDroneIDs;
+	MarqueeDroneIDs.Reserve(CandidateCount);
+	for (int32 Index = 0; Index < CandidateCount; ++Index)
+	{
+		FDroneData Drone;
+		const FVector& WorldPosition = WorldPositions[Index];
+		if (!Fleet->GetDroneByID(DroneIDs[Index], Drone)
+			|| !Drone.bOnline
+			|| !DroneGPS::IsValid(Drone)
+			|| WorldPosition.ContainsNaN()
+			|| FVector::DotProduct(CameraForward, WorldPosition - CameraLocation) <= 0.0f)
+		{
+			continue;
+		}
+
+		FVector2D WidgetPosition;
+		if (!UWidgetLayoutLibrary::ProjectWorldLocationToWidgetPosition(
+			PlayerController,
+			WorldPosition,
+			WidgetPosition,
+			true))
+		{
+			continue;
+		}
+
+		if (WidgetPosition.X >= Minimum.X
+			&& WidgetPosition.X <= Maximum.X
+			&& WidgetPosition.Y >= Minimum.Y
+			&& WidgetPosition.Y <= Maximum.Y)
+		{
+			MarqueeDroneIDs.Add(DroneIDs[Index]);
+		}
+	}
+
+	ReplaceCommandDroneSelection(MarqueeDroneIDs);
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[GCS_MARQUEE] Candidates=%d Selected=%d Rect=(%.1f,%.1f)-(%.1f,%.1f)"),
+		CandidateCount,
+		MarqueeDroneIDs.Num(),
+		Minimum.X,
+		Minimum.Y,
+		Maximum.X,
+		Maximum.Y);
 }
 
 FReply UGCSUIBridgeSubsystem::HandleFleetRowMouseButtonDown(
@@ -508,6 +1098,23 @@ TArray<FString> UGCSUIBridgeSubsystem::GetCommandTargetDroneIDs() const
 	TArray<FString> Result = SelectedCommandDroneIDs.Array();
 	Result.Sort();
 	return Result;
+}
+
+void UGCSUIBridgeSubsystem::SyncCommandSelectionToVisualization() const
+{
+	UWorld* World = MainWidgetRef.IsValid()
+		? MainWidgetRef->GetWorld()
+		: GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
+	{
+		It->SetCommandSelectedDroneIDs(GetCommandTargetDroneIDs());
+		break;
+	}
 }
 
 void UGCSUIBridgeSubsystem::RefreshHoverMVPControls()

@@ -20,6 +20,7 @@ namespace
 {
 	const FName DroneCountParameter(TEXT("User.DroneCount"));
 	const FName DronePositionsParameter(TEXT("User.DronePositions"));
+	const FName DroneLabelDataParameter(TEXT("User.DroneLabelData"));
 }
 
 ADroneFleetVisualizationActor::ADroneFleetVisualizationActor()
@@ -107,6 +108,41 @@ void ADroneFleetVisualizationActor::UnbindFleetManager()
 	FleetManager.Reset();
 }
 
+void ADroneFleetVisualizationActor::SetCommandSelectedDroneIDs(
+	const TArray<FString>& DroneIDs)
+{
+	TSet<FString> NewSelection;
+	NewSelection.Reserve(DroneIDs.Num());
+	for (const FString& DroneID : DroneIDs)
+	{
+		if (!DroneID.IsEmpty())
+		{
+			NewSelection.Add(DroneID);
+		}
+	}
+
+	bool bSelectionChanged = NewSelection.Num() != CommandSelectedDroneIDs.Num();
+	if (!bSelectionChanged)
+	{
+		for (const FString& DroneID : NewSelection)
+		{
+			if (!CommandSelectedDroneIDs.Contains(DroneID))
+			{
+				bSelectionChanged = true;
+				break;
+			}
+		}
+	}
+	if (!bSelectionChanged)
+	{
+		return;
+	}
+
+	CommandSelectedDroneIDs = MoveTemp(NewSelection);
+	RebuildDroneLabelData();
+	PushDroneLabelDataToNiagara();
+}
+
 void ADroneFleetVisualizationActor::RefreshFromFleet()
 {
 	CacheCesiumGeoreference();
@@ -119,15 +155,15 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 		FleetManager = Fleet;
 	}
 
-	ParticleDroneIDs.Reset();
 	DronePositions.Reset();
 	TArray<FDroneData> OrderedDrones;
+	TArray<FString> NewParticleDroneIDs;
 	if (Fleet)
 	{
 		// GetDronePage 保留 Fleet DroneOrder，因此 ParticleIndex -> DroneID 映射稳定。
 		// 不得按 TMap、GPS、Online 或选择状态重排；Offline 也必须保留原索引。
 		OrderedDrones = Fleet->GetDronePage(0, Fleet->GetDroneCount());
-		ParticleDroneIDs.Reserve(OrderedDrones.Num());
+		NewParticleDroneIDs.Reserve(OrderedDrones.Num());
 		DronePositions.SetNumZeroed(OrderedDrones.Num());
 
 		const FFleetGeoOrigin FleetGeoOrigin = Fleet->GetFleetGeoOrigin();
@@ -135,7 +171,7 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 		for (int32 Index = 0; Index < OrderedDrones.Num(); ++Index)
 		{
 			const FDroneData& Drone = OrderedDrones[Index];
-			ParticleDroneIDs.Add(Drone.DroneID);
+			NewParticleDroneIDs.Add(Drone.DroneID);
 
 			// FleetGeoOrigin 尚未建立时，任何后续无人机都不能抢占逻辑原点。
 			// 单机 GPS 无效时必须回到 ZeroVector，禁止保留历史坐标或使用索引占位。
@@ -146,6 +182,12 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 		}
 
 		// Offline 只改变状态，不删除粒子，也不改变 DroneOrder -> ParticleIndex 映射。
+	}
+
+	if (ParticleDroneIDs != NewParticleDroneIDs)
+	{
+		ParticleDroneIDs = MoveTemp(NewParticleDroneIDs);
+		RebuildDroneLabelData();
 	}
 
 	PushArraysToNiagara();
@@ -370,6 +412,34 @@ FVector ADroneFleetVisualizationActor::ConvertDroneGPSPosition(
 	return WorldPosition.ContainsNaN() ? FVector::ZeroVector : WorldPosition;
 }
 
+void ADroneFleetVisualizationActor::RebuildDroneLabelData()
+{
+	DroneLabelData.SetNumUninitialized(ParticleDroneIDs.Num());
+	for (int32 Index = 0; Index < ParticleDroneIDs.Num(); ++Index)
+	{
+		const float DisplayID = static_cast<float>(Index + 1);
+		const float SelectedMask = CommandSelectedDroneIDs.Contains(ParticleDroneIDs[Index])
+			? 1.0f
+			: 0.0f;
+		DroneLabelData[Index] = FLinearColor(DisplayID, SelectedMask, 0.0f, 1.0f);
+	}
+	bDroneLabelDataDirty = true;
+}
+
+void ADroneFleetVisualizationActor::PushDroneLabelDataToNiagara()
+{
+	if (!bDroneLabelDataDirty || !DroneFleetNiagara || !DroneFleetNiagara->GetAsset())
+	{
+		return;
+	}
+
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayColor(
+		DroneFleetNiagara,
+		DroneLabelDataParameter,
+		DroneLabelData);
+	bDroneLabelDataDirty = false;
+}
+
 void ADroneFleetVisualizationActor::PushArraysToNiagara()
 {
 	if (!DroneFleetNiagara || !DroneFleetNiagara->GetAsset())
@@ -384,6 +454,7 @@ void ADroneFleetVisualizationActor::PushArraysToNiagara()
 		DroneFleetNiagara,
 		DronePositionsParameter,
 		DronePositions);
+	PushDroneLabelDataToNiagara();
 
 	if (bCountChanged)
 	{

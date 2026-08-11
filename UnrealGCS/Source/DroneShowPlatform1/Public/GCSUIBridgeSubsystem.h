@@ -1,9 +1,9 @@
 /**
- * @brief ½« Fleet/Command ×´Ì¬Ó³Éäµ½ÏÖÓĞ UMG Widget µÄ UI Bridge/ViewModel¡£
+ * @brief å°† Fleet/Command çŠ¶æ€æ˜ å°„åˆ°ç°æœ‰ UMG Widget çš„ UI Bridge/ViewModelã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * ÊäÈë£ºFleetManager ÊÂ¼şÓëÓÃ»§°´Å¥£»Êä³ö£ºWidget ÎÄ±¾/Ñ¡Ôñ×´Ì¬ºÍ DSP Production ÃüÁî¡£
- * ¹Ø¼üÔ¼Êø£ºÏêÇéÑ¡Ôñ CurrentSelectedDroneID Óë¶à»úÃüÁî¼¯ºÏ SelectedCommandDroneIDs Ïà»¥¶ÀÁ¢¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è¾“å…¥ï¼šFleetManager äº‹ä»¶ä¸ç”¨æˆ·æŒ‰é’®ï¼›è¾“å‡ºï¼šWidget æ–‡æœ¬/é€‰æ‹©çŠ¶æ€å’Œ DSP Production å‘½ä»¤ã€‚
+ * å…³é”®çº¦æŸï¼šè¯¦æƒ…é€‰æ‹© CurrentSelectedDroneID ä¸å¤šæœºå‘½ä»¤é›†åˆ SelectedCommandDroneIDs ç›¸äº’ç‹¬ç«‹ã€‚
  */
 #pragma once
 
@@ -14,9 +14,12 @@
 #include "GCSUIBridgeSubsystem.generated.h"
 
 class UButton;
+class APlayerController;
 class UGCSDroneRowView;
 class UTextBlock;
 class UUserWidget;
+class UWidget;
+class FGCSMarqueeInputProcessor;
 struct FGeometry;
 struct FPointerEvent;
 class FReply;
@@ -59,11 +62,16 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|UI")
 	TArray<FString> GetSelectedCommandDroneIDs() const;
 
+	/** Replaces the existing command target set without changing detail selection. */
+	void ReplaceCommandDroneSelection(const TArray<FString>& DroneIDs);
+
 	static EGCSDroneDisplayStatus ResolveDroneDisplayStatus(
 		EDSPGCSTelemetryLinkState ServerState,
 		bool bDroneOnline);
 
 private:
+	friend class FGCSMarqueeInputProcessor;
+
 	UFUNCTION()
 	void HandleMenuClicked();
 
@@ -81,6 +89,9 @@ private:
 
 	UFUNCTION()
 	void HandleLogsPageClicked();
+
+	UFUNCTION()
+	void HandleTopDownLocateClicked();
 
 	UFUNCTION()
 	void HandleArmClicked();
@@ -193,9 +204,29 @@ private:
 		EGCSProductionCommandType CommandType,
 		const FGCSProductionCommandParameters& Parameters = {});
 	TArray<FString> GetCommandTargetDroneIDs() const;
+	void SyncCommandSelectionToVisualization() const;
 	void RefreshHoverMVPControls();
 	void SetFleetButtonLabel(FName ButtonName, const FString& Value) const;
 	void SetLegacyHoverSelectionVisible(bool bVisible) const;
+	void RegisterMarqueeInputProcessor();
+	void UnregisterMarqueeInputProcessor();
+	void PollMarqueePlayerControllerInput();
+	void BeginMarqueeCameraLock(APlayerController* PlayerController);
+	void EndMarqueeCameraLock();
+	void UpdateTopDownLocateLock(APlayerController* PlayerController);
+	void EndTopDownLocateLock();
+	void HandleMarqueeMouseButtonDown(const FPointerEvent& MouseEvent);
+	void HandleMarqueeMouseMove(const FPointerEvent& MouseEvent);
+	void HandleMarqueeMouseButtonUp(const FPointerEvent& MouseEvent);
+	bool IsPointerOverBlockingGCSUI(const FVector2D& ScreenPosition) const;
+	FVector2D ScreenToMainWidgetLocal(const FVector2D& ScreenPosition) const;
+	void UpdateSelectionRectangleVisual(
+		const FVector2D& StartPosition,
+		const FVector2D& CurrentPosition,
+		bool bVisible) const;
+	void CompleteMarqueeSelection(
+		const FVector2D& StartPosition,
+		const FVector2D& EndPosition);
 	void BindExistingButtons();
 	void BindFleetPanelButtons();
 	void BindNavigationButtons();
@@ -210,6 +241,10 @@ private:
 	TWeakObjectPtr<UUserWidget> LeftToolbarWidget;
 	TWeakObjectPtr<UUserWidget> FleetPanelWidget;
 	TWeakObjectPtr<UUserWidget> DroneDetailWidget;
+	TWeakObjectPtr<UUserWidget> RightToolbarWidget;
+	TWeakObjectPtr<UUserWidget> RightPanelWidget;
+	TWeakObjectPtr<UUserWidget> PlaybackWidget;
+	TWeakObjectPtr<UWidget> SelectionRectangleWidget;
 	TWeakObjectPtr<UUserWidget> MapPageWidget;
 	TWeakObjectPtr<UUserWidget> SettingsPageWidget;
 	TWeakObjectPtr<UUserWidget> LogsPageWidget;
@@ -218,11 +253,24 @@ private:
 	FString LastCommandResultText;
 	TSet<FString> SelectedCommandDroneIDs;
 	TArray<FString> CurrentFleetPageDroneIDs;
+	TSharedPtr<FGCSMarqueeInputProcessor> MarqueeInputProcessor;
+	TWeakObjectPtr<APlayerController> MarqueeCameraLockPlayerController;
+	FVector2D MarqueeStartScreenPosition = FVector2D::ZeroVector;
+	FVector2D MarqueeStartLocalPosition = FVector2D::ZeroVector;
+	FVector2D MarqueeCurrentLocalPosition = FVector2D::ZeroVector;
+	bool bMarqueePointerDown = false;
+	bool bMarqueeSelecting = false;
+	bool bMarqueeLeftMouseWasDown = false;
+	bool bMarqueeCameraLocked = false;
+	bool bTopDownLocateLocked = false;
+	FVector TopDownLockedCameraLocation = FVector::ZeroVector;
+	FRotator TopDownLockedCameraRotation = FRotator::ZeroRotator;
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UGCSDroneRowView>> FleetRowViews;
 
 	int32 FleetPageOffset = 0;
 	static constexpr int32 FleetPageSize = 5;
+	static constexpr float MarqueeDragThresholdPixels = 5.0f;
 	float HoverAltitudeMeters = 5.0f;
 };

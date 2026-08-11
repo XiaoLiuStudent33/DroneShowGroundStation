@@ -18,22 +18,22 @@
 
 namespace
 {
-	FString FromProtocolString(const std::string& Value)
+	FString FromProductionProtocolString(const std::string& Value)
 	{
 		return UTF8_TO_TCHAR(Value.c_str());
 	}
 
-	FDateTime FromUnixMilliseconds(const int64 TimestampUtcMs)
+	FDateTime FromProductionUnixMilliseconds(const int64 TimestampUtcMs)
 	{
 		return TimestampUtcMs > 0
 			? FDateTime::FromUnixTimestamp(TimestampUtcMs / 1000)
 			: FDateTime::UtcNow();
 	}
 
-	FDroneData ToFleetDrone(const dspgcs::TelemetryDTO& Source, const bool bSelected)
+	FDroneData ToProductionFleetDrone(const dspgcs::TelemetryDTO& Source, const bool bSelected)
 	{
 		FDroneData Target;
-		Target.DroneID = FromProtocolString(Source.droneId);
+		Target.DroneID = FromProductionProtocolString(Source.droneId);
 		Target.SysID = static_cast<int32>(Source.sysId);
 		Target.GPSLat = Source.gps.latitudeDeg;
 		Target.GPSLon = Source.gps.longitudeDeg;
@@ -45,7 +45,7 @@ namespace
 		Target.Battery = Source.battery.valid
 			? Source.battery.remainingPercent
 			: 0.0f;
-		Target.Mode = FromProtocolString(Source.mode.modeName);
+		Target.Mode = FromProductionProtocolString(Source.mode.modeName);
 		Target.RSSI = Source.rssi.valid
 			? static_cast<int32>(Source.rssi.valueDbm)
 			: 0;
@@ -300,15 +300,15 @@ void UDSPGCSProductionTelemetryProviderSubsystem::HandleTransportFrame(
 
 	FGCSFleetSnapshot Snapshot;
 	Snapshot.Header.SchemaVersion = GCSDataSchema::CurrentVersion;
-	Snapshot.Header.SourceID = FromProtocolString(Envelope.sourceId);
-	Snapshot.Header.SessionID = FromProtocolString(Envelope.sessionId);
+	Snapshot.Header.SourceID = FromProductionProtocolString(Envelope.sourceId);
+	Snapshot.Header.SessionID = FromProductionProtocolString(Envelope.sessionId);
 	Snapshot.Header.Sequence = static_cast<int64>(Envelope.sequence);
-	Snapshot.Header.SourceTimestamp = FromUnixMilliseconds(Envelope.timestampUtcMs);
+	Snapshot.Header.SourceTimestamp = FromProductionUnixMilliseconds(Envelope.timestampUtcMs);
 	Snapshot.FleetRevision = static_cast<int64>(CompleteBatch.fleetRevision);
 	Snapshot.Drones.Reserve(static_cast<int32>(CompleteBatch.items.size()));
 	for (size_t Index = 0; Index < CompleteBatch.items.size(); ++Index)
 	{
-		Snapshot.Drones.Add(ToFleetDrone(CompleteBatch.items[Index], Index == 0));
+		Snapshot.Drones.Add(ToProductionFleetDrone(CompleteBatch.items[Index], Index == 0));
 	}
 
 	if (Adapter->PushFleetSnapshot(Snapshot))
