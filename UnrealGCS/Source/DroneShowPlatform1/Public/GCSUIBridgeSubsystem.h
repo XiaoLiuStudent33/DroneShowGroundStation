@@ -14,6 +14,7 @@
 #include "GCSUIBridgeSubsystem.generated.h"
 
 class UButton;
+class ACameraActor;
 class APlayerController;
 class UGCSDroneRowView;
 class UTextBlock;
@@ -94,6 +95,27 @@ private:
 	void HandleTopDownLocateClicked();
 
 	UFUNCTION()
+	void HandleColorOffClicked();
+
+	UFUNCTION()
+	void HandleColorWhiteClicked();
+
+	UFUNCTION()
+	void HandleColorRedClicked();
+
+	UFUNCTION()
+	void HandleColorGreenClicked();
+
+	UFUNCTION()
+	void HandleColorBlueClicked();
+
+	UFUNCTION()
+	void HandleColorYellowClicked();
+
+	UFUNCTION()
+	void HandleColorMagentaClicked();
+
+	UFUNCTION()
 	void HandleArmClicked();
 
 	UFUNCTION()
@@ -172,6 +194,7 @@ private:
 	UButton* FindButton(const FName Name) const;
 	UButton* FindFleetButton(const FName Name) const;
 	UButton* FindToolbarButton(const FName Name) const;
+	UButton* FindRightPanelButton(const FName Name) const;
 	UTextBlock* FindText(const FName Name) const;
 	UTextBlock* FindFleetText(const FName Name) const;
 	UTextBlock* FindTopBarText(const FName Name) const;
@@ -213,8 +236,10 @@ private:
 	void PollMarqueePlayerControllerInput();
 	void BeginMarqueeCameraLock(APlayerController* PlayerController);
 	void EndMarqueeCameraLock();
+	void UpdateTopDownViewInput(APlayerController* PlayerController);
+	void ResetTopDownViewInputState();
 	void UpdateTopDownLocateLock(APlayerController* PlayerController);
-	void EndTopDownLocateLock();
+	void EndTopDownLocateLock(APlayerController* PlayerController = nullptr);
 	void HandleMarqueeMouseButtonDown(const FPointerEvent& MouseEvent);
 	void HandleMarqueeMouseMove(const FPointerEvent& MouseEvent);
 	void HandleMarqueeMouseButtonUp(const FPointerEvent& MouseEvent);
@@ -228,6 +253,13 @@ private:
 		const FVector2D& StartPosition,
 		const FVector2D& EndPosition);
 	void BindExistingButtons();
+	void BindColorPaletteButtons();
+	void ApplySelectedDronePreviewColor(const FLinearColor& Color) const;
+	void ApplyAndSubmitSelectedDroneLedColor(
+		const FLinearColor& PreviewColor,
+		uint8 Red,
+		uint8 Green,
+		uint8 Blue);
 	void BindFleetPanelButtons();
 	void BindNavigationButtons();
 	void CreateNavigationPages();
@@ -263,8 +295,14 @@ private:
 	bool bMarqueeLeftMouseWasDown = false;
 	bool bMarqueeCameraLocked = false;
 	bool bTopDownLocateLocked = false;
+	bool bTopDownMiddleMouseWasDown = false;
+	bool bTopDownPanning = false;
+	FVector2D TopDownLastMousePosition = FVector2D::ZeroVector;
+	float TopDownFitOrthoWidth = 0.0f;
 	FVector TopDownLockedCameraLocation = FVector::ZeroVector;
 	FRotator TopDownLockedCameraRotation = FRotator::ZeroRotator;
+	TWeakObjectPtr<ACameraActor> TopDownOrthographicCamera;
+	TWeakObjectPtr<AActor> PreviousTopDownViewTarget;
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UGCSDroneRowView>> FleetRowViews;
@@ -272,5 +310,8 @@ private:
 	int32 FleetPageOffset = 0;
 	static constexpr int32 FleetPageSize = 5;
 	static constexpr float MarqueeDragThresholdPixels = 5.0f;
+	static constexpr float TopDownZoomFactor = 0.85f;
+	static constexpr float TopDownMinOrthoWidthFactor = 0.03f;
+	static constexpr float TopDownMaxOrthoWidthFactor = 8.0f;
 	float HoverAltitudeMeters = 5.0f;
 };

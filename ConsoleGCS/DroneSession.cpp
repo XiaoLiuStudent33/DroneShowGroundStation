@@ -339,6 +339,22 @@ DroneSessionCommandSubmission DroneSession::SubmitCommand(
         submission.accepted = true;
         return submission;
 
+    case DroneCommandType::SetLedColor:
+        ConsoleUI::AddLog(
+            requestPrefix + "SetLedColor RemoteEndpoint=" +
+            config.remoteIp + ":" + std::to_string(config.remotePort) +
+            " RGB=(" + std::to_string(request.parameters.red) + "," +
+            std::to_string(request.parameters.green) + "," +
+            std::to_string(request.parameters.blue) + ")");
+        submission.dispatchRequestIds.push_back(dispatcher.QueueSetLedColor(
+            commandTarget.systemID,
+            commandTarget.componentID,
+            request.parameters.red,
+            request.parameters.green,
+            request.parameters.blue));
+        submission.accepted = true;
+        return submission;
+
     case DroneCommandType::HoverTest:
         if (request.parameters.hoverAltitudeMeters <= 0.0f ||
             request.parameters.hoverAltitudeMeters >

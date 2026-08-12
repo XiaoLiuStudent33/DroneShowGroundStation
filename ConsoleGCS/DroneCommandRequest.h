@@ -20,7 +20,8 @@ enum class DroneCommandType
     Land,
     RTL,
     SetMode,
-    HoverTest
+    HoverTest,
+    SetLedColor
 };
 
 // ArduPilot Copter custom_mode values used by the current GCS mode controls.
@@ -58,6 +59,9 @@ struct DroneCommandParameters
     float hoverDurationSeconds = 0.0f;
     int customMode = -1;
     bool startHoverTest = true;
+    std::uint8_t red = 0;
+    std::uint8_t green = 0;
+    std::uint8_t blue = 0;
 };
 
 // ConsoleGCS command-domain model. It is deliberately independent of UE and

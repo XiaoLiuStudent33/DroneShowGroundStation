@@ -36,6 +36,7 @@ namespace
         case dspgcs::CommandType::RTL: result = DroneCommandType::RTL; return true;
         case dspgcs::CommandType::SetMode: result = DroneCommandType::SetMode; return true;
         case dspgcs::CommandType::HoverTest: result = DroneCommandType::HoverTest; return true;
+        case dspgcs::CommandType::SetLedColor: result = DroneCommandType::SetLedColor; return true;
         }
         return false;
     }
@@ -51,6 +52,7 @@ namespace
         case dspgcs::CommandType::RTL:
         case dspgcs::CommandType::SetMode:
         case dspgcs::CommandType::HoverTest:
+        case dspgcs::CommandType::SetLedColor:
             return true;
         default:
             return false;
@@ -298,7 +300,16 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
             " Type=" + std::to_string(
                 static_cast<std::uint16_t>(request.commandType)) +
             " Targets=" + std::to_string(request.targetDroneIds.size()));
-        if (request.commandType == dspgcs::CommandType::HoverTest)
+        if (request.commandType == dspgcs::CommandType::SetLedColor)
+        {
+            ConsoleUI::AddLog(
+                "DSP-GCS SetLedColor received Targets=" +
+                std::to_string(request.targetDroneIds.size()) +
+                " RGB=(" + std::to_string(request.parameters.red) + "," +
+                std::to_string(request.parameters.green) + "," +
+                std::to_string(request.parameters.blue) + ")");
+        }
+        else if (request.commandType == dspgcs::CommandType::HoverTest)
         {
             ConsoleUI::AddLog(
                 "DSP-GCS HoverParameters Altitude=" +
@@ -349,6 +360,9 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
                         request.parameters.hoverDurationSeconds;
                     parameters.customMode = request.parameters.customMode;
                     parameters.startHoverTest = request.parameters.start;
+                    parameters.red = request.parameters.red;
+                    parameters.green = request.parameters.green;
+                    parameters.blue = request.parameters.blue;
 
                     const std::uint64_t internalCommandId = commandManager.Submit(
                         internalType,
@@ -388,6 +402,9 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
                     request.parameters.hoverDurationSeconds;
                 parameters.customMode = request.parameters.customMode;
                 parameters.startHoverTest = request.parameters.start;
+                parameters.red = request.parameters.red;
+                parameters.green = request.parameters.green;
+                parameters.blue = request.parameters.blue;
 
                 const std::uint64_t internalCommandId = commandManager.Submit(
                     internalType,

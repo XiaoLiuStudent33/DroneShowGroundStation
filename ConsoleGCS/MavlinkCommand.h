@@ -108,6 +108,12 @@ public:
         uint8_t component
     );
 
+    static bool SetLedColor(
+        UdpClient& udp,
+        uint8_t red,
+        uint8_t green,
+        uint8_t blue);
+
     static bool SetMode(
 
         UdpClient& udp,

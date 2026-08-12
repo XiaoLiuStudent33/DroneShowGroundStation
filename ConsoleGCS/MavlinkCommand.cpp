@@ -1,5 +1,7 @@
 ﻿#include "MavlinkCommand.h"
 
+#include "ConsoleUI.h"
+
 #include <iostream>
 
 /**
@@ -186,6 +188,41 @@ bool MavlinkCommand::Disarm(
 
     );
 
+}
+
+bool MavlinkCommand::SetLedColor(
+    UdpClient& udp,
+    uint8_t red,
+    uint8_t green,
+    uint8_t blue)
+{
+    uint8_t customBytes[24]{};
+    customBytes[0] = red;
+    customBytes[1] = green;
+    customBytes[2] = blue;
+
+    mavlink_message_t message{};
+    // Legacy LED_CONTROL device compatibility behavior: payload target is 0/0.
+    mavlink_msg_led_control_pack(
+        255,
+        MAV_COMP_ID_MISSIONPLANNER,
+        &message,
+        0,
+        0,
+        255,
+        255,
+        3,
+        customBytes);
+
+    uint8_t buffer[MAVLINK_MAX_PACKET_LEN]{};
+    const uint16_t length = mavlink_msg_to_send_buffer(buffer, &message);
+    const bool sent = udp.Send(buffer, length);
+    ConsoleUI::AddLog(
+        std::string("LED_CONTROL #186 ") + (sent ? "sent" : "send failed") +
+        " RemoteEndpoint=" + udp.GetRemoteEndpoint() +
+        " RGB=(" + std::to_string(red) + "," +
+        std::to_string(green) + "," + std::to_string(blue) + ")");
+    return sent;
 }
 
 bool MavlinkCommand::SetMode(

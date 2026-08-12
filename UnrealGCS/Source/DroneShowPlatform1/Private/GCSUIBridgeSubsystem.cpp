@@ -24,6 +24,8 @@
 #include "GCSUIWidgetPresenter.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
+#include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
@@ -112,8 +114,14 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 				}));
 	}
 
-	if (UButton* LocateButton =
-		FGCSUIWidgetPresenter::FindButton(RightToolbarWidget.Get(), TEXT("BTN_GPS")))
+	UButton* LocateButton =
+		FGCSUIWidgetPresenter::FindButton(RightToolbarWidget.Get(), TEXT("BTN_ZCamera"));
+	if (!LocateButton)
+	{
+		// Keep compatibility with a toolbar authored before the production rename.
+		LocateButton = FGCSUIWidgetPresenter::FindButton(RightToolbarWidget.Get(), TEXT("BTN_GPS"));
+	}
+	if (LocateButton)
 	{
 		LocateButton->OnClicked.RemoveDynamic(
 			this,
@@ -121,6 +129,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 		LocateButton->OnClicked.AddDynamic(
 			this,
 			&UGCSUIBridgeSubsystem::HandleTopDownLocateClicked);
+		UE_LOG(LogTemp, Log, TEXT("[GCSLocate] BTN_ZCamera Bound = YES"));
 	}
 
 	// Preserve the authored DroneDetail layout. The hover altitude and ground
@@ -138,6 +147,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	}
 
 	BindExistingButtons();
+	BindColorPaletteButtons();
 	BindFleetPanelButtons();
 	SetLegacyHoverSelectionVisible(false);
 	RefreshHoverMVPControls();
@@ -257,12 +267,32 @@ void UGCSUIBridgeSubsystem::HandleMenuClicked()
 
 void UGCSUIBridgeSubsystem::HandleFleetPageClicked()
 {
-	ShowMainPage(EGCSMainPage::Fleet);
+	if (UUserWidget* FleetPanel = FleetPanelWidget.Get())
+	{
+		const ESlateVisibility CurrentVisibility = FleetPanel->GetVisibility();
+		const bool bCurrentlyVisible =
+			CurrentVisibility != ESlateVisibility::Collapsed
+			&& CurrentVisibility != ESlateVisibility::Hidden;
+		FleetPanel->SetVisibility(
+			bCurrentlyVisible
+				? ESlateVisibility::Collapsed
+				: ESlateVisibility::Visible);
+	}
 }
 
 void UGCSUIBridgeSubsystem::HandleControlPageClicked()
 {
-	ShowMainPage(EGCSMainPage::Control);
+	if (UUserWidget* DroneDetail = DroneDetailWidget.Get())
+	{
+		const ESlateVisibility CurrentVisibility = DroneDetail->GetVisibility();
+		const bool bCurrentlyVisible =
+			CurrentVisibility != ESlateVisibility::Collapsed
+			&& CurrentVisibility != ESlateVisibility::Hidden;
+		DroneDetail->SetVisibility(
+			bCurrentlyVisible
+				? ESlateVisibility::Collapsed
+				: ESlateVisibility::Visible);
+	}
 }
 
 void UGCSUIBridgeSubsystem::HandleMapPageClicked()
@@ -587,7 +617,7 @@ void UGCSUIBridgeSubsystem::PollMarqueePlayerControllerInput()
 	UUserWidget* MainWidget = MainWidgetRef.Get();
 	APlayerController* PlayerController = MainWidget ? MainWidget->GetOwningPlayer() : nullptr;
 	UWorld* World = MainWidget ? MainWidget->GetWorld() : nullptr;
-	if (!MainWidget || !PlayerController || !World || !FApp::HasFocus())
+	if (!MainWidget || !PlayerController || !World)
 	{
 		EndMarqueeCameraLock();
 		EndTopDownLocateLock();
@@ -597,8 +627,15 @@ void UGCSUIBridgeSubsystem::PollMarqueePlayerControllerInput()
 		bMarqueeLeftMouseWasDown = false;
 		return;
 	}
-
-	UpdateTopDownLocateLock(PlayerController);
+	if (!FApp::HasFocus())
+	{
+		EndMarqueeCameraLock();
+		UpdateSelectionRectangleVisual(FVector2D::ZeroVector, FVector2D::ZeroVector, false);
+		bMarqueePointerDown = false;
+		bMarqueeSelecting = false;
+		bMarqueeLeftMouseWasDown = false;
+		return;
+	}
 
 	const bool bLeftMouseDown = PlayerController->IsInputKeyDown(EKeys::LeftMouseButton);
 	float MouseX = 0.0f;
@@ -608,6 +645,9 @@ void UGCSUIBridgeSubsystem::PollMarqueePlayerControllerInput()
 	const FVector2D LocalPosition = bMousePositionValid
 		? UWidgetLayoutLibrary::GetMousePositionOnViewport(World)
 		: MarqueeCurrentLocalPosition;
+
+	UpdateTopDownViewInput(PlayerController);
+	UpdateTopDownLocateLock(PlayerController);
 
 	if (bLeftMouseDown && !bMarqueeLeftMouseWasDown)
 	{
@@ -705,33 +745,138 @@ void UGCSUIBridgeSubsystem::EndMarqueeCameraLock()
 	bMarqueeCameraLocked = false;
 }
 
-void UGCSUIBridgeSubsystem::HandleTopDownLocateClicked()
+void UGCSUIBridgeSubsystem::UpdateTopDownViewInput(APlayerController* PlayerController)
 {
-	UUserWidget* MainWidget = MainWidgetRef.Get();
-	UWorld* World = MainWidget ? MainWidget->GetWorld() : nullptr;
-	APlayerController* PlayerController = MainWidget ? MainWidget->GetOwningPlayer() : nullptr;
-	APawn* CameraPawn = PlayerController ? PlayerController->GetPawn() : nullptr;
-	APlayerCameraManager* CameraManager = PlayerController
-		? PlayerController->PlayerCameraManager
-		: nullptr;
-	if (!World || !PlayerController || !CameraPawn || !CameraManager)
+	if (!bTopDownLocateLocked || !PlayerController)
 	{
+		ResetTopDownViewInputState();
 		return;
 	}
 
-	FBox FleetBounds(EForceInit::ForceInit);
+	ACameraActor* TopDownCamera = TopDownOrthographicCamera.Get();
+	UCameraComponent* CameraComponent = TopDownCamera
+		? TopDownCamera->GetCameraComponent()
+		: nullptr;
+	if (!TopDownCamera || !CameraComponent || TopDownFitOrthoWidth <= KINDA_SMALL_NUMBER)
+	{
+		ResetTopDownViewInputState();
+		return;
+	}
+
+	const float MouseWheelDelta = PlayerController->GetInputAnalogKeyState(EKeys::MouseWheelAxis);
+	if (!FMath::IsNearlyZero(MouseWheelDelta))
+	{
+		const float MinOrthoWidth = FMath::Max(
+			KINDA_SMALL_NUMBER,
+			TopDownFitOrthoWidth * TopDownMinOrthoWidthFactor);
+		const float MaxOrthoWidth = FMath::Max(
+			TopDownFitOrthoWidth,
+			TopDownFitOrthoWidth * TopDownMaxOrthoWidthFactor);
+		const float ZoomScale = FMath::Pow(TopDownZoomFactor, MouseWheelDelta);
+		CameraComponent->OrthoWidth = FMath::Clamp(
+			CameraComponent->OrthoWidth * ZoomScale,
+			MinOrthoWidth,
+			MaxOrthoWidth);
+	}
+
+	const bool bMiddleMouseDown = PlayerController->IsInputKeyDown(EKeys::MiddleMouseButton);
+	float MouseX = 0.0f;
+	float MouseY = 0.0f;
+	const bool bMousePositionValid = PlayerController->GetMousePosition(MouseX, MouseY);
+	const FVector2D CurrentMousePosition(MouseX, MouseY);
+
+	if (bMiddleMouseDown && !bTopDownMiddleMouseWasDown)
+	{
+		bTopDownMiddleMouseWasDown = true;
+		bTopDownPanning = bMousePositionValid
+			&& !PlayerController->IsInputKeyDown(EKeys::LeftMouseButton)
+			&& !bMarqueePointerDown
+			&& !bMarqueeSelecting;
+		TopDownLastMousePosition = CurrentMousePosition;
+	}
+
+	if (bTopDownPanning
+		&& (PlayerController->IsInputKeyDown(EKeys::LeftMouseButton)
+			|| bMarqueePointerDown
+			|| bMarqueeSelecting))
+	{
+		bTopDownPanning = false;
+	}
+
+	if (bMiddleMouseDown && bTopDownPanning && bMousePositionValid)
+	{
+		const FVector2D MouseDelta = CurrentMousePosition - TopDownLastMousePosition;
+		int32 ViewportWidth = 0;
+		int32 ViewportHeight = 0;
+		PlayerController->GetViewportSize(ViewportWidth, ViewportHeight);
+		(void)ViewportHeight;
+		if (ViewportWidth > 0 && !MouseDelta.IsNearlyZero())
+		{
+			FVector CameraRight = TopDownCamera->GetActorRightVector();
+			FVector CameraUp = TopDownCamera->GetActorUpVector();
+			CameraRight.Z = 0.0f;
+			CameraUp.Z = 0.0f;
+			CameraRight = CameraRight.GetSafeNormal();
+			CameraUp = CameraUp.GetSafeNormal();
+			if (!CameraRight.IsNearlyZero() && !CameraUp.IsNearlyZero())
+			{
+				const float WorldUnitsPerPixel =
+					CameraComponent->OrthoWidth / static_cast<float>(ViewportWidth);
+				const FVector CameraMove =
+					(-MouseDelta.X * CameraRight + MouseDelta.Y * CameraUp)
+					* WorldUnitsPerPixel;
+				TopDownLockedCameraLocation.X += CameraMove.X;
+				TopDownLockedCameraLocation.Y += CameraMove.Y;
+			}
+		}
+		TopDownLastMousePosition = CurrentMousePosition;
+	}
+
+	if (!bMiddleMouseDown && bTopDownMiddleMouseWasDown)
+	{
+		ResetTopDownViewInputState();
+	}
+}
+
+void UGCSUIBridgeSubsystem::ResetTopDownViewInputState()
+{
+	bTopDownMiddleMouseWasDown = false;
+	bTopDownPanning = false;
+	TopDownLastMousePosition = FVector2D::ZeroVector;
+}
+
+void UGCSUIBridgeSubsystem::HandleTopDownLocateClicked()
+{
+	UE_LOG(LogTemp, Log, TEXT("[GCSLocate] TopDown Locate Clicked"));
+	UUserWidget* MainWidget = MainWidgetRef.Get();
+	UWorld* World = MainWidget ? MainWidget->GetWorld() : nullptr;
+	APlayerController* PlayerController = MainWidget ? MainWidget->GetOwningPlayer() : nullptr;
+	if (!World || !PlayerController)
+	{
+		return;
+	}
+	if (bTopDownLocateLocked)
+	{
+		EndTopDownLocateLock(PlayerController);
+		UE_LOG(LogTemp, Log, TEXT("[GCSLocate] TopDown Locate Exited By Toggle"));
+		return;
+	}
+
+	FBox2D FleetXYBounds(EForceInit::ForceInit);
+	float FleetMaxZ = -TNumericLimits<float>::Max();
 	for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
 	{
 		for (const FVector& WorldPosition : It->GetDronePositions())
 		{
-			if (!WorldPosition.IsNearlyZero() && !WorldPosition.ContainsNaN())
+			if (!WorldPosition.ContainsNaN())
 			{
-				FleetBounds += WorldPosition;
+				FleetXYBounds += FVector2D(WorldPosition.X, WorldPosition.Y);
+				FleetMaxZ = FMath::Max(FleetMaxZ, WorldPosition.Z);
 			}
 		}
 		break;
 	}
-	if (!FleetBounds.IsValid)
+	if (!FleetXYBounds.bIsValid || FleetMaxZ == -TNumericLimits<float>::Max())
 	{
 		return;
 	}
@@ -742,36 +887,156 @@ void UGCSUIBridgeSubsystem::HandleTopDownLocateClicked()
 	const float AspectRatio = ViewportHeight > 0
 		? static_cast<float>(ViewportWidth) / static_cast<float>(ViewportHeight)
 		: (16.0f / 9.0f);
-	const float HalfHorizontalFovRadians = FMath::DegreesToRadians(
-		FMath::Clamp(CameraManager->GetFOVAngle(), 5.0f, 170.0f) * 0.5f);
-	const float TanHalfHorizontalFov = FMath::Max(
-		FMath::Tan(HalfHorizontalFovRadians),
-		KINDA_SMALL_NUMBER);
-	const float TanHalfVerticalFov = FMath::Max(
-		TanHalfHorizontalFov / FMath::Max(AspectRatio, KINDA_SMALL_NUMBER),
-		KINDA_SMALL_NUMBER);
-	const FVector FleetExtent = FleetBounds.GetExtent();
-	const float PlanarRadius = FVector2D(FleetExtent.X, FleetExtent.Y).Size();
-	const float RequiredHeight = FMath::Max(
+	const FVector2D FleetCenterXY = FleetXYBounds.GetCenter();
+	const FVector2D FleetSizeXY = FleetXYBounds.GetSize();
+	const float OrthoWidth = FMath::Max(
 		1000.0f,
-		(PlanarRadius / FMath::Min(TanHalfHorizontalFov, TanHalfVerticalFov)) * 1.15f);
-	const FVector FleetCenter = FleetBounds.GetCenter();
+		FMath::Max(FleetSizeXY.X, FleetSizeXY.Y * FMath::Max(AspectRatio, KINDA_SMALL_NUMBER)) * 1.15f);
 
 	TopDownLockedCameraLocation = FVector(
-		FleetCenter.X,
-		FleetCenter.Y,
-		FleetBounds.Max.Z + RequiredHeight);
+		FleetCenterXY.X,
+		FleetCenterXY.Y,
+		FleetMaxZ + 1000.0f);
 	TopDownLockedCameraRotation = FRotator(-90.0f, 0.0f, 0.0f);
-	CameraPawn->SetActorLocation(
+
+	if (!TopDownOrthographicCamera.IsValid())
+	{
+		TopDownOrthographicCamera = World->SpawnActor<ACameraActor>();
+		if (!TopDownOrthographicCamera.IsValid())
+		{
+			return;
+		}
+		TopDownOrthographicCamera->SetActorEnableCollision(false);
+	}
+
+	ACameraActor* TopDownCamera = TopDownOrthographicCamera.Get();
+	UCameraComponent* CameraComponent = TopDownCamera->GetCameraComponent();
+	if (!CameraComponent)
+	{
+		return;
+	}
+	CameraComponent->ProjectionMode = ECameraProjectionMode::Orthographic;
+	CameraComponent->OrthoWidth = OrthoWidth;
+	TopDownFitOrthoWidth = OrthoWidth;
+	ResetTopDownViewInputState();
+	TopDownCamera->SetActorLocationAndRotation(
 		TopDownLockedCameraLocation,
+		TopDownLockedCameraRotation,
 		false,
 		nullptr,
 		ETeleportType::TeleportPhysics);
-	CameraPawn->SetActorRotation(
-		TopDownLockedCameraRotation,
-		ETeleportType::TeleportPhysics);
+	if (!bTopDownLocateLocked)
+	{
+		PreviousTopDownViewTarget = PlayerController->GetViewTarget();
+	}
 	PlayerController->SetControlRotation(TopDownLockedCameraRotation);
+	PlayerController->SetViewTargetWithBlend(TopDownCamera, 0.2f);
 	bTopDownLocateLocked = true;
+	for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
+	{
+		It->SetDroneLabelsVisible(true);
+		break;
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleColorOffClicked()
+{
+	ApplyAndSubmitSelectedDroneLedColor(FLinearColor::Black, 0, 0, 0);
+}
+
+void UGCSUIBridgeSubsystem::HandleColorWhiteClicked()
+{
+	ApplyAndSubmitSelectedDroneLedColor(FLinearColor::White, 255, 255, 255);
+}
+
+void UGCSUIBridgeSubsystem::HandleColorRedClicked()
+{
+	ApplyAndSubmitSelectedDroneLedColor(
+		FLinearColor::FromSRGBColor(FColor(255, 48, 48)),
+		255,
+		48,
+		48);
+}
+
+void UGCSUIBridgeSubsystem::HandleColorGreenClicked()
+{
+	ApplyAndSubmitSelectedDroneLedColor(
+		FLinearColor::FromSRGBColor(FColor(53, 224, 91)),
+		53,
+		224,
+		91);
+}
+
+void UGCSUIBridgeSubsystem::HandleColorBlueClicked()
+{
+	ApplyAndSubmitSelectedDroneLedColor(
+		FLinearColor::FromSRGBColor(FColor(50, 130, 255)),
+		50,
+		130,
+		255);
+}
+
+void UGCSUIBridgeSubsystem::HandleColorYellowClicked()
+{
+	ApplyAndSubmitSelectedDroneLedColor(
+		FLinearColor::FromSRGBColor(FColor(255, 211, 56)),
+		255,
+		211,
+		56);
+}
+
+void UGCSUIBridgeSubsystem::HandleColorMagentaClicked()
+{
+	ApplyAndSubmitSelectedDroneLedColor(
+		FLinearColor::FromSRGBColor(FColor(197, 74, 255)),
+		197,
+		74,
+		255);
+}
+
+void UGCSUIBridgeSubsystem::ApplyAndSubmitSelectedDroneLedColor(
+	const FLinearColor& PreviewColor,
+	const uint8 Red,
+	const uint8 Green,
+	const uint8 Blue)
+{
+	if (GetCommandTargetDroneIDs().IsEmpty())
+	{
+		return;
+	}
+
+	ApplySelectedDronePreviewColor(PreviewColor);
+
+	FGCSProductionCommandParameters Parameters;
+	Parameters.Red = Red;
+	Parameters.Green = Green;
+	Parameters.Blue = Blue;
+	SubmitSelectedProductionCommand(
+		EGCSProductionCommandType::SetLedColor,
+		Parameters);
+}
+
+void UGCSUIBridgeSubsystem::ApplySelectedDronePreviewColor(const FLinearColor& Color) const
+{
+	const TArray<FString> SelectedDroneIDs = GetCommandTargetDroneIDs();
+	if (SelectedDroneIDs.IsEmpty())
+	{
+		return;
+	}
+
+	UWorld* World = MainWidgetRef.IsValid()
+		? MainWidgetRef->GetWorld()
+		: GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
+	{
+		It->SetDroneColorsForIDs(SelectedDroneIDs, Color);
+		break;
+	}
 }
 
 void UGCSUIBridgeSubsystem::UpdateTopDownLocateLock(APlayerController* PlayerController)
@@ -781,33 +1046,46 @@ void UGCSUIBridgeSubsystem::UpdateTopDownLocateLock(APlayerController* PlayerCon
 		return;
 	}
 
-	if (PlayerController->IsInputKeyDown(EKeys::RightMouseButton)
-		|| PlayerController->IsInputKeyDown(EKeys::W)
-		|| PlayerController->IsInputKeyDown(EKeys::A)
-		|| PlayerController->IsInputKeyDown(EKeys::S)
-		|| PlayerController->IsInputKeyDown(EKeys::D))
+	if (ACameraActor* TopDownCamera = TopDownOrthographicCamera.Get())
 	{
-		EndTopDownLocateLock();
-		return;
-	}
-
-	if (APawn* CameraPawn = PlayerController->GetPawn())
-	{
-		CameraPawn->SetActorLocation(
+		TopDownCamera->SetActorLocationAndRotation(
 			TopDownLockedCameraLocation,
+			TopDownLockedCameraRotation,
 			false,
 			nullptr,
-			ETeleportType::TeleportPhysics);
-		CameraPawn->SetActorRotation(
-			TopDownLockedCameraRotation,
 			ETeleportType::TeleportPhysics);
 	}
 	PlayerController->SetControlRotation(TopDownLockedCameraRotation);
 }
 
-void UGCSUIBridgeSubsystem::EndTopDownLocateLock()
+void UGCSUIBridgeSubsystem::EndTopDownLocateLock(APlayerController* PlayerController)
 {
+	if (!PlayerController)
+	{
+		if (UUserWidget* MainWidget = MainWidgetRef.Get())
+		{
+			PlayerController = MainWidget->GetOwningPlayer();
+		}
+	}
+	if (bTopDownLocateLocked && PlayerController && PreviousTopDownViewTarget.IsValid())
+	{
+		PlayerController->SetViewTargetWithBlend(PreviousTopDownViewTarget.Get(), 0.2f);
+	}
+	if (UUserWidget* MainWidget = MainWidgetRef.Get())
+	{
+		if (UWorld* World = MainWidget->GetWorld())
+		{
+			for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
+			{
+				It->SetDroneLabelsVisible(false);
+				break;
+			}
+		}
+	}
 	bTopDownLocateLocked = false;
+	TopDownFitOrthoWidth = 0.0f;
+	ResetTopDownViewInputState();
+	PreviousTopDownViewTarget.Reset();
 }
 
 void UGCSUIBridgeSubsystem::HandleMarqueeMouseButtonDown(
@@ -1026,7 +1304,7 @@ void UGCSUIBridgeSubsystem::CompleteMarqueeSelection(
 			PlayerController,
 			WorldPosition,
 			WidgetPosition,
-			true))
+			false))
 		{
 			continue;
 		}
@@ -1512,6 +1790,11 @@ UButton* UGCSUIBridgeSubsystem::FindToolbarButton(const FName Name) const
 	return FGCSUIWidgetPresenter::FindButton(LeftToolbarWidget.Get(), Name);
 }
 
+UButton* UGCSUIBridgeSubsystem::FindRightPanelButton(const FName Name) const
+{
+	return FGCSUIWidgetPresenter::FindButton(RightPanelWidget.Get(), Name);
+}
+
 UTextBlock* UGCSUIBridgeSubsystem::FindText(const FName Name) const
 {
 	return FGCSUIWidgetPresenter::FindText(DroneDetailWidget.Get(), Name);
@@ -1672,6 +1955,45 @@ void UGCSUIBridgeSubsystem::BindExistingButtons()
 	{
 		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleAutonomousModeClicked);
 		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleAutonomousModeClicked);
+	}
+}
+
+void UGCSUIBridgeSubsystem::BindColorPaletteButtons()
+{
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_ColorOff")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleColorOffClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleColorOffClicked);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_ColorWhite")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleColorWhiteClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleColorWhiteClicked);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_ColorRed")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleColorRedClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleColorRedClicked);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_ColorGreen")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleColorGreenClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleColorGreenClicked);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_ColorBlue")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleColorBlueClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleColorBlueClicked);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_ColorYellow")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleColorYellowClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleColorYellowClicked);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_ColorMagenta")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleColorMagentaClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleColorMagentaClicked);
 	}
 }
 

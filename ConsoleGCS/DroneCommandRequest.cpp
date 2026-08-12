@@ -23,6 +23,8 @@ const char* DroneCommandTypeName(DroneCommandType type)
         return "SET_MODE";
     case DroneCommandType::HoverTest:
         return "HOVER_TEST";
+    case DroneCommandType::SetLedColor:
+        return "SET_LED_COLOR";
     }
 
     return "UNKNOWN";

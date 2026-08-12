@@ -18,7 +18,8 @@ enum class EGCSProductionCommandType : uint8
 	Land,
 	RTL,
 	SetMode,
-	HoverTest
+	HoverTest,
+	SetLedColor
 };
 
 /** Ground-station workflow mode; intentionally independent of APM flight mode. */
@@ -53,6 +54,15 @@ struct DRONESHOWPLATFORM1_API FGCSProductionCommandParameters
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
 	bool bStart = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	uint8 Red = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	uint8 Green = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	uint8 Blue = 0;
 };
 
 USTRUCT(BlueprintType)

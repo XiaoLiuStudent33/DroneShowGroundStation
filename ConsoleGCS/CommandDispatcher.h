@@ -81,6 +81,13 @@ public:
         std::uint8_t system,
         std::uint8_t component);
 
+    std::uint64_t QueueSetLedColor(
+        std::uint8_t system,
+        std::uint8_t component,
+        std::uint8_t red,
+        std::uint8_t green,
+        std::uint8_t blue);
+
     void Tick(
         std::chrono::steady_clock::time_point now);
 
@@ -98,7 +105,8 @@ private:
         Takeoff,
         Land,
         RTL,
-        Loiter
+        Loiter,
+        SetLedColor
     };
 
     struct Request
@@ -110,6 +118,9 @@ private:
         std::uint16_t expectedAckCommand = 0;
         float altitude = 0.0f;
         std::uint8_t customMode = 0;
+        std::uint8_t red = 0;
+        std::uint8_t green = 0;
+        std::uint8_t blue = 0;
         int attempts = 0;
         bool sent = false;
         std::chrono::steady_clock::time_point sentAt{};
@@ -122,7 +133,10 @@ private:
         std::uint16_t expectedAckCommand,
         float altitude,
         bool safetyPriority,
-        std::uint8_t customMode = 0);
+        std::uint8_t customMode = 0,
+        std::uint8_t red = 0,
+        std::uint8_t green = 0,
+        std::uint8_t blue = 0);
 
     bool Send(const Request& request);
 

@@ -220,6 +220,45 @@ int RunCommandPacketTests()
         results.front().outcome == CommandOutcome::Accepted,
         "matching ACK completes LAND");
 
+    dispatcher.QueueSetLedColor(1, 1, 255, 48, 48);
+    dispatcher.Tick(now + std::chrono::milliseconds(10));
+    passed &= Check(
+        endpoint.ConsumeMessage(received),
+        "LED_CONTROL packet is emitted");
+    passed &= Check(
+        received.msgid == MAVLINK_MSG_ID_LED_CONTROL,
+        "LED color uses MAVLink LED_CONTROL #186");
+
+    mavlink_led_control_t ledControl{};
+    mavlink_msg_led_control_decode(&received, &ledControl);
+    passed &= Check(
+        ledControl.target_system == 0 && ledControl.target_component == 0,
+        "LED_CONTROL uses legacy payload target 0/0");
+    passed &= Check(
+        ledControl.instance == 255 && ledControl.pattern == 255,
+        "LED_CONTROL instance and pattern are 255");
+    passed &= Check(
+        ledControl.custom_len == 3,
+        "LED_CONTROL custom_len equals 3");
+    passed &= Check(
+        ledControl.custom_bytes[0] == 255 &&
+        ledControl.custom_bytes[1] == 48 &&
+        ledControl.custom_bytes[2] == 48,
+        "LED_CONTROL custom bytes carry requested RGB");
+    bool remainingBytesZero = true;
+    for (std::size_t index = 3; index < std::size(ledControl.custom_bytes); ++index)
+    {
+        remainingBytesZero &= ledControl.custom_bytes[index] == 0;
+    }
+    passed &= Check(
+        remainingBytesZero,
+        "LED_CONTROL unused custom bytes are zero");
+    results = dispatcher.ConsumeResults();
+    passed &= Check(
+        results.size() == 1 &&
+        results.front().outcome == CommandOutcome::Sent &&
+        results.front().attempts == 1,
+        "LED_CONTROL is fire-and-forget without ACK retry");
     sender.Close();
 
     if (passed)

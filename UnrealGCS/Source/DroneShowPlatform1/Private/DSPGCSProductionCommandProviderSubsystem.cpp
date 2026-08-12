@@ -24,6 +24,7 @@ namespace
 		case EGCSProductionCommandType::RTL: return dspgcs::CommandType::RTL;
 		case EGCSProductionCommandType::SetMode: return dspgcs::CommandType::SetMode;
 		case EGCSProductionCommandType::HoverTest: return dspgcs::CommandType::HoverTest;
+		case EGCSProductionCommandType::SetLedColor: return dspgcs::CommandType::SetLedColor;
 		}
 		return dspgcs::CommandType::Arm;
 	}
@@ -176,6 +177,9 @@ FString UDSPGCSProductionCommandProviderSubsystem::SubmitCommand(
 	Request.parameters.customMode = Parameters.CustomMode;
 	Request.parameters.modeName = TCHAR_TO_UTF8(*Parameters.ModeName);
 	Request.parameters.start = Parameters.bStart;
+	Request.parameters.red = Parameters.Red;
+	Request.parameters.green = Parameters.Green;
+	Request.parameters.blue = Parameters.Blue;
 	Request.source.sourceType = "UI";
 	Request.source.sourceId = "UnrealGCS";
 	Request.source.stationId = "GCS-PRIMARY";
@@ -208,6 +212,17 @@ FString UDSPGCSProductionCommandProviderSubsystem::SubmitCommand(
 		*CommandID,
 		static_cast<int32>(Request.targetDroneIds.size()),
 		static_cast<int32>(CommandType));
+	if (CommandType == EGCSProductionCommandType::SetLedColor)
+	{
+		UE_LOG(
+			LogTemp,
+			Display,
+			TEXT("DSP-GCS SetLedColor Targets=%d RGB=(%u,%u,%u)"),
+			static_cast<int32>(Request.targetDroneIds.size()),
+			Parameters.Red,
+			Parameters.Green,
+			Parameters.Blue);
+	}
 	return CommandID;
 }
 

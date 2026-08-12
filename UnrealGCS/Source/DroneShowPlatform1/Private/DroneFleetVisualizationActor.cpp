@@ -20,7 +20,10 @@ namespace
 {
 	const FName DroneCountParameter(TEXT("User.DroneCount"));
 	const FName DronePositionsParameter(TEXT("User.DronePositions"));
-	const FName DroneLabelDataParameter(TEXT("User.DroneLabelData"));
+	const FName DroneColorsParameter(TEXT("User.DroneColors"));
+	const FName DroneDisplayIDsParameter(TEXT("User.DroneDisplayIDs"));
+	const FName DroneSelectedMasksParameter(TEXT("User.DroneSelectedMasks"));
+	const FName DroneLabelsVisibleParameter(TEXT("User.ShowDroneLabels"));
 }
 
 ADroneFleetVisualizationActor::ADroneFleetVisualizationActor()
@@ -64,6 +67,7 @@ void ADroneFleetVisualizationActor::BeginPlay()
 	}
 
 	DroneFleetNiagara->SetAsset(DroneFleetSystem);
+	SetDroneLabelsVisible(false);
 	BindFleetManager();
 	if (!FleetManager.IsValid())
 	{
@@ -72,6 +76,14 @@ void ADroneFleetVisualizationActor::BeginPlay()
 	}
 
 	RefreshFromFleet();
+}
+
+void ADroneFleetVisualizationActor::SetDroneLabelsVisible(const bool bVisible)
+{
+	if (DroneFleetNiagara)
+	{
+		DroneFleetNiagara->SetVariableBool(DroneLabelsVisibleParameter, bVisible);
+	}
 }
 
 void ADroneFleetVisualizationActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -139,8 +151,61 @@ void ADroneFleetVisualizationActor::SetCommandSelectedDroneIDs(
 	}
 
 	CommandSelectedDroneIDs = MoveTemp(NewSelection);
-	RebuildDroneLabelData();
-	PushDroneLabelDataToNiagara();
+	RebuildDroneLabelAttributes();
+	PushDroneLabelAttributesToNiagara();
+}
+
+void ADroneFleetVisualizationActor::SetDroneColorsForIDs(
+	const TArray<FString>& DroneIDs,
+	const FLinearColor& Color)
+{
+	if (DroneIDs.IsEmpty() || ParticleDroneIDs.IsEmpty())
+	{
+		return;
+	}
+
+	TSet<FString> TargetDroneIDs;
+	TargetDroneIDs.Reserve(DroneIDs.Num());
+	for (const FString& DroneID : DroneIDs)
+	{
+		if (!DroneID.IsEmpty())
+		{
+			TargetDroneIDs.Add(DroneID);
+		}
+	}
+	if (TargetDroneIDs.IsEmpty())
+	{
+		return;
+	}
+
+	if (DroneColors.Num() != ParticleDroneIDs.Num())
+	{
+		const int32 PreviousColorCount = DroneColors.Num();
+		DroneColors.SetNum(ParticleDroneIDs.Num());
+		for (int32 Index = PreviousColorCount; Index < DroneColors.Num(); ++Index)
+		{
+			DroneColors[Index] = FLinearColor::Black;
+		}
+		bDroneColorsDirty = true;
+	}
+
+	bool bAppliedColor = false;
+	for (int32 StableParticleIndex = 0;
+		StableParticleIndex < ParticleDroneIDs.Num();
+		++StableParticleIndex)
+	{
+		if (TargetDroneIDs.Contains(ParticleDroneIDs[StableParticleIndex]))
+		{
+			DroneColors[StableParticleIndex] = Color;
+			bAppliedColor = true;
+		}
+	}
+
+	if (bAppliedColor)
+	{
+		bDroneColorsDirty = true;
+		PushDroneColorsToNiagara();
+	}
 }
 
 void ADroneFleetVisualizationActor::RefreshFromFleet()
@@ -156,14 +221,24 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 	}
 
 	DronePositions.Reset();
+	TMap<FString, FLinearColor> ExistingColorsByDroneID;
+	ExistingColorsByDroneID.Reserve(FMath::Min(ParticleDroneIDs.Num(), DroneColors.Num()));
+	for (int32 Index = 0;
+		Index < ParticleDroneIDs.Num() && Index < DroneColors.Num();
+		++Index)
+	{
+		ExistingColorsByDroneID.Add(ParticleDroneIDs[Index], DroneColors[Index]);
+	}
 	TArray<FDroneData> OrderedDrones;
 	TArray<FString> NewParticleDroneIDs;
+	TArray<FLinearColor> NewDroneColors;
 	if (Fleet)
 	{
 		// GetDronePage 保留 Fleet DroneOrder，因此 ParticleIndex -> DroneID 映射稳定。
 		// 不得按 TMap、GPS、Online 或选择状态重排；Offline 也必须保留原索引。
 		OrderedDrones = Fleet->GetDronePage(0, Fleet->GetDroneCount());
 		NewParticleDroneIDs.Reserve(OrderedDrones.Num());
+		NewDroneColors.Reserve(OrderedDrones.Num());
 		DronePositions.SetNumZeroed(OrderedDrones.Num());
 
 		const FFleetGeoOrigin FleetGeoOrigin = Fleet->GetFleetGeoOrigin();
@@ -172,6 +247,8 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 		{
 			const FDroneData& Drone = OrderedDrones[Index];
 			NewParticleDroneIDs.Add(Drone.DroneID);
+			const FLinearColor* ExistingColor = ExistingColorsByDroneID.Find(Drone.DroneID);
+			NewDroneColors.Add(ExistingColor ? *ExistingColor : Drone.LEDColor);
 
 			// FleetGeoOrigin 尚未建立时，任何后续无人机都不能抢占逻辑原点。
 			// 单机 GPS 无效时必须回到 ZeroVector，禁止保留历史坐标或使用索引占位。
@@ -184,10 +261,13 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 		// Offline 只改变状态，不删除粒子，也不改变 DroneOrder -> ParticleIndex 映射。
 	}
 
-	if (ParticleDroneIDs != NewParticleDroneIDs)
+	if (ParticleDroneIDs != NewParticleDroneIDs
+		|| DroneColors.Num() != NewDroneColors.Num())
 	{
 		ParticleDroneIDs = MoveTemp(NewParticleDroneIDs);
-		RebuildDroneLabelData();
+		DroneColors = MoveTemp(NewDroneColors);
+		bDroneColorsDirty = true;
+		RebuildDroneLabelAttributes();
 	}
 
 	PushArraysToNiagara();
@@ -412,32 +492,61 @@ FVector ADroneFleetVisualizationActor::ConvertDroneGPSPosition(
 	return WorldPosition.ContainsNaN() ? FVector::ZeroVector : WorldPosition;
 }
 
-void ADroneFleetVisualizationActor::RebuildDroneLabelData()
+void ADroneFleetVisualizationActor::RebuildDroneLabelAttributes()
 {
-	DroneLabelData.SetNumUninitialized(ParticleDroneIDs.Num());
+	DroneDisplayIDs.SetNumUninitialized(ParticleDroneIDs.Num());
+	DroneSelectedMasks.SetNumUninitialized(ParticleDroneIDs.Num());
 	for (int32 Index = 0; Index < ParticleDroneIDs.Num(); ++Index)
 	{
-		const float DisplayID = static_cast<float>(Index + 1);
-		const float SelectedMask = CommandSelectedDroneIDs.Contains(ParticleDroneIDs[Index])
+		DroneDisplayIDs[Index] = static_cast<float>(Index + 1);
+		DroneSelectedMasks[Index] = CommandSelectedDroneIDs.Contains(ParticleDroneIDs[Index])
 			? 1.0f
 			: 0.0f;
-		DroneLabelData[Index] = FLinearColor(DisplayID, SelectedMask, 0.0f, 1.0f);
 	}
-	bDroneLabelDataDirty = true;
+	bDroneLabelAttributesDirty = true;
 }
 
-void ADroneFleetVisualizationActor::PushDroneLabelDataToNiagara()
+void ADroneFleetVisualizationActor::PushDroneLabelAttributesToNiagara()
 {
-	if (!bDroneLabelDataDirty || !DroneFleetNiagara || !DroneFleetNiagara->GetAsset())
+	if (!bDroneLabelAttributesDirty || !DroneFleetNiagara || !DroneFleetNiagara->GetAsset())
 	{
 		return;
 	}
 
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayFloat(
+		DroneFleetNiagara,
+		DroneDisplayIDsParameter,
+		DroneDisplayIDs);
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayFloat(
+		DroneFleetNiagara,
+		DroneSelectedMasksParameter,
+		DroneSelectedMasks);
+	bDroneLabelAttributesDirty = false;
+}
+
+bool ADroneFleetVisualizationActor::PushDroneColorsToNiagara()
+{
+	if (!bDroneColorsDirty || !DroneFleetNiagara || !DroneFleetNiagara->GetAsset())
+	{
+		return false;
+	}
+	if (DroneColors.Num() != ParticleDroneIDs.Num())
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("[DroneColors] Niagara write rejected: Colors=%d Particles=%d"),
+			DroneColors.Num(),
+			ParticleDroneIDs.Num());
+		return false;
+	}
+
 	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayColor(
 		DroneFleetNiagara,
-		DroneLabelDataParameter,
-		DroneLabelData);
-	bDroneLabelDataDirty = false;
+		DroneColorsParameter,
+		DroneColors);
+	bDroneColorsDirty = false;
+	return true;
 }
 
 void ADroneFleetVisualizationActor::PushArraysToNiagara()
@@ -454,7 +563,8 @@ void ADroneFleetVisualizationActor::PushArraysToNiagara()
 		DroneFleetNiagara,
 		DronePositionsParameter,
 		DronePositions);
-	PushDroneLabelDataToNiagara();
+	PushDroneColorsToNiagara();
+	PushDroneLabelAttributesToNiagara();
 
 	if (bCountChanged)
 	{

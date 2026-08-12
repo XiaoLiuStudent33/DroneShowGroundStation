@@ -117,6 +117,26 @@ std::uint64_t CommandDispatcher::QueueLoiter(
         false);
 }
 
+std::uint64_t CommandDispatcher::QueueSetLedColor(
+    std::uint8_t system,
+    std::uint8_t component,
+    std::uint8_t red,
+    std::uint8_t green,
+    std::uint8_t blue)
+{
+    return Queue(
+        Action::SetLedColor,
+        system,
+        component,
+        0,
+        0.0f,
+        false,
+        0,
+        red,
+        green,
+        blue);
+}
+
 std::uint64_t CommandDispatcher::Queue(
     Action action,
     std::uint8_t system,
@@ -124,7 +144,10 @@ std::uint64_t CommandDispatcher::Queue(
     std::uint16_t expectedAckCommand,
     float altitude,
     bool safetyPriority,
-    std::uint8_t customMode)
+    std::uint8_t customMode,
+    std::uint8_t red,
+    std::uint8_t green,
+    std::uint8_t blue)
 {
     std::lock_guard<std::mutex> lock(mutex);
 
@@ -136,6 +159,9 @@ std::uint64_t CommandDispatcher::Queue(
     request.expectedAckCommand = expectedAckCommand;
     request.altitude = altitude;
     request.customMode = customMode;
+    request.red = red;
+    request.green = green;
+    request.blue = blue;
 
     if (system == 0 ||
         component == 0 ||
@@ -324,6 +350,13 @@ bool CommandDispatcher::Send(
             udp,
             request.system,
             request.component);
+
+    case Action::SetLedColor:
+        return MavlinkCommand::SetLedColor(
+            udp,
+            request.red,
+            request.green,
+            request.blue);
     }
 
     return false;

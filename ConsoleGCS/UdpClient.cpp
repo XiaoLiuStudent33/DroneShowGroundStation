@@ -60,6 +60,13 @@ bool UdpClient::Send(
 //==================================================
 // 关闭
 //==================================================
+std::string UdpClient::GetRemoteEndpoint() const
+{
+    return sharedTargetIp + ":" + std::to_string(sharedTargetPort);
+}
+
+//==================================================
+// Close
 void UdpClient::Close()
 {
     sharedEndpoint = nullptr;

@@ -17,8 +17,8 @@ namespace dspgcs
 {
     inline constexpr std::uint16_t ProtocolMajor = 1;
     inline constexpr std::uint16_t ProtocolMinor = 0;
-    // Schema 2 adds explicit HOVER_TEST altitude and duration parameters.
-    inline constexpr std::uint16_t SchemaVersion = 2;
+    // Schema 3 adds realtime selected-drone LED RGB command parameters.
+    inline constexpr std::uint16_t SchemaVersion = 3;
     inline constexpr std::uint32_t FrameMagic = 0x44535047; // DSPG
     inline constexpr std::size_t MaxFrameBytes = 256 * 1024;
     inline constexpr std::size_t MaxStringBytes = 16 * 1024;
@@ -43,7 +43,8 @@ namespace dspgcs
         Land = 4,
         RTL = 5,
         SetMode = 6,
-        HoverTest = 7
+        HoverTest = 7,
+        SetLedColor = 8
     };
     enum class AckState : std::uint8_t
     {
@@ -220,6 +221,9 @@ namespace dspgcs
         std::int32_t customMode = -1;
         std::string modeName;
         bool start = true;
+        std::uint8_t red = 0;
+        std::uint8_t green = 0;
+        std::uint8_t blue = 0;
     };
     struct CommandSourceDTO
     {
@@ -397,6 +401,7 @@ namespace dspgcs
             for (const auto& id : c.targetDroneIds) w.String(id);
             w.Float(c.parameters.takeoffAltitudeMeters); w.Float(c.parameters.hoverAltitudeMeters); w.Float(c.parameters.hoverDurationSeconds);
             w.I32(c.parameters.customMode); w.String(c.parameters.modeName); w.Bool(c.parameters.start);
+            w.U8(c.parameters.red); w.U8(c.parameters.green); w.U8(c.parameters.blue);
             w.String(c.source.sourceType); w.String(c.source.sourceId); w.String(c.source.operatorId); w.String(c.source.stationId);
             w.I64(c.timestampUtcMs); w.U64(c.expectedFleetRevision); w.Bool(c.safeTestMode);
         }
@@ -408,6 +413,7 @@ namespace dspgcs
             for (auto& id : c.targetDroneIds) if (!r.String(id) || id.empty()) return false;
             return r.Float(c.parameters.takeoffAltitudeMeters) && r.Float(c.parameters.hoverAltitudeMeters) && r.Float(c.parameters.hoverDurationSeconds) &&
                 r.I32(c.parameters.customMode) && r.String(c.parameters.modeName) && r.Bool(c.parameters.start) &&
+                r.U8(c.parameters.red) && r.U8(c.parameters.green) && r.U8(c.parameters.blue) &&
                 r.String(c.source.sourceType) && r.String(c.source.sourceId) && r.String(c.source.operatorId) && r.String(c.source.stationId) &&
                 r.I64(c.timestampUtcMs) && r.U64(c.expectedFleetRevision) && r.Bool(c.safeTestMode) && r.Done();
         }

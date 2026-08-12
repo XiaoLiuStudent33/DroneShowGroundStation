@@ -49,6 +49,9 @@ public:
 	/** Updates the Niagara label highlight from the existing command selection authority. */
 	void SetCommandSelectedDroneIDs(const TArray<FString>& DroneIDs);
 
+	/** Updates only the stable particles identified by DroneID and preserves every other color. */
+	void SetDroneColorsForIDs(const TArray<FString>& DroneIDs, const FLinearColor& Color);
+
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization|Geo")
 	bool IsOriginWorldPositionInitialized() const { return bOriginWorldPositionInitialized; }
 
@@ -57,6 +60,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization")
 	UNiagaraComponent* GetDroneFleetNiagara() const { return DroneFleetNiagara; }
+
+	/** Enables the existing ID sprite renderer through its global Niagara user parameter. */
+	void SetDroneLabelsVisible(bool bVisible);
 
 protected:
 	virtual void BeginPlay() override;
@@ -80,13 +86,22 @@ private:
 	UPROPERTY(Transient)
 	TArray<FVector> DronePositions;
 
-	/** Per-particle render data: R=DisplayID, G=SelectedMask. */
+	/** Persistent preview colors in the same stable particle order as ParticleDroneIDs. */
 	UPROPERTY(Transient)
-	TArray<FLinearColor> DroneLabelData;
+	TArray<FLinearColor> DroneColors;
+
+	/** Per-particle display identifiers, derived from stable particle index + 1. */
+	UPROPERTY(Transient)
+	TArray<float> DroneDisplayIDs;
+
+	/** Per-particle command-selection mask; derived from GCSUIBridgeSubsystem selection authority. */
+	UPROPERTY(Transient)
+	TArray<float> DroneSelectedMasks;
 
 	/** Derived render cache only; GCSUIBridgeSubsystem remains selection authority. */
 	TSet<FString> CommandSelectedDroneIDs;
-	bool bDroneLabelDataDirty = true;
+	bool bDroneLabelAttributesDirty = true;
+	bool bDroneColorsDirty = true;
 
 	/** 仅粒子数量变化时重建系统；普通遥测更新只批量刷新数组。 */
 	int32 LastPushedDroneCount = INDEX_NONE;
@@ -114,8 +129,9 @@ private:
 	FVector ConvertDroneGPSPosition(
 		const FDroneData& Drone,
 		const FFleetGeoOrigin& FleetGeoOrigin) const;
-	void RebuildDroneLabelData();
-	void PushDroneLabelDataToNiagara();
+	void RebuildDroneLabelAttributes();
+	void PushDroneLabelAttributesToNiagara();
+	bool PushDroneColorsToNiagara();
 	void PushArraysToNiagara();
 
 	UFUNCTION()
