@@ -56,6 +56,11 @@ public class DroneShowPlatform1 : ModuleRules
 		{
 			"CesiumRuntime"
 		});
+		if (Target.Platform == UnrealTargetPlatform.Win64)
+		{
+			PublicSystemLibraries.AddRange(new string[] { "Ole32.lib", "Shell32.lib", "Uuid.lib" });
+		}
+		AddEngineThirdPartyPrivateStaticDependencies(Target, "zlib");
 
 		// Uncomment if you are using Slate UI
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });

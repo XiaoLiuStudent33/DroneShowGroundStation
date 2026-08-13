@@ -10,13 +10,17 @@
 #include "Blueprint/WidgetLayoutLibrary.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
+#include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/EditableTextBox.h"
+#include "Components/Slider.h"
 #include "Components/TextBlock.h"
 #include "Components/Widget.h"
 #include "DSPGCSProductionCommandProviderSubsystem.h"
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
 #include "DroneFleetVisualizationActor.h"
 #include "EngineUtils.h"
+#include "UObject/ConstructorHelpers.h"
 #include "FleetManagerSubsystem.h"
 #include "Framework/Application/IInputProcessor.h"
 #include "Framework/Application/SlateApplication.h"
@@ -30,8 +34,99 @@
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
 #include "Misc/App.h"
+#include "Misc/Paths.h"
+#include "RoutePreviewSubsystem.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/SWidget.h"
+
+#if PLATFORM_WINDOWS
+#include "Windows/AllowWindowsPlatformTypes.h"
+#include <ShObjIdl.h>
+#include "Windows/HideWindowsPlatformTypes.h"
+#endif
+
+namespace
+{
+	bool TryParseFiniteDouble(const FText& Text, double& OutValue)
+	{
+		const FString ValueString = Text.ToString().TrimStartAndEnd();
+		return !ValueString.IsEmpty()
+			&& LexTryParseString(OutValue, *ValueString)
+			&& FMath::IsFinite(OutValue);
+	}
+
+	FString FormatRouteDuration(const double Seconds)
+	{
+		const int32 TotalSeconds = FMath::Max(0, FMath::FloorToInt(Seconds));
+		return FString::Printf(TEXT("%02d:%02d"), TotalSeconds / 60, TotalSeconds % 60);
+	}
+
+	bool OpenRuntimeNpzFileDialog(FString& OutFilePath)
+	{
+		OutFilePath.Reset();
+#if PLATFORM_WINDOWS
+		const HRESULT InitializeResult = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+		const bool bUninitializeCom = SUCCEEDED(InitializeResult);
+		if (FAILED(InitializeResult) && InitializeResult != RPC_E_CHANGED_MODE)
+		{
+			return false;
+		}
+
+		IFileOpenDialog* Dialog = nullptr;
+		HRESULT Result = ::CoCreateInstance(
+			CLSID_FileOpenDialog,
+			nullptr,
+			CLSCTX_INPROC_SERVER,
+			IID_PPV_ARGS(&Dialog));
+		if (SUCCEEDED(Result) && Dialog)
+		{
+			const COMDLG_FILTERSPEC Filters[] =
+			{
+				{ L"NumPy archives (*.npz)", L"*.npz" }
+			};
+			Dialog->SetFileTypes(UE_ARRAY_COUNT(Filters), Filters);
+			Dialog->SetFileTypeIndex(1);
+			Dialog->SetDefaultExtension(L"npz");
+
+			FILEOPENDIALOGOPTIONS Options = {};
+			if (SUCCEEDED(Dialog->GetOptions(&Options)))
+			{
+				Dialog->SetOptions(Options | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM);
+			}
+
+			const HWND ParentWindow = FSlateApplication::IsInitialized()
+				? static_cast<HWND>(const_cast<void*>(
+					FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr)))
+				: nullptr;
+			Result = Dialog->Show(ParentWindow);
+			if (SUCCEEDED(Result))
+			{
+				IShellItem* SelectedItem = nullptr;
+				if (SUCCEEDED(Dialog->GetResult(&SelectedItem)) && SelectedItem)
+				{
+					PWSTR SelectedPath = nullptr;
+					if (SUCCEEDED(SelectedItem->GetDisplayName(SIGDN_FILESYSPATH, &SelectedPath))
+						&& SelectedPath)
+					{
+						OutFilePath = SelectedPath;
+						::CoTaskMemFree(SelectedPath);
+					}
+					SelectedItem->Release();
+				}
+			}
+			Dialog->Release();
+		}
+
+		if (bUninitializeCom)
+		{
+			::CoUninitialize();
+		}
+		return !OutFilePath.IsEmpty();
+#else
+		return false;
+#endif
+	}
+}
 
 class FGCSMarqueeInputProcessor final : public IInputProcessor
 {
@@ -52,12 +147,20 @@ public:
 		if (UGCSUIBridgeSubsystem* Bridge = Owner.Get())
 		{
 			Bridge->PollMarqueePlayerControllerInput();
+			Bridge->TickRoutePlaybackUI(DeltaTime);
 		}
 	}
 
 private:
 	TWeakObjectPtr<UGCSUIBridgeSubsystem> Owner;
 };
+
+UGCSUIBridgeSubsystem::UGCSUIBridgeSubsystem()
+{
+	static ConstructorHelpers::FClassFinder<UUserWidget> RouteImportClassFinder(
+		TEXT("/Game/UI/WBP_GCS_RouteImport"));
+	RouteImportWidgetClass = RouteImportClassFinder.Class;
+}
 
 void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 {
@@ -92,6 +195,8 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	CreateNavigationPages();
 	BindNavigationButtons();
 	ShowMainPage(EGCSMainPage::Fleet);
+	FGCSUIWidgetPresenter::SetWidgetVisible(FleetPanelWidget, false);
+	FGCSUIWidgetPresenter::SetWidgetVisible(DroneDetailWidget, false);
 	FGCSUIWidgetPresenter::SetWidgetVisible(RightPanelWidget, false);
 	UpdateSelectionRectangleVisual(FVector2D::ZeroVector, FVector2D::ZeroVector, false);
 
@@ -148,6 +253,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 
 	BindExistingButtons();
 	BindColorPaletteButtons();
+	BindRoutePlaybackControls();
 	BindFleetPanelButtons();
 	SetLegacyHoverSelectionVisible(false);
 	RefreshHoverMVPControls();
@@ -201,6 +307,10 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 {
 	UnregisterMarqueeInputProcessor();
 	EndTopDownLocateLock();
+	if (UUserWidget* ImportWidget = RouteImportWidget.Get())
+	{
+		ImportWidget->RemoveFromParent();
+	}
 	if (UDSPGCSProductionCommandProviderSubsystem* Commands =
 		GetGameInstance()->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>())
 	{
@@ -232,8 +342,31 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 	RightToolbarWidget.Reset();
 	RightPanelWidget.Reset();
 	PlaybackWidget.Reset();
+	RouteImportWidget.Reset();
+	RouteImportButton.Reset();
+	RouteImportCloseButton.Reset();
+	RouteBrowseButton.Reset();
+	RouteCancelButton.Reset();
+	RouteLoadPreviewButton.Reset();
+	RouteSampleRateInput.Reset();
+	RouteOriginLatitudeInput.Reset();
+	RouteOriginLongitudeInput.Reset();
+	RouteOriginAltitudeInput.Reset();
+	RouteImportFilePathText.Reset();
+	RouteImportDroneValueText.Reset();
+	RouteImportFrameCountValueText.Reset();
+	RouteImportDurationValueText.Reset();
+	RoutePreviousButton.Reset();
+	RoutePauseButton.Reset();
+	RoutePlayButton.Reset();
+	RouteStopButton.Reset();
+	RouteNextButton.Reset();
+	RouteTimelineSlider.Reset();
+	RouteTimeText.Reset();
+	RouteFrameText.Reset();
 	SelectionRectangleWidget.Reset();
 	LastCommandResultText.Reset();
+	SelectedRouteImportFilePath.Reset();
 	SelectedCommandDroneIDs.Reset();
 	CurrentFleetPageDroneIDs.Reset();
 	FleetRowViews.Reset();
@@ -242,6 +375,8 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 	bMarqueeSelecting = false;
 	bMarqueeLeftMouseWasDown = false;
 	MarqueeCurrentLocalPosition = FVector2D::ZeroVector;
+	bUpdatingRouteTimelineFromState = false;
+	RouteUIRefreshAccumulator = 0.0f;
 
 	Super::Deinitialize();
 }
@@ -994,6 +1129,204 @@ void UGCSUIBridgeSubsystem::HandleColorMagentaClicked()
 		255);
 }
 
+void UGCSUIBridgeSubsystem::HandleRoutePreviousFrameClicked()
+{
+	StepRoutePreviewFrame(-1);
+}
+
+void UGCSUIBridgeSubsystem::HandleRoutePauseClicked()
+{
+	if (URoutePreviewSubsystem* RoutePreview =
+		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>())
+	{
+		RoutePreview->Pause();
+		RefreshRoutePlaybackUI();
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleRoutePlayClicked()
+{
+	if (URoutePreviewSubsystem* RoutePreview =
+		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>())
+	{
+		FString Error;
+		if (!RoutePreview->Play(Error))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[RoutePreviewUI] Play rejected: %s"), *Error);
+		}
+		RefreshRoutePlaybackUI();
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleRouteStopClicked()
+{
+	if (URoutePreviewSubsystem* RoutePreview =
+		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>())
+	{
+		FString Error;
+		if (!RoutePreview->Stop(Error))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[RoutePreviewUI] Stop rejected: %s"), *Error);
+		}
+		RefreshRoutePlaybackUI();
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleRouteNextFrameClicked()
+{
+	StepRoutePreviewFrame(1);
+}
+
+void UGCSUIBridgeSubsystem::HandleRouteTimelineValueChanged(const float NormalizedValue)
+{
+	if (bUpdatingRouteTimelineFromState)
+	{
+		return;
+	}
+
+	URoutePreviewSubsystem* RoutePreview =
+		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>();
+	if (!RoutePreview || !RoutePreview->IsRouteLoaded())
+	{
+		return;
+	}
+
+	const int32 LastFrame = FMath::Max(0, RoutePreview->GetFrameCount() - 1);
+	const int32 TargetFrame = FMath::RoundToInt(
+		FMath::Clamp(NormalizedValue, 0.0f, 1.0f) * LastFrame);
+	FString Error;
+	if (!RoutePreview->SeekToFrame(TargetFrame, Error))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[RoutePreviewUI] Seek rejected: %s"), *Error);
+	}
+	RefreshRoutePlaybackUI();
+}
+
+void UGCSUIBridgeSubsystem::HandleRouteTimelineCaptureBegin()
+{
+	if (URoutePreviewSubsystem* RoutePreview =
+		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>())
+	{
+		if (RoutePreview->GetPlaybackState() == ERoutePreviewPlaybackState::Playing)
+		{
+			RoutePreview->Pause();
+		}
+		RefreshRoutePlaybackUI();
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleRouteTimelineCaptureEnd()
+{
+	// Scrubbing intentionally remains paused. The user explicitly resumes with Play.
+	RefreshRoutePlaybackUI();
+}
+
+void UGCSUIBridgeSubsystem::HandleRouteImportClicked()
+{
+	OpenRouteImport();
+}
+
+void UGCSUIBridgeSubsystem::HandleRouteImportCloseClicked()
+{
+	CloseRouteImport();
+}
+
+void UGCSUIBridgeSubsystem::HandleRouteBrowseClicked()
+{
+	FString SelectedPath;
+	if (!OpenRuntimeNpzFileDialog(SelectedPath))
+	{
+		return;
+	}
+	if (!FPaths::GetExtension(SelectedPath).Equals(TEXT("npz"), ESearchCase::IgnoreCase))
+	{
+		UE_LOG(LogTemp, Error, TEXT("[RoutePreviewUI] Selected file is not an NPZ archive."));
+		return;
+	}
+
+	URoutePreviewSubsystem* RoutePreview =
+		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>();
+	if (!RoutePreview)
+	{
+		return;
+	}
+
+	FString Error;
+	if (!RoutePreview->PrepareRouteImport(SelectedPath, Error))
+	{
+		UE_LOG(LogTemp, Error, TEXT("[RoutePreviewUI] NPZ import failed: %s"), *Error);
+		return;
+	}
+
+	SelectedRouteImportFilePath = FPaths::ConvertRelativePathToFull(SelectedPath);
+	RefreshRouteImportMetadata();
+}
+
+void UGCSUIBridgeSubsystem::HandleRouteLoadPreviewClicked()
+{
+	URoutePreviewSubsystem* RoutePreview =
+		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>();
+	if (!RoutePreview || SelectedRouteImportFilePath.IsEmpty() || !RoutePreview->HasPreparedRoute())
+	{
+		UE_LOG(LogTemp, Error, TEXT("[RoutePreviewUI] Select and validate an NPZ file first."));
+		return;
+	}
+
+	double SampleRate = 0.0;
+	double Latitude = 0.0;
+	double Longitude = 0.0;
+	double Altitude = 0.0;
+	if (!RouteSampleRateInput.IsValid()
+		|| !TryParseFiniteDouble(RouteSampleRateInput->GetText(), SampleRate)
+		|| SampleRate <= 0.0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[RoutePreviewUI] Sample rate must be a finite number greater than zero."));
+		return;
+	}
+	if (!RouteOriginLatitudeInput.IsValid()
+		|| !TryParseFiniteDouble(RouteOriginLatitudeInput->GetText(), Latitude)
+		|| Latitude < -90.0
+		|| Latitude > 90.0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[RoutePreviewUI] Latitude must be finite and in [-90,90]."));
+		return;
+	}
+	if (!RouteOriginLongitudeInput.IsValid()
+		|| !TryParseFiniteDouble(RouteOriginLongitudeInput->GetText(), Longitude)
+		|| Longitude < -180.0
+		|| Longitude > 180.0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[RoutePreviewUI] Longitude must be finite and in [-180,180]."));
+		return;
+	}
+	if (!RouteOriginAltitudeInput.IsValid()
+		|| !TryParseFiniteDouble(RouteOriginAltitudeInput->GetText(), Altitude))
+	{
+		UE_LOG(LogTemp, Error, TEXT("[RoutePreviewUI] Altitude must be a finite number in meters."));
+		return;
+	}
+
+	FString Error;
+	if (!RoutePreview->CommitPreparedRoute(Error)
+		|| !RoutePreview->SetShowOrigin(Latitude, Longitude, Altitude, Error)
+		|| !RoutePreview->SetSampleRateHz(SampleRate, Error)
+		|| !RoutePreview->EnterPreviewMode(Error)
+		|| !RoutePreview->SeekToFrame(0, Error))
+	{
+		UE_LOG(LogTemp, Error, TEXT("[RoutePreviewUI] Load preview failed: %s"), *Error);
+		return;
+	}
+
+	RefreshRoutePlaybackUI();
+	CloseRouteImport();
+}
+
+void UGCSUIBridgeSubsystem::HandleRouteSampleRateTextChanged(const FText& Text)
+{
+	(void)Text;
+	RefreshRouteImportMetadata();
+}
+
 void UGCSUIBridgeSubsystem::ApplyAndSubmitSelectedDroneLedColor(
 	const FLinearColor& PreviewColor,
 	const uint8 Red,
@@ -1188,6 +1521,13 @@ bool UGCSUIBridgeSubsystem::IsPointerOverBlockingGCSUI(
 		{
 			return true;
 		}
+	}
+	if (const UUserWidget* ImportWidget = RouteImportWidget.Get();
+		ImportWidget
+		&& ImportWidget->IsVisible()
+		&& ImportWidget->GetCachedGeometry().IsUnderLocation(ScreenPosition))
+	{
+		return true;
 	}
 	return false;
 }
@@ -1997,6 +2337,384 @@ void UGCSUIBridgeSubsystem::BindColorPaletteButtons()
 	}
 }
 
+void UGCSUIBridgeSubsystem::BindRoutePlaybackControls()
+{
+	UUserWidget* Playback = PlaybackWidget.Get();
+	UWidgetTree* WidgetTree = Playback ? Playback->WidgetTree : nullptr;
+	if (!WidgetTree)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[RoutePreviewUI] CHILD_Playback widget tree is unavailable."));
+		return;
+	}
+
+	// BTN_RouteImport is intentionally discovery-only in Phase 1E.
+	const bool bRouteImportFound =
+		Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_RouteImport"))) != nullptr;
+	RouteImportButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_RouteImport")));
+	RoutePreviousButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_PreviousFrame")));
+	RoutePauseButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_Pause")));
+	RoutePlayButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_Play")));
+	RouteStopButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_Stop")));
+	RouteNextButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_NextFrame")));
+	RouteTimelineSlider = Cast<USlider>(WidgetTree->FindWidget(TEXT("SLD_RouteTimeline")));
+	RouteTimeText = Cast<UTextBlock>(WidgetTree->FindWidget(TEXT("TXT_RouteTime")));
+	RouteFrameText = Cast<UTextBlock>(WidgetTree->FindWidget(TEXT("TXT_RouteFrame")));
+
+	const bool bRequiredWidgetsFound =
+		RoutePreviousButton.IsValid()
+		&& RoutePauseButton.IsValid()
+		&& RoutePlayButton.IsValid()
+		&& RouteStopButton.IsValid()
+		&& RouteNextButton.IsValid()
+		&& RouteTimelineSlider.IsValid()
+		&& RouteTimeText.IsValid()
+		&& RouteFrameText.IsValid();
+	if (!bRouteImportFound || !bRequiredWidgetsFound)
+	{
+		UE_LOG(
+			LogTemp,
+			Error,
+			TEXT("[RoutePreviewUI] Playback widget tree mismatch. Import=%s RequiredControls=%s"),
+			bRouteImportFound ? TEXT("YES") : TEXT("NO"),
+			bRequiredWidgetsFound ? TEXT("YES") : TEXT("NO"));
+		return;
+	}
+
+	RouteImportButton->OnClicked.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteImportClicked);
+	RouteImportButton->OnClicked.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteImportClicked);
+
+	RoutePreviousButton->OnClicked.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRoutePreviousFrameClicked);
+	RoutePreviousButton->OnClicked.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRoutePreviousFrameClicked);
+	RoutePauseButton->OnClicked.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRoutePauseClicked);
+	RoutePauseButton->OnClicked.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRoutePauseClicked);
+	RoutePlayButton->OnClicked.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRoutePlayClicked);
+	RoutePlayButton->OnClicked.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRoutePlayClicked);
+	RouteStopButton->OnClicked.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteStopClicked);
+	RouteStopButton->OnClicked.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteStopClicked);
+	RouteNextButton->OnClicked.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteNextFrameClicked);
+	RouteNextButton->OnClicked.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteNextFrameClicked);
+
+	RouteTimelineSlider->OnValueChanged.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteTimelineValueChanged);
+	RouteTimelineSlider->OnValueChanged.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteTimelineValueChanged);
+	RouteTimelineSlider->OnMouseCaptureBegin.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteTimelineCaptureBegin);
+	RouteTimelineSlider->OnMouseCaptureBegin.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteTimelineCaptureBegin);
+	RouteTimelineSlider->OnMouseCaptureEnd.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteTimelineCaptureEnd);
+	RouteTimelineSlider->OnMouseCaptureEnd.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteTimelineCaptureEnd);
+	RouteTimelineSlider->OnControllerCaptureBegin.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteTimelineCaptureBegin);
+	RouteTimelineSlider->OnControllerCaptureBegin.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteTimelineCaptureBegin);
+	RouteTimelineSlider->OnControllerCaptureEnd.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteTimelineCaptureEnd);
+	RouteTimelineSlider->OnControllerCaptureEnd.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteTimelineCaptureEnd);
+
+	RouteUIRefreshAccumulator = 0.0f;
+	RefreshRoutePlaybackUI();
+	UE_LOG(LogTemp, Display, TEXT("[RoutePreviewUI] Playback controls and RouteImport entry bound."));
+}
+
+void UGCSUIBridgeSubsystem::OpenRouteImport()
+{
+	UUserWidget* ImportWidget = RouteImportWidget.Get();
+	if (!ImportWidget)
+	{
+		UUserWidget* Owner = MainWidgetRef.Get();
+		APlayerController* PlayerController = Owner ? Owner->GetOwningPlayer() : nullptr;
+		const TSubclassOf<UUserWidget> ImportClass = RouteImportWidgetClass;
+		if (!PlayerController || !ImportClass)
+		{
+			UE_LOG(LogTemp, Error, TEXT("[RoutePreviewUI] Unable to load WBP_GCS_RouteImport."));
+			return;
+		}
+
+		ImportWidget = CreateWidget<UUserWidget>(PlayerController, ImportClass);
+		if (!ImportWidget || !BindRouteImportControls(ImportWidget))
+		{
+			UE_LOG(LogTemp, Error, TEXT("[RoutePreviewUI] RouteImport widget tree binding failed."));
+			return;
+		}
+		UWidget* RootWidget = ImportWidget->WidgetTree
+			? ImportWidget->WidgetTree->RootWidget.Get()
+			: nullptr;
+		UWidget* ImportBorder = ImportWidget->WidgetTree
+			? ImportWidget->WidgetTree->FindWidget(TEXT("BORDER_RouteImport"))
+			: nullptr;
+		UCanvasPanelSlot* ImportBorderSlot = ImportBorder
+			? Cast<UCanvasPanelSlot>(ImportBorder->Slot)
+			: nullptr;
+		if (!Cast<UCanvasPanel>(RootWidget) || !ImportBorderSlot)
+		{
+			UE_LOG(
+				LogTemp,
+				Error,
+				TEXT("[RoutePreviewUI] RouteImport requires Canvas_RouteImport root and BORDER_RouteImport Canvas slot."));
+			return;
+		}
+
+		// AddToViewport's default slot stretches the root canvas across the live
+		// viewport. Center only the authored 420x400 border inside that canvas;
+		// this keeps layout in UMG/DPI space and avoids resolution-specific offsets.
+		ImportBorderSlot->SetAnchors(FAnchors(0.5f, 0.5f));
+		ImportBorderSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+		ImportBorderSlot->SetPosition(FVector2D::ZeroVector);
+		ImportBorderSlot->SetAutoSize(false);
+		ImportWidget->AddToViewport(300);
+		RouteImportWidget = ImportWidget;
+	}
+
+	ImportWidget->SetVisibility(ESlateVisibility::Visible);
+	RefreshRouteImportMetadata();
+}
+
+void UGCSUIBridgeSubsystem::CloseRouteImport()
+{
+	if (UUserWidget* ImportWidget = RouteImportWidget.Get())
+	{
+		ImportWidget->SetVisibility(ESlateVisibility::Collapsed);
+	}
+}
+
+bool UGCSUIBridgeSubsystem::BindRouteImportControls(UUserWidget* ImportWidget)
+{
+	UWidgetTree* WidgetTree = ImportWidget ? ImportWidget->WidgetTree : nullptr;
+	if (!WidgetTree)
+	{
+		return false;
+	}
+
+	RouteImportCloseButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_RouteImportClose")));
+	RouteBrowseButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_RouteBrowse")));
+	RouteCancelButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_RouteCancel")));
+	RouteLoadPreviewButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_RouteLoadPreview")));
+	RouteSampleRateInput = Cast<UEditableTextBox>(WidgetTree->FindWidget(TEXT("EDT_SampleRate")));
+	RouteOriginLatitudeInput = Cast<UEditableTextBox>(WidgetTree->FindWidget(TEXT("EDT_OriginLatitude")));
+	RouteOriginLongitudeInput = Cast<UEditableTextBox>(WidgetTree->FindWidget(TEXT("EDT_OriginLongitude")));
+	RouteOriginAltitudeInput = Cast<UEditableTextBox>(WidgetTree->FindWidget(TEXT("EDT_OriginAltitude")));
+	RouteImportFilePathText = Cast<UTextBlock>(WidgetTree->FindWidget(TEXT("TXT_RouteFilePath")));
+	RouteImportDroneValueText = Cast<UTextBlock>(WidgetTree->FindWidget(TEXT("TXT_RouteDroneValue")));
+	RouteImportFrameCountValueText = Cast<UTextBlock>(WidgetTree->FindWidget(TEXT("TXT_RouteFrameCountValue")));
+	RouteImportDurationValueText = Cast<UTextBlock>(WidgetTree->FindWidget(TEXT("TXT_RouteDurationValue")));
+
+	if (!RouteImportCloseButton.IsValid()
+		|| !RouteBrowseButton.IsValid()
+		|| !RouteCancelButton.IsValid()
+		|| !RouteLoadPreviewButton.IsValid()
+		|| !RouteSampleRateInput.IsValid()
+		|| !RouteOriginLatitudeInput.IsValid()
+		|| !RouteOriginLongitudeInput.IsValid()
+		|| !RouteOriginAltitudeInput.IsValid()
+		|| !RouteImportFilePathText.IsValid()
+		|| !RouteImportDroneValueText.IsValid()
+		|| !RouteImportFrameCountValueText.IsValid()
+		|| !RouteImportDurationValueText.IsValid())
+	{
+		return false;
+	}
+
+	RouteImportCloseButton->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleRouteImportCloseClicked);
+	RouteImportCloseButton->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleRouteImportCloseClicked);
+	RouteCancelButton->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleRouteImportCloseClicked);
+	RouteCancelButton->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleRouteImportCloseClicked);
+	RouteBrowseButton->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleRouteBrowseClicked);
+	RouteBrowseButton->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleRouteBrowseClicked);
+	RouteLoadPreviewButton->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleRouteLoadPreviewClicked);
+	RouteLoadPreviewButton->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleRouteLoadPreviewClicked);
+	RouteSampleRateInput->OnTextChanged.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleRouteSampleRateTextChanged);
+	RouteSampleRateInput->OnTextChanged.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleRouteSampleRateTextChanged);
+	return true;
+}
+
+void UGCSUIBridgeSubsystem::RefreshRouteImportMetadata()
+{
+	URoutePreviewSubsystem* RoutePreview =
+		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>();
+	const bool bPrepared = RoutePreview && RoutePreview->HasPreparedRoute();
+	if (UTextBlock* FileText = RouteImportFilePathText.Get())
+	{
+		FileText->SetText(FText::FromString(
+			bPrepared ? FPaths::GetCleanFilename(SelectedRouteImportFilePath) : TEXT("...")));
+	}
+	if (UTextBlock* DroneText = RouteImportDroneValueText.Get())
+	{
+		DroneText->SetText(FText::FromString(
+			bPrepared ? FString::FromInt(RoutePreview->GetPreparedDroneCount()) : TEXT("--")));
+	}
+	if (UTextBlock* FrameText = RouteImportFrameCountValueText.Get())
+	{
+		FrameText->SetText(FText::FromString(
+			bPrepared ? FString::FromInt(RoutePreview->GetPreparedFrameCount()) : TEXT("--")));
+	}
+	if (UTextBlock* DurationText = RouteImportDurationValueText.Get())
+	{
+		double SampleRate = 0.0;
+		const bool bValidRate = RouteSampleRateInput.IsValid()
+			&& TryParseFiniteDouble(RouteSampleRateInput->GetText(), SampleRate)
+			&& SampleRate > 0.0;
+		DurationText->SetText(FText::FromString(
+			bPrepared && bValidRate
+				? FormatRouteDuration((RoutePreview->GetPreparedFrameCount() - 1) / SampleRate)
+				: TEXT("--")));
+	}
+}
+
+void UGCSUIBridgeSubsystem::StepRoutePreviewFrame(const int32 Direction)
+{
+	URoutePreviewSubsystem* RoutePreview =
+		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>();
+	if (!RoutePreview || !RoutePreview->IsRouteLoaded())
+	{
+		return;
+	}
+
+	if (RoutePreview->GetPlaybackState() == ERoutePreviewPlaybackState::Playing)
+	{
+		RoutePreview->Pause();
+	}
+	const int32 LastFrame = FMath::Max(0, RoutePreview->GetFrameCount() - 1);
+	const int32 CurrentFrame = FMath::Max(0, RoutePreview->GetCurrentFrame());
+	const int32 TargetFrame = FMath::Clamp(CurrentFrame + Direction, 0, LastFrame);
+	FString Error;
+	if (!RoutePreview->SeekToFrame(TargetFrame, Error))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[RoutePreviewUI] Frame step rejected: %s"), *Error);
+	}
+	RefreshRoutePlaybackUI();
+}
+
+void UGCSUIBridgeSubsystem::TickRoutePlaybackUI(const float DeltaSeconds)
+{
+	RouteUIRefreshAccumulator += FMath::Max(0.0f, DeltaSeconds);
+	if (RouteUIRefreshAccumulator < RouteUIRefreshIntervalSeconds)
+	{
+		return;
+	}
+	RouteUIRefreshAccumulator = FMath::Fmod(
+		RouteUIRefreshAccumulator,
+		RouteUIRefreshIntervalSeconds);
+	RefreshRoutePlaybackUI();
+}
+
+void UGCSUIBridgeSubsystem::RefreshRoutePlaybackUI()
+{
+	URoutePreviewSubsystem* RoutePreview =
+		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>();
+	if (!RoutePreview)
+	{
+		return;
+	}
+
+	const bool bLoaded = RoutePreview->IsRouteLoaded();
+	const ERoutePreviewPlaybackState State = RoutePreview->GetPlaybackState();
+	const bool bPlaying = State == ERoutePreviewPlaybackState::Playing;
+	const bool bCompleted = State == ERoutePreviewPlaybackState::Completed;
+
+	if (UButton* Button = RoutePreviousButton.Get())
+	{
+		Button->SetIsEnabled(bLoaded && !bPlaying);
+	}
+	if (UButton* Button = RoutePauseButton.Get())
+	{
+		Button->SetIsEnabled(bLoaded && bPlaying);
+	}
+	if (UButton* Button = RoutePlayButton.Get())
+	{
+		Button->SetIsEnabled(bLoaded && !bPlaying);
+	}
+	if (UButton* Button = RouteStopButton.Get())
+	{
+		Button->SetIsEnabled(bLoaded);
+	}
+	if (UButton* Button = RouteNextButton.Get())
+	{
+		Button->SetIsEnabled(bLoaded && !bPlaying && !bCompleted);
+	}
+
+	const int32 FrameCount = bLoaded ? RoutePreview->GetFrameCount() : 0;
+	const int32 CurrentFrame = FrameCount > 0
+		? FMath::Clamp(FMath::Max(0, RoutePreview->GetCurrentFrame()), 0, FrameCount - 1)
+		: 0;
+	if (USlider* Slider = RouteTimelineSlider.Get())
+	{
+		Slider->SetIsEnabled(bLoaded);
+		const float NormalizedValue = FrameCount > 1
+			? static_cast<float>(CurrentFrame) / static_cast<float>(FrameCount - 1)
+			: 0.0f;
+		bUpdatingRouteTimelineFromState = true;
+		Slider->SetValue(NormalizedValue);
+		bUpdatingRouteTimelineFromState = false;
+	}
+
+	if (UTextBlock* FrameText = RouteFrameText.Get())
+	{
+		FrameText->SetText(FText::FromString(FString::Printf(
+			TEXT("Frame %d / %d"),
+			CurrentFrame,
+			FrameCount)));
+	}
+
+	if (UTextBlock* TimeText = RouteTimeText.Get())
+	{
+		FString TimeDisplay = TEXT("--:-- / --:--");
+		if (bLoaded && RoutePreview->GetSampleRateHz() > 0.0)
+		{
+			const auto FormatMinutesSeconds = [](const double Seconds)
+			{
+				const int32 TotalSeconds = FMath::Max(0, FMath::FloorToInt(Seconds));
+				return FString::Printf(
+					TEXT("%02d:%02d"),
+					TotalSeconds / 60,
+					TotalSeconds % 60);
+			};
+			TimeDisplay = FString::Printf(
+				TEXT("%s / %s"),
+				*FormatMinutesSeconds(RoutePreview->GetCurrentTime()),
+				*FormatMinutesSeconds(RoutePreview->GetDurationSeconds()));
+		}
+		TimeText->SetText(FText::FromString(TimeDisplay));
+	}
+}
+
 void UGCSUIBridgeSubsystem::BindFleetPanelButtons()
 {
 	InitializeFleetRowViews();
@@ -2121,9 +2839,14 @@ void UGCSUIBridgeSubsystem::ResetNavigationPages()
 
 void UGCSUIBridgeSubsystem::ShowMainPage(const EGCSMainPage Page)
 {
-	ActivePage = Page;
+	const bool bToggleOffActiveNavigationPage =
+		ActivePage == Page
+		&& (Page == EGCSMainPage::Map
+			|| Page == EGCSMainPage::Settings
+			|| Page == EGCSMainPage::Logs);
+	ActivePage = bToggleOffActiveNavigationPage ? EGCSMainPage::Fleet : Page;
 	bPanelsExpanded = true;
-	ApplyNavigationVisibility();
+	ApplyNavigationPageVisibility();
 }
 
 void UGCSUIBridgeSubsystem::ApplyNavigationVisibility()
@@ -2137,6 +2860,13 @@ void UGCSUIBridgeSubsystem::ApplyNavigationVisibility()
 
 	FGCSUIWidgetPresenter::SetWidgetVisible(FleetPanelWidget, bShowFleet);
 	FGCSUIWidgetPresenter::SetWidgetVisible(DroneDetailWidget, bShowDroneDetail);
+	ApplyNavigationPageVisibility();
+
+	UE_LOG(LogTemp, Log, TEXT("GCS UI navigation changed to page %d"), static_cast<int32>(ActivePage));
+}
+
+void UGCSUIBridgeSubsystem::ApplyNavigationPageVisibility()
+{
 	FGCSUIWidgetPresenter::SetWidgetVisible(
 		MapPageWidget,
 		ActivePage == EGCSMainPage::Map,
@@ -2149,8 +2879,6 @@ void UGCSUIBridgeSubsystem::ApplyNavigationVisibility()
 		LogsPageWidget,
 		ActivePage == EGCSMainPage::Logs,
 		true);
-
-	UE_LOG(LogTemp, Log, TEXT("GCS UI navigation changed to page %d"), static_cast<int32>(ActivePage));
 }
 
 UUserWidget* UGCSUIBridgeSubsystem::CreateNavigationPage(

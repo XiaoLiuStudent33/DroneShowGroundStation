@@ -210,6 +210,13 @@ void ADroneFleetVisualizationActor::SetDroneColorsForIDs(
 
 void ADroneFleetVisualizationActor::RefreshFromFleet()
 {
+	// Telemetry continues to update FleetManager during preview. Only the render
+	// bridge is source-gated, so live authority is never overwritten or paused.
+	if (VisualizationMode == EGCSVisualizationMode::RoutePreview)
+	{
+		return;
+	}
+
 	CacheCesiumGeoreference();
 
 	UFleetManagerSubsystem* Fleet = FleetManager.Get();
@@ -262,7 +269,9 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 	}
 
 	if (ParticleDroneIDs != NewParticleDroneIDs
-		|| DroneColors.Num() != NewDroneColors.Num())
+		|| DroneColors.Num() != NewDroneColors.Num()
+		|| DroneDisplayIDs.Num() != NewParticleDroneIDs.Num()
+		|| DroneSelectedMasks.Num() != NewParticleDroneIDs.Num())
 	{
 		ParticleDroneIDs = MoveTemp(NewParticleDroneIDs);
 		DroneColors = MoveTemp(NewDroneColors);
@@ -494,12 +503,15 @@ FVector ADroneFleetVisualizationActor::ConvertDroneGPSPosition(
 
 void ADroneFleetVisualizationActor::RebuildDroneLabelAttributes()
 {
-	DroneDisplayIDs.SetNumUninitialized(ParticleDroneIDs.Num());
-	DroneSelectedMasks.SetNumUninitialized(ParticleDroneIDs.Num());
-	for (int32 Index = 0; Index < ParticleDroneIDs.Num(); ++Index)
+	const int32 ParticleCount = DronePositions.Num();
+	DroneDisplayIDs.SetNumUninitialized(ParticleCount);
+	DroneSelectedMasks.SetNumUninitialized(ParticleCount);
+	for (int32 Index = 0; Index < ParticleCount; ++Index)
 	{
 		DroneDisplayIDs[Index] = static_cast<float>(Index + 1);
-		DroneSelectedMasks[Index] = CommandSelectedDroneIDs.Contains(ParticleDroneIDs[Index])
+		DroneSelectedMasks[Index] = VisualizationMode == EGCSVisualizationMode::Live
+			&& ParticleDroneIDs.IsValidIndex(Index)
+			&& CommandSelectedDroneIDs.Contains(ParticleDroneIDs[Index])
 			? 1.0f
 			: 0.0f;
 	}
@@ -530,14 +542,14 @@ bool ADroneFleetVisualizationActor::PushDroneColorsToNiagara()
 	{
 		return false;
 	}
-	if (DroneColors.Num() != ParticleDroneIDs.Num())
+	if (DroneColors.Num() != DronePositions.Num())
 	{
 		UE_LOG(
 			LogTemp,
 			Warning,
 			TEXT("[DroneColors] Niagara write rejected: Colors=%d Particles=%d"),
 			DroneColors.Num(),
-			ParticleDroneIDs.Num());
+			DronePositions.Num());
 		return false;
 	}
 
@@ -589,5 +601,110 @@ void ADroneFleetVisualizationActor::HandleDataBatchApplied(
 {
 	(void)FleetRevision;
 	(void)UpdatedDroneCount;
+	RefreshFromFleet();
+}
+
+bool ADroneFleetVisualizationActor::SetRoutePreviewFrame(
+	const TArray<FVector3f>& PositionsENU,
+	const TArray<FLinearColor>& Colors,
+	const double OriginLatitude,
+	const double OriginLongitude,
+	const double OriginAltitude,
+	FString& OutError)
+{
+	OutError.Reset();
+	if (PositionsENU.IsEmpty() || PositionsENU.Num() != Colors.Num())
+	{
+		OutError = TEXT("Preview position/color arrays must be non-empty and have equal lengths.");
+		return false;
+	}
+	if (!FMath::IsFinite(OriginLatitude) || OriginLatitude < -90.0 || OriginLatitude > 90.0
+		|| !FMath::IsFinite(OriginLongitude) || OriginLongitude < -180.0 || OriginLongitude > 180.0
+		|| !FMath::IsFinite(OriginAltitude))
+	{
+		OutError = TEXT("Preview geographic origin is invalid.");
+		return false;
+	}
+
+	CacheCesiumGeoreference();
+	ACesiumGeoreference* Georeference = CesiumGeoreference.Get();
+	if (!Georeference)
+	{
+		OutError = TEXT("CesiumGeoreference is unavailable for route preview conversion.");
+		return false;
+	}
+
+	const FVector OriginInGeoreference =
+		Georeference->TransformLongitudeLatitudeHeightPositionToUnreal(FVector(
+			OriginLongitude,
+			OriginLatitude,
+			OriginAltitude));
+	const FMatrix EastSouthUpToGeoreference =
+		Georeference->ComputeEastSouthUpToUnrealTransformation(OriginInGeoreference);
+	const double UnrealUnitsPerMeter = Georeference->GetScale();
+	const FTransform GeoreferenceActorTransform = Georeference->GetActorTransform();
+
+	TArray<FVector> NewWorldPositions;
+	NewWorldPositions.SetNumUninitialized(PositionsENU.Num());
+	for (int32 RouteSlotIndex = 0; RouteSlotIndex < PositionsENU.Num(); ++RouteSlotIndex)
+	{
+		const FVector3f LocalENU = PositionsENU[RouteSlotIndex];
+		if (LocalENU.ContainsNaN())
+		{
+			OutError = FString::Printf(TEXT("RouteSlotIndex %d has a non-finite position."), RouteSlotIndex);
+			return false;
+		}
+
+		// Cesium's local horizontal frame is East-South-Up and its Unreal-local
+		// units use Georeference scale (normally 100 units per meter).
+		const FVector LocalESUUnrealUnits(
+			static_cast<double>(LocalENU.X) * UnrealUnitsPerMeter,
+			-static_cast<double>(LocalENU.Y) * UnrealUnitsPerMeter,
+			static_cast<double>(LocalENU.Z) * UnrealUnitsPerMeter);
+		const FVector PositionInGeoreference =
+			EastSouthUpToGeoreference.TransformPosition(LocalESUUnrealUnits);
+		const FVector WorldPosition =
+			GeoreferenceActorTransform.TransformPosition(PositionInGeoreference);
+		if (WorldPosition.ContainsNaN())
+		{
+			OutError = FString::Printf(TEXT("Cesium conversion failed for RouteSlotIndex %d."), RouteSlotIndex);
+			return false;
+		}
+		NewWorldPositions[RouteSlotIndex] = WorldPosition;
+	}
+
+	if (VisualizationMode == EGCSVisualizationMode::Live)
+	{
+		SuspendedLiveParticleDroneIDs = ParticleDroneIDs;
+		SuspendedLiveDroneColors = DroneColors;
+	}
+	VisualizationMode = EGCSVisualizationMode::RoutePreview;
+	ParticleDroneIDs.Reset();
+	DronePositions = MoveTemp(NewWorldPositions);
+	DroneColors = Colors;
+	for (FLinearColor& Color : DroneColors)
+	{
+		Color.R = FMath::Clamp(Color.R, 0.0f, 1.0f);
+		Color.G = FMath::Clamp(Color.G, 0.0f, 1.0f);
+		Color.B = FMath::Clamp(Color.B, 0.0f, 1.0f);
+		Color.A = 1.0f;
+	}
+	bDroneColorsDirty = true;
+	RebuildDroneLabelAttributes();
+	PushArraysToNiagara();
+	return true;
+}
+
+void ADroneFleetVisualizationActor::ExitRoutePreview()
+{
+	if (VisualizationMode != EGCSVisualizationMode::RoutePreview)
+	{
+		return;
+	}
+
+	VisualizationMode = EGCSVisualizationMode::Live;
+	ParticleDroneIDs = MoveTemp(SuspendedLiveParticleDroneIDs);
+	DroneColors = MoveTemp(SuspendedLiveDroneColors);
+	bDroneColorsDirty = true;
 	RefreshFromFleet();
 }

@@ -19,6 +19,13 @@ class UNiagaraSystem;
 class USceneComponent;
 struct FFleetGeoOrigin;
 
+UENUM(BlueprintType)
+enum class EGCSVisualizationMode : uint8
+{
+	Live,
+	RoutePreview
+};
+
 /**
  * Fleet 到 Niagara 的轻量数据桥。
  *
@@ -64,6 +71,24 @@ public:
 	/** Enables the existing ID sprite renderer through its global Niagara user parameter. */
 	void SetDroneLabelsVisible(bool bVisible);
 
+	/**
+	 * Replaces only the visualization source with one route frame. Route slots
+	 * are preview identities and are never inserted into FleetManager.
+	 */
+	bool SetRoutePreviewFrame(
+		const TArray<FVector3f>& PositionsENU,
+		const TArray<FLinearColor>& Colors,
+		double OriginLatitude,
+		double OriginLongitude,
+		double OriginAltitude,
+		FString& OutError);
+
+	/** Restores the newest FleetManager snapshot without changing Fleet state. */
+	void ExitRoutePreview();
+
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization")
+	EGCSVisualizationMode GetVisualizationMode() const { return VisualizationMode; }
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -100,6 +125,14 @@ private:
 
 	/** Derived render cache only; GCSUIBridgeSubsystem remains selection authority. */
 	TSet<FString> CommandSelectedDroneIDs;
+	EGCSVisualizationMode VisualizationMode = EGCSVisualizationMode::Live;
+
+	/**
+	 * Live render-only state saved while RoutePreview owns the Niagara arrays.
+	 * Fleet telemetry remains authoritative in FleetManager throughout preview.
+	 */
+	TArray<FString> SuspendedLiveParticleDroneIDs;
+	TArray<FLinearColor> SuspendedLiveDroneColors;
 	bool bDroneLabelAttributesDirty = true;
 	bool bDroneColorsDirty = true;
 

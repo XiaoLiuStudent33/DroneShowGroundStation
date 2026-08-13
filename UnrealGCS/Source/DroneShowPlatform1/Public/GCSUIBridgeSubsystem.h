@@ -17,6 +17,8 @@ class UButton;
 class ACameraActor;
 class APlayerController;
 class UGCSDroneRowView;
+class UEditableTextBox;
+class USlider;
 class UTextBlock;
 class UUserWidget;
 class UWidget;
@@ -49,6 +51,7 @@ class DRONESHOWPLATFORM1_API UGCSUIBridgeSubsystem final : public UGameInstanceS
 	GENERATED_BODY()
 
 public:
+	UGCSUIBridgeSubsystem();
 	void BindMainWidget(UUserWidget* MainWidget);
 	virtual void Deinitialize() override;
 
@@ -114,6 +117,45 @@ private:
 
 	UFUNCTION()
 	void HandleColorMagentaClicked();
+
+	UFUNCTION()
+	void HandleRoutePreviousFrameClicked();
+
+	UFUNCTION()
+	void HandleRoutePauseClicked();
+
+	UFUNCTION()
+	void HandleRoutePlayClicked();
+
+	UFUNCTION()
+	void HandleRouteStopClicked();
+
+	UFUNCTION()
+	void HandleRouteNextFrameClicked();
+
+	UFUNCTION()
+	void HandleRouteTimelineValueChanged(float NormalizedValue);
+
+	UFUNCTION()
+	void HandleRouteTimelineCaptureBegin();
+
+	UFUNCTION()
+	void HandleRouteTimelineCaptureEnd();
+
+	UFUNCTION()
+	void HandleRouteImportClicked();
+
+	UFUNCTION()
+	void HandleRouteImportCloseClicked();
+
+	UFUNCTION()
+	void HandleRouteBrowseClicked();
+
+	UFUNCTION()
+	void HandleRouteLoadPreviewClicked();
+
+	UFUNCTION()
+	void HandleRouteSampleRateTextChanged(const FText& Text);
 
 	UFUNCTION()
 	void HandleArmClicked();
@@ -234,6 +276,7 @@ private:
 	void RegisterMarqueeInputProcessor();
 	void UnregisterMarqueeInputProcessor();
 	void PollMarqueePlayerControllerInput();
+	void TickRoutePlaybackUI(float DeltaSeconds);
 	void BeginMarqueeCameraLock(APlayerController* PlayerController);
 	void EndMarqueeCameraLock();
 	void UpdateTopDownViewInput(APlayerController* PlayerController);
@@ -254,6 +297,13 @@ private:
 		const FVector2D& EndPosition);
 	void BindExistingButtons();
 	void BindColorPaletteButtons();
+	void BindRoutePlaybackControls();
+	bool BindRouteImportControls(UUserWidget* RouteImportWidget);
+	void OpenRouteImport();
+	void CloseRouteImport();
+	void RefreshRouteImportMetadata();
+	void RefreshRoutePlaybackUI();
+	void StepRoutePreviewFrame(int32 Direction);
 	void ApplySelectedDronePreviewColor(const FLinearColor& Color) const;
 	void ApplyAndSubmitSelectedDroneLedColor(
 		const FLinearColor& PreviewColor,
@@ -266,9 +316,12 @@ private:
 	void ResetNavigationPages();
 	void ShowMainPage(EGCSMainPage Page);
 	void ApplyNavigationVisibility();
+	void ApplyNavigationPageVisibility();
 	UUserWidget* CreateNavigationPage(const TCHAR* ClassPath) const;
 
 	TWeakObjectPtr<UUserWidget> MainWidgetRef;
+	UPROPERTY()
+	TSubclassOf<UUserWidget> RouteImportWidgetClass;
 	TWeakObjectPtr<UUserWidget> TopBarWidget;
 	TWeakObjectPtr<UUserWidget> LeftToolbarWidget;
 	TWeakObjectPtr<UUserWidget> FleetPanelWidget;
@@ -276,6 +329,28 @@ private:
 	TWeakObjectPtr<UUserWidget> RightToolbarWidget;
 	TWeakObjectPtr<UUserWidget> RightPanelWidget;
 	TWeakObjectPtr<UUserWidget> PlaybackWidget;
+	TWeakObjectPtr<UUserWidget> RouteImportWidget;
+	TWeakObjectPtr<UButton> RouteImportButton;
+	TWeakObjectPtr<UButton> RouteImportCloseButton;
+	TWeakObjectPtr<UButton> RouteBrowseButton;
+	TWeakObjectPtr<UButton> RouteCancelButton;
+	TWeakObjectPtr<UButton> RouteLoadPreviewButton;
+	TWeakObjectPtr<UEditableTextBox> RouteSampleRateInput;
+	TWeakObjectPtr<UEditableTextBox> RouteOriginLatitudeInput;
+	TWeakObjectPtr<UEditableTextBox> RouteOriginLongitudeInput;
+	TWeakObjectPtr<UEditableTextBox> RouteOriginAltitudeInput;
+	TWeakObjectPtr<UTextBlock> RouteImportFilePathText;
+	TWeakObjectPtr<UTextBlock> RouteImportDroneValueText;
+	TWeakObjectPtr<UTextBlock> RouteImportFrameCountValueText;
+	TWeakObjectPtr<UTextBlock> RouteImportDurationValueText;
+	TWeakObjectPtr<UButton> RoutePreviousButton;
+	TWeakObjectPtr<UButton> RoutePauseButton;
+	TWeakObjectPtr<UButton> RoutePlayButton;
+	TWeakObjectPtr<UButton> RouteStopButton;
+	TWeakObjectPtr<UButton> RouteNextButton;
+	TWeakObjectPtr<USlider> RouteTimelineSlider;
+	TWeakObjectPtr<UTextBlock> RouteTimeText;
+	TWeakObjectPtr<UTextBlock> RouteFrameText;
 	TWeakObjectPtr<UWidget> SelectionRectangleWidget;
 	TWeakObjectPtr<UUserWidget> MapPageWidget;
 	TWeakObjectPtr<UUserWidget> SettingsPageWidget;
@@ -283,6 +358,7 @@ private:
 	EGCSMainPage ActivePage = EGCSMainPage::Fleet;
 	bool bPanelsExpanded = true;
 	FString LastCommandResultText;
+	FString SelectedRouteImportFilePath;
 	TSet<FString> SelectedCommandDroneIDs;
 	TArray<FString> CurrentFleetPageDroneIDs;
 	TSharedPtr<FGCSMarqueeInputProcessor> MarqueeInputProcessor;
@@ -297,6 +373,8 @@ private:
 	bool bTopDownLocateLocked = false;
 	bool bTopDownMiddleMouseWasDown = false;
 	bool bTopDownPanning = false;
+	bool bUpdatingRouteTimelineFromState = false;
+	float RouteUIRefreshAccumulator = 0.0f;
 	FVector2D TopDownLastMousePosition = FVector2D::ZeroVector;
 	float TopDownFitOrthoWidth = 0.0f;
 	FVector TopDownLockedCameraLocation = FVector::ZeroVector;
@@ -313,5 +391,6 @@ private:
 	static constexpr float TopDownZoomFactor = 0.85f;
 	static constexpr float TopDownMinOrthoWidthFactor = 0.03f;
 	static constexpr float TopDownMaxOrthoWidthFactor = 8.0f;
+	static constexpr float RouteUIRefreshIntervalSeconds = 0.1f;
 	float HoverAltitudeMeters = 5.0f;
 };
