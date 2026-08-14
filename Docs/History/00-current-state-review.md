@@ -1,5 +1,15 @@
 # 当前工程现状审查
 
+> **Status: HISTORICAL**
+>
+> **Authority: None for current architecture**
+>
+> **Last Updated: 2026-08-14 (classification only)**
+>
+> **DO NOT USE AS CURRENT ARCHITECTURE**
+>
+> Superseded by [Architecture_Freeze_CN.md](../Architecture_Freeze_CN.md), [Code_Architecture_CN.md](../Code_Architecture_CN.md), and [Development_Status_CN.md](../Development_Status_CN.md).
+
 审查日期：2026-07-31
 
 ## 导入结果

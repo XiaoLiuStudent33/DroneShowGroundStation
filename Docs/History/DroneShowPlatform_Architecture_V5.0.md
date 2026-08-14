@@ -1,5 +1,15 @@
 # DroneShowPlatform 无人机表演管理平台架构审查 V5.0
 
+> **Status: HISTORICAL**
+>
+> **Authority: None for current architecture**
+>
+> **Last Updated: 2026-08-14 (classification only)**
+>
+> **DO NOT USE AS CURRENT ARCHITECTURE**
+>
+> Superseded by [Architecture_Freeze_CN.md](../Architecture_Freeze_CN.md), [Code_Architecture_CN.md](../Code_Architecture_CN.md), and [Development_Status_CN.md](../Development_Status_CN.md).
+
 > 状态：阶段 1 完成后的只读架构审查  
 > 日期：2026-08-03  
 > 范围：UnrealGCS 数据层、FleetManager、未来数据输入接口与命令架构  

@@ -1,52 +1,45 @@
 # DroneGCS Architecture Freeze
 
-## Architecture_Freeze_CN.md= 当前项目“宪法”
+Status: CURRENT
+Authority: 项目最高长期架构约束
+Last Updated: 2026-08-14
+Applies To: `ConsoleGCS`、`UnrealGCS`、`Shared`、Route domain
+Supersedes: 早期阶段性架构建议中的冲突内容
 
-## Architecture_Freeze_CN.md
-   ## ↑ 第一优先级 / 不能违反什么
+## 1. 文档职责
 
-## Code_Architecture_CN.md
-   ## ↑ 当前代码到底怎么运行
+本文件只定义长期稳定的 Authority、身份、数据流、性能和 Production 边界。当前类和调用细节见 [Code_Architecture_CN.md](Code_Architecture_CN.md)，Route Upload 方向见 [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md)，当前进度见 [Development_Status_CN.md](Development_Status_CN.md)。
 
-## Production_Responsibility_Audit_CN.md
-##    ↑ 为什么这些类这样分
+Source of Truth 优先级：
 
-## Test_Architecture_CN.md
-##    ↑ 测试怎么组织、怎么运行
+1. 当前 Production 源码与已经人工验证的当前行为。
+2. 本文件仍成立的冻结原则。
+3. 当前专项 Architecture 文档。
+4. Audit 与历史记录。
 
+本文不是开发日志。未来设计必须明确标记为 `PLANNED` 或 `DEFERRED`，不得写成已实现事实。
 
+## 2. 系统 Authority
 
-## 以后给 Codex 的规则就一句：
-## 优先阅读：
+1. **UE**：Frontend、Visualization、Operator Workflow。
+2. **ConsoleGCS**：Backend、MAVLink、Drone Network、Remote Endpoint 路由。
+3. **DSP-GCS**：UE 与 ConsoleGCS 之间的版本化同机 Production 边界；当前正式 Transport 是 localhost UDP。
+4. **Shared**：只拥有 DSP Protocol、Wire Types、Transport interface/config/constants；Console/UE 领域状态不得进入 Shared。
+5. **FleetManagerSubsystem**：UE 真实 Fleet、稳定 `DroneOrder`、详情选择和 Fleet Geo Origin 的 Authority。
+6. **GCSUIBridgeSubsystem**：UI lifecycle、页面/面板、命令选择、命令提交与 Route UI 协调者；不拥有 Route 样本或 Fleet 网络身份。
+7. **URoutePreviewSubsystem**：当前 Route Preview 数据、Show Origin、SampleRate、Frame 和 Playback 的 Authority。
 
-## 1. Docs/Architecture_Freeze_CN.md
-## 2. Docs/Code_Architecture_CN.md
+## 3. Fleet Identity 与 Session
 
-## 仅在需要时阅读：
-## 3. Production_Responsibility_Audit_CN.md
-## 4. Test_Architecture_CN.md
+- Fleet network identity 固定为 `Remote IP + UDP Source Port`。
+- MAVLink SYSID/COMPID 是协议元数据和 ACK/target 字段，不是 Fleet unique identity。
+- `DroneManager -> DroneSession` 是 Console Session ownership。
+- Offline 只改变在线状态，不删除 Session、DroneID、最后快照或稳定顺序。
+- 相同 endpoint 恢复后继续复用原 Session/DroneID。
+- 当前 DroneID 在 Console 进程生命周期内稳定；Console 重启后的持久化身份尚未保证。
+- RouteSlot 是航线槽位身份，不是 Drone、DroneID、SYSID 或 particle index。
 
-## Docs/History/* 仅为历史参考，
-## 不得作为当前 Production 架构依据。
-
-本文件是 Cleanup Phase 3A~3H 完成后的维护基线。除明确 Bug、明确新功能需求或有测量证据的性能瓶颈外，不改变下列边界；“更优雅”“少几个文件”或工具建议重构均不是修改理由。
-
-## 1. 冻结的核心边界
-
-1. Fleet Identity：`Remote IP + UDP Source Port`；SYSID 不是 Fleet Identity。
-2. Session Owner：`DroneManager -> DroneSession`；Offline Session 保留，同 Endpoint 恢复原 Session。
-3. Telemetry Storage：每个 `DroneSession` 拥有自己的 `DataManager` 线程安全快照。
-4. MAVLink Decode：Datagram 只由 `MavlinkReadOnlyIngress` 解码；`MavlinkDiscoveryService` 只消费 decoded HEARTBEAT。
-5. Command：`CommandManager -> DroneSession -> CommandDispatcher -> MavlinkCommand`；ACK 归属当前 Endpoint Session。
-6. DSP：Shared 只拥有 Protocol、Wire Types、Transport Interface/Config/Constants；Console/UE 业务状态不进入 Shared。
-7. UE Thread Boundary：`GCSServerAdapterSubsystem` 是 Telemetry 到 Fleet 唯一 GameThread handoff 和原子提交边界。
-8. UE Fleet：`FleetManagerSubsystem` 是 Fleet、DroneOrder、Selection、GeoOrigin 的唯一 Owner。
-9. UI：`GCSUIBridgeSubsystem` 协调生命周期、Selection、Command 和 Fleet 事件；`FGCSUIWidgetPresenter` 只做 Widget 查找、文本、颜色和可见性派生。
-10. Visualization：`FleetManager -> DroneFleetVisualizationActor -> Cesium -> one Niagara System -> N particles`；不使用 per-drone Actor/Component/Tick。
-11. Config：Console Deployment、Console DSP、UE `DefaultGame.ini`、代码 fallback、Protocol/Safety constants 各自职责固定，不建立第二套 Production Endpoint 真值。
-12. Runtime 分类：Production 不依赖 Mock、Acceptance、Regression Test；Developer Provider 只依赖 Production interface，且默认关闭。
-
-## 2. Production 调用树
+## 4. Production 数据流
 
 ```text
 Console Telemetry
@@ -57,73 +50,128 @@ MavlinkUdpReceiver
 -> DroneSession
 -> DataManager
 -> DSPGCSProductionTelemetryProvider
--> ConsoleDSPGCSLoopbackTransport
-
-Console Command
-DSPGCSProductionCommandReceiver
--> CommandManager
--> DroneSession
--> CommandDispatcher
--> MavlinkCommand
--> UdpClient / shared MavlinkDatagramSender
--> Drone Remote Endpoint
+-> DSP-GCS localhost UDP
 
 UE Telemetry
-DSPGCSLoopbackTransport
--> DSPGCSProductionTelemetryProviderSubsystem
+DSPGCSProductionTelemetryProviderSubsystem
 -> GCSServerAdapterSubsystem
 -> FleetManagerSubsystem
 -> UI / DroneFleetVisualizationActor
--> Cesium / Niagara
 
 UE Command
 GCSUIBridgeSubsystem
 -> DSPGCSProductionCommandProviderSubsystem
--> DSPGCSLoopbackTransport
--> Console Production Command Receiver
+-> DSP-GCS localhost UDP
+-> DSPGCSProductionCommandReceiver
+-> CommandManager
+-> DroneSession
+-> CommandDispatcher
+-> MavlinkCommand
+-> endpoint-bound sender
+-> shared UDP socket
+-> Remote Endpoint
 ```
 
-`DSPGCSLoopbackTransport` 是当前 `127.0.0.1:12001 <-> 127.0.0.1:12002` 正式同机 Production 通道，不是 Test Transport。
+`GCSServerAdapterSubsystem` 是 Network/Worker 到 GameThread Fleet submit 的唯一正式边界。网络线程不得直接修改 Fleet、UI 或 Niagara。
 
-## 3. Developer Entry Map
+## 5. Visualization 与性能
 
-| 我要修改 | 主要入口 | 必要时第二入口 |
-|---|---|---|
-| Drone 发现 | `MavlinkDiscoveryService` | `MavlinkReadOnlyIngress` |
-| Endpoint Identity | `DroneDiscovery.h::DiscoveredDroneIdentity` | `DroneManager` |
-| GPS / Inbound Mode 解析 | `MavlinkParser::Parse/GetModeName` | 字段扩展时 `FlightData.h` |
-| Online / Offline | `DataManager::RefreshOnlineStatus` | `DroneSession::RefreshHeartbeatStatus` |
-| 新增 MAVLink 命令 | `DroneCommandRequest`、`DroneSession::SubmitCommand` | `CommandDispatcher`、`MavlinkCommand`；跨 UE 时还需 DSP 两端 mapping |
-| ACK 生命周期 | `CommandDispatcher::HandleAck` | `MavlinkReadOnlyIngress` 的 Endpoint 路由 |
-| DSP Wire / Transport | `Shared/DSPGCSProtocol`、`Shared/DSPGCSTransport` | Console/UE Production Provider |
-| UE Fleet | `FleetManagerSubsystem` | `GCSDataTypes.h` |
-| Server Link | `DSPGCSProductionTelemetryProviderSubsystem` | UI 派生显示时 `GCSUIBridgeSubsystem` |
-| UI 按钮行为 | `GCSUIBridgeSubsystem` | Command Provider |
-| UI 文本 / 颜色 | `GCSUIWidgetPresenter` | 无 |
-| Niagara 数据桥 | `DroneFleetVisualizationActor` | 视觉资产变化时 `NS_DroneFleet` |
-| Console 配置 | `AppConfig`、`gcs-config.ini` | `DSPGCSTransportConfigLoader`、`DSPGCSTransport.ini` |
-| UE 配置 | `DefaultGame.ini` | 对应 Production Provider |
-| Console 测试 | `ConsoleGCSTests`、`ConsoleGCS/tests/` | 无 |
-| UE 测试 | `Private/Tests/` 下 `DroneGCS.*` | 无 |
+冻结链：
 
-## 4. MAVLink 维护入口
+```text
+FleetManager / RoutePreview
+-> one ADroneFleetVisualizationActor
+-> CesiumGeoreference
+-> one UNiagaraComponent
+-> one NS_DroneFleet
+-> N stable particles
+```
 
-当前清单已集中记录在 `Code_Architecture_CN.md` 的 MAVLink Inbound、Outbound、MAV_CMD 三节；实现 Owner 是 `MavlinkParser`、`DroneCommandRequest`、`CommandDispatcher` 和 `MavlinkCommand`。文档已覆盖当前 #0/#1/#24/#30/#33/#77、#0/#11/#66/#76、ARM/DISARM、TAKEOFF、LAND、RTL 及 Inbound mode 映射，因此不创建第二套代码常量 Catalog。
+禁止：
 
-## 5. Runtime 分类与配置
+- per-drone Actor
+- per-drone Component
+- per-drone Niagara System
+- per-drone Widget/TextRender
+- per-drone Tick/Timer/Thread
 
-- Production：Console `DroneGCS`；UE Production Provider、Adapter、Fleet、UI、Visualization。
-- Regression：Console `ConsoleGCSTests`；UE `Private/Tests`。
-- Acceptance：Console `DSPGCSAcceptance`；UE `Developer/Acceptance`。
-- Developer Mock：UE `Developer/Mock`。
-- Developer 开关必须显式启用且默认 `False`。Production 初始化失败只能进入 `Disconnected/Error/Link Lost`，不得 fallback 到 Mock。
+1000 drones 是当前稳定基线。10000 drones 是探索性/未来扩展路径，必须先测量 memory、UDP、parse、session、DSP、UE apply 和 Niagara，再决定优化。
 
-## 6. Future Only
+## 6. Production / Developer 边界
 
-- DSP-GCS 跨机器/LAN 部署及 Deployment Profile。
-- 有真实增长需求后再评估 Developer Module。
-- 有协议演进需求后再升级 DSP schema/wire format。
-- 10K/20K Scaling：先测量 UDP、parse、heartbeat、session、DSP、UE apply 和 Niagara，再决定优化点。
-- 如跨 LAN 需求出现，可评估把 `DSPGCSLoopbackTransport` 重命名为更通用的 UDP Transport；当前不改。
+- Production 不依赖 Mock、Acceptance 或 Regression Test。
+- Developer Provider 只能依赖 Production interface，默认关闭。
+- Production Provider 失败只能进入 `Disconnected/Error/Link Lost`，不得自动 fallback 到 Mock。
+- `DSPGCSLoopbackTransport` 名称包含 Loopback，但当前代表 `127.0.0.1:12001 <-> 127.0.0.1:12002` 正式同机 Production UDP。
 
-Cleanup 阶段到此结束，后续进入无人机表演平台功能开发。
+## 7. Route Domain 冻结方向
+
+### 7.1 IMPLEMENTED
+
+- `URoutePreviewSubsystem` 是 Route Preview Authority。
+- `FRoutePreviewData` 保留原始 Local ENU，RouteSlot 为 0-based preview identity。
+- Route Preview 与 Live telemetry 使用明确的 Visualization Mode，不能同时写同一组视觉数组。
+- SampleRate 必须显式配置；unset 为合法状态，禁止猜 24/25/30/50/60 Hz。
+
+### 7.2 FROZEN DIRECTION / PLANNED
+
+- Waypoint 生成必须使用 `Route Local ENU + Show Origin`，禁止从 UE World Position 反推 GPS。
+- RouteAssignment 必须成为独立 UE Route-domain Authority，不能藏在 FleetManager。
+- `DroneID != RouteSlotIndex`，不得自动按相同数字匹配。
+- `.waypoints` 必须作为可人工检查、可追溯、可哈希的落盘 Artifact。
+- UE 不直接发送 MAVLink Route Upload。
+- 正式 Route Upload 链必须是：
+
+```text
+UE Route Workflow
+-> DSP-GCS
+-> Console Route Upload Backend
+-> DroneSession endpoint authority
+-> shared UDP sender
+-> Flight Controller
+```
+
+- 长生命周期 Route Upload 不能塞入现有短命令 `CommandDispatcher`。
+- 当前 Legacy compatibility target 是 QGC WPL 110 -> Mission binary -> MAVFTP `@MISSION/mission.dat`，但在新实现前仍需真实定制固件验证。
+
+### 7.3 DEFERRED
+
+- 10000-drone chunked/sharded Route Store。
+- Backup Drone Replacement、故障补点、冲突预测、120-degree rejoin rule。
+- 这些未来能力只允许通过动态 Assignment 的 Owner/State/Revision/Timestamp 扩展，不得提前写成当前功能。
+
+## 8. Route 与 Mission 高风险语义
+
+- Preview geographic altitude 使用 `ShowOriginAltitude + LocalZ`。
+- `MAV_FRAME_GLOBAL_RELATIVE_ALT` Waypoint altitude 必须使用 Local Z；不能把 Preview geographic altitude写入 relative-alt mission。
+- Preview SampleRate 不等于飞控 Mission execution rate。
+- Legacy RGB `param1/param2/param3` 不是标准 `MAV_CMD_NAV_WAYPOINT` 语义，属于定制固件兼容行为。
+- `All Write ACKed != Mission Ready`。
+- 真实 Mission timing、RGB 执行、`@MISSION/mission.dat` apply、time-control、custom MAV_CMD_USER 和 Mission-ready verification 当前均为 Firmware Unknown。
+
+## 9. 配置与网络
+
+- Console deployment、Console DSP transport、UE config、代码安全 fallback 和 protocol constants 各自保持单一职责。
+- 不建立第二套 endpoint、port、fleet identity 或 command selection Authority。
+- Session Remote Endpoint 始终来自真实入站 MAVLink datagram，不从 SYSID 或 UE particle 推导。
+- Route Upload 必须复用现有 shared UDP sender；禁止新增每机 socket 或第二套网络栈。
+
+## 10. 变更纪律
+
+允许改变冻结边界的理由仅限：
+
+- 明确新业务需求无法由现有边界安全承载。
+- 明确 Bug。
+- 有测量证据的性能瓶颈。
+- 经审计确认的协议/固件事实变化。
+
+“更优雅”“文件更少”或工具建议不是修改冻结边界的理由。
+
+## 11. 阅读顺序
+
+1. 本文件。
+2. [Code_Architecture_CN.md](Code_Architecture_CN.md)。
+3. [Development_Status_CN.md](Development_Status_CN.md)。
+4. 当前任务相关专项 Architecture。
+5. Audit。
+6. `History/`。

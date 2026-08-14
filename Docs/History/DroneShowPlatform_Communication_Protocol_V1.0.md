@@ -1,5 +1,15 @@
 # DroneShowPlatform UE ↔ ConsoleGCS 通信协议设计 V1.0
 
+> **Status: HISTORICAL**
+>
+> **Authority: None for current architecture**
+>
+> **Last Updated: 2026-08-14 (classification only)**
+>
+> **DO NOT USE AS CURRENT ARCHITECTURE**
+>
+> Superseded by [Architecture_Freeze_CN.md](../Architecture_Freeze_CN.md), [Code_Architecture_CN.md](../Code_Architecture_CN.md), [Network_Architecture_CN.md](../Network_Architecture_CN.md), and the current DSP-GCS source schema.
+
 > 阶段：4.1 协议设计  
 > 状态：设计基线，不包含网络实现  
 > 适用组件：UnrealGCS、ConsoleGCS、未来 GCS Server / Simulator / Replay Provider  

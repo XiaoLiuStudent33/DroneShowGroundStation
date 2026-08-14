@@ -1,6 +1,16 @@
-# Production 职责审计（Architecture Freeze 基线）=当前 Production 职责参考
+# Production 职责审计（Architecture Freeze 基线）
 
-## 现行文档 这个类为什么存在？这个类能不能删？DataManager为什么不能合并？ServerAdapter到底负责什么？=Architecture Freeze 基线
+> Status: AUDIT / BASELINE REFERENCE
+>
+> Last Updated: 2026-08-14 (classification only)
+>
+> Authority: 保留 Cleanup/Freeze 时的职责审计证据；当前调用链以 [Code_Architecture_CN.md](Code_Architecture_CN.md) 与 Production 源码为准，冻结边界以 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md) 为准。
+>
+> Current status: [Development_Status_CN.md](Development_Status_CN.md)
+
+## 现行文档职责与审计问题
+
+本文回答：这些类为什么存在、能否删除、`DataManager` 为什么不能随意合并，以及 `ServerAdapter` 的边界是什么。
 
 
 

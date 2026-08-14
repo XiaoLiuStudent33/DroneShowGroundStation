@@ -1,4 +1,12 @@
-# 测试架构与运行方式 =当前测试使用说明
+# 测试架构与运行方式
+
+> Status: CURRENT TEST REFERENCE
+>
+> Last Updated: 2026-08-14 (documentation classification)
+>
+> Authority: 测试资产与运行入口参考；Production 边界以 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md) 和 [Code_Architecture_CN.md](Code_Architecture_CN.md) 为准。
+>
+> Project status: [Development_Status_CN.md](Development_Status_CN.md)
 
 ## 1. 资产边界
 
