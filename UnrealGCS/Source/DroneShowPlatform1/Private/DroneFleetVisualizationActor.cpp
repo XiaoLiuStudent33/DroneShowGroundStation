@@ -6,11 +6,13 @@
  */
 #include "DroneFleetVisualizationActor.h"
 
+#include "Camera/CameraTypes.h"
 #include "Camera/PlayerCameraManager.h"
 #include "CesiumGeoreference.h"
 #include "Components/SceneComponent.h"
 #include "EngineUtils.h"
 #include "FleetManagerSubsystem.h"
+#include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "NiagaraComponent.h"
 #include "NiagaraDataInterfaceArrayFunctionLibrary.h"
@@ -24,11 +26,26 @@ namespace
 	const FName DroneDisplayIDsParameter(TEXT("User.DroneDisplayIDs"));
 	const FName DroneSelectedMasksParameter(TEXT("User.DroneSelectedMasks"));
 	const FName DroneLabelsVisibleParameter(TEXT("User.ShowDroneLabels"));
+	const FName LiveDroneHaloVisibleParameter(TEXT("User.ShowLiveDroneHalo"));
+	const FName FlightMarkerSizeParameter(TEXT("User.FlightMarkerSize"));
+	const FName RouteTargetCountParameter(TEXT("User.RouteTargetCount"));
+	const FName RouteTargetPositionsParameter(TEXT("User.RouteTargetPositions"));
+	const FName RouteTargetsVisibleParameter(TEXT("User.ShowRouteTargets"));
+
+	constexpr float FlightMarkerTargetPixels = 5.0f;
+	constexpr float FlightMarkerMinWorldSize = 24.0f;
+	constexpr float FlightMarkerMaxWorldSize = 64.0f;
+	constexpr float FlightMarkerUpdateIntervalSeconds = 0.05f;
+	constexpr float FlightMarkerInterpolationSpeed = 8.0f;
+	constexpr float FlightMarkerWriteThreshold = 0.25f;
 }
 
 ADroneFleetVisualizationActor::ADroneFleetVisualizationActor()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	// One bounded global update keeps the shared marker renderer screen-readable.
+	// This remains independent of fleet size and never creates per-drone ticks.
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.TickInterval = FlightMarkerUpdateIntervalSeconds;
 	SetAutoDestroyWhenFinished(false);
 	InitialLifeSpan = 0.0f;
 
@@ -67,7 +84,9 @@ void ADroneFleetVisualizationActor::BeginPlay()
 	}
 
 	DroneFleetNiagara->SetAsset(DroneFleetSystem);
+	UpdateLiveDroneHaloVisibility();
 	SetDroneLabelsVisible(false);
+	ClearRouteTargets();
 	BindFleetManager();
 	if (!FleetManager.IsValid())
 	{
@@ -78,12 +97,182 @@ void ADroneFleetVisualizationActor::BeginPlay()
 	RefreshFromFleet();
 }
 
+void ADroneFleetVisualizationActor::Tick(const float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	UpdateAdaptiveFlightMarkerSize(DeltaSeconds);
+}
+
+void ADroneFleetVisualizationActor::UpdateAdaptiveFlightMarkerSize(const float DeltaSeconds)
+{
+	if (!DroneFleetNiagara || !DroneFleetNiagara->GetAsset())
+	{
+		return;
+	}
+
+	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+	APlayerCameraManager* CameraManager = UGameplayStatics::GetPlayerCameraManager(this, 0);
+	if (!PlayerController || !CameraManager)
+	{
+		return;
+	}
+
+	int32 ViewportWidth = 0;
+	int32 ViewportHeight = 0;
+	PlayerController->GetViewportSize(ViewportWidth, ViewportHeight);
+	if (ViewportWidth <= 0 || ViewportHeight <= 0)
+	{
+		return;
+	}
+
+	const FMinimalViewInfo& CameraView = CameraManager->GetCameraCacheView();
+	float DesiredWorldSize = 0.0f;
+	if (CameraView.ProjectionMode == ECameraProjectionMode::Orthographic)
+	{
+		if (!FMath::IsFinite(CameraView.OrthoWidth) || CameraView.OrthoWidth <= 0.0f)
+		{
+			return;
+		}
+
+		// Orthographic screen scale depends only on OrthoWidth, never camera height.
+		DesiredWorldSize = FlightMarkerTargetPixels
+			* CameraView.OrthoWidth
+			/ static_cast<float>(ViewportWidth);
+	}
+	else
+	{
+		FVector VisualizationReference = FVector::ZeroVector;
+		if (VisualizationMode == EGCSVisualizationMode::RoutePreview
+			&& bRoutePreviewOriginWorldPositionInitialized)
+		{
+			VisualizationReference = RoutePreviewOriginWorldPosition;
+		}
+		else if (bOriginWorldPositionInitialized)
+		{
+			VisualizationReference = OriginWorldPosition;
+		}
+		else if (!DronePositions.IsEmpty())
+		{
+			// O(1) startup fallback until the current geographic origin is available.
+			VisualizationReference = DronePositions[0];
+		}
+		else
+		{
+			return;
+		}
+
+		const double CameraDistance = FVector::Distance(
+			CameraView.Location,
+			VisualizationReference);
+		if (!FMath::IsFinite(CameraDistance) || CameraDistance <= 0.0)
+		{
+			return;
+		}
+
+		const double AspectRatio = static_cast<double>(ViewportWidth)
+			/ static_cast<double>(ViewportHeight);
+		const double HorizontalHalfFovRadians = FMath::DegreesToRadians(
+			static_cast<double>(CameraView.FOV) * 0.5);
+		const double TanVerticalHalfFov = FMath::Tan(HorizontalHalfFovRadians)
+			/ AspectRatio;
+		if (!FMath::IsFinite(TanVerticalHalfFov) || TanVerticalHalfFov <= 0.0)
+		{
+			return;
+		}
+
+		const double VisibleWorldHeight = 2.0 * CameraDistance * TanVerticalHalfFov;
+		DesiredWorldSize = static_cast<float>(
+			FlightMarkerTargetPixels
+			* VisibleWorldHeight
+			/ static_cast<double>(ViewportHeight));
+	}
+
+	if (!FMath::IsFinite(DesiredWorldSize))
+	{
+		return;
+	}
+	DesiredWorldSize = FMath::Clamp(
+		DesiredWorldSize,
+		FlightMarkerMinWorldSize,
+		FlightMarkerMaxWorldSize);
+
+	if (!bAdaptiveFlightMarkerSizeInitialized)
+	{
+		CurrentAdaptiveFlightMarkerSize = DesiredWorldSize;
+		bAdaptiveFlightMarkerSizeInitialized = true;
+	}
+	else
+	{
+		CurrentAdaptiveFlightMarkerSize = FMath::FInterpTo(
+			CurrentAdaptiveFlightMarkerSize,
+			DesiredWorldSize,
+			DeltaSeconds,
+			FlightMarkerInterpolationSpeed);
+	}
+
+	if (LastSubmittedFlightMarkerSize >= 0.0f
+		&& FMath::Abs(CurrentAdaptiveFlightMarkerSize - LastSubmittedFlightMarkerSize)
+			< FlightMarkerWriteThreshold)
+	{
+		return;
+	}
+
+	DroneFleetNiagara->SetVariableVec2(
+		FlightMarkerSizeParameter,
+		FVector2D(CurrentAdaptiveFlightMarkerSize, CurrentAdaptiveFlightMarkerSize));
+	LastSubmittedFlightMarkerSize = CurrentAdaptiveFlightMarkerSize;
+}
+
 void ADroneFleetVisualizationActor::SetDroneLabelsVisible(const bool bVisible)
 {
 	if (DroneFleetNiagara)
 	{
 		DroneFleetNiagara->SetVariableBool(DroneLabelsVisibleParameter, bVisible);
 	}
+}
+
+void ADroneFleetVisualizationActor::UpdateLiveDroneHaloVisibility()
+{
+	if (!DroneFleetNiagara)
+	{
+		return;
+	}
+
+	DroneFleetNiagara->SetVariableBool(LiveDroneHaloVisibleParameter, true);
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[DroneViz] Shared drone halo enabled for %s"),
+		VisualizationMode == EGCSVisualizationMode::Live
+			? TEXT("Live")
+			: TEXT("RoutePreview"));
+}
+
+void ADroneFleetVisualizationActor::SetRouteTargetPositions(
+	const TArray<FVector>& Positions)
+{
+	RouteTargetPositions = Positions;
+	PushRouteTargetsToNiagara();
+}
+
+void ADroneFleetVisualizationActor::SetRouteTargetsVisible(const bool bVisible)
+{
+	bRouteTargetsVisible = bVisible
+		&& VisualizationMode == EGCSVisualizationMode::Live
+		&& !RouteTargetPositions.IsEmpty();
+	if (DroneFleetNiagara)
+	{
+		DroneFleetNiagara->SetVariableBool(
+			RouteTargetsVisibleParameter,
+			bRouteTargetsVisible);
+	}
+}
+
+void ADroneFleetVisualizationActor::ClearRouteTargets()
+{
+	RouteTargetPositions.Reset();
+	bRouteTargetsVisible = false;
+	PushRouteTargetsToNiagara();
 }
 
 void ADroneFleetVisualizationActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -410,6 +599,80 @@ void ADroneFleetVisualizationActor::CacheCesiumGeoreference()
 	}
 }
 
+bool ADroneFleetVisualizationActor::TryGetGeographicTangentBasis(
+	FVector& OutOriginWorld,
+	FVector& OutEastWorld,
+	FVector& OutNorthWorld,
+	FVector& OutUpWorld) const
+{
+	OutOriginWorld = FVector::ZeroVector;
+	OutEastWorld = FVector::ZeroVector;
+	OutNorthWorld = FVector::ZeroVector;
+	OutUpWorld = FVector::ZeroVector;
+
+	ACesiumGeoreference* Georeference = CesiumGeoreference.Get();
+	if (!Georeference)
+	{
+		return false;
+	}
+
+	if (VisualizationMode == EGCSVisualizationMode::RoutePreview
+		&& bRoutePreviewOriginWorldPositionInitialized)
+	{
+		OutOriginWorld = RoutePreviewOriginWorldPosition;
+	}
+	else if (bOriginWorldPositionInitialized)
+	{
+		OutOriginWorld = OriginWorldPosition;
+	}
+	else
+	{
+		return false;
+	}
+
+	const FTransform GeoreferenceActorTransform = Georeference->GetActorTransform();
+	const FVector OriginInGeoreference =
+		GeoreferenceActorTransform.InverseTransformPosition(OutOriginWorld);
+	const FMatrix EastSouthUpToGeoreference =
+		Georeference->ComputeEastSouthUpToUnrealTransformation(OriginInGeoreference);
+
+	const auto TransformDirectionToWorld =
+		[&EastSouthUpToGeoreference, &GeoreferenceActorTransform](const FVector& Direction)
+		{
+			return GeoreferenceActorTransform.TransformVector(
+				EastSouthUpToGeoreference.TransformVector(Direction));
+		};
+
+	const FVector EastRaw = TransformDirectionToWorld(FVector::XAxisVector);
+	const FVector NorthRaw = -TransformDirectionToWorld(FVector::YAxisVector);
+	const FVector UpRaw = TransformDirectionToWorld(FVector::ZAxisVector);
+	if (EastRaw.ContainsNaN() || NorthRaw.ContainsNaN() || UpRaw.ContainsNaN())
+	{
+		return false;
+	}
+
+	const FVector Up = UpRaw.GetSafeNormal();
+	const FVector East = (EastRaw - Up * FVector::DotProduct(EastRaw, Up)).GetSafeNormal();
+	const FVector NorthFromCesium =
+		(NorthRaw
+			- Up * FVector::DotProduct(NorthRaw, Up)
+			- East * FVector::DotProduct(NorthRaw, East)).GetSafeNormal();
+	const FVector OrthogonalNorth = FVector::CrossProduct(-Up, East).GetSafeNormal();
+	if (Up.IsNearlyZero()
+		|| East.IsNearlyZero()
+		|| NorthFromCesium.IsNearlyZero()
+		|| OrthogonalNorth.IsNearlyZero()
+		|| FVector::DotProduct(NorthFromCesium, OrthogonalNorth) < 0.999f)
+	{
+		return false;
+	}
+
+	OutEastWorld = East;
+	OutNorthWorld = OrthogonalNorth;
+	OutUpWorld = Up;
+	return true;
+}
+
 void ADroneFleetVisualizationActor::UpdateOriginWorldPosition(const FFleetGeoOrigin& FleetGeoOrigin)
 {
 	if (!FleetGeoOrigin.bOriginInitialized)
@@ -590,6 +853,38 @@ void ADroneFleetVisualizationActor::PushArraysToNiagara()
 	LastPushedDroneCount = NewDroneCount;
 }
 
+void ADroneFleetVisualizationActor::PushRouteTargetsToNiagara()
+{
+	if (!DroneFleetNiagara || !DroneFleetNiagara->GetAsset())
+	{
+		return;
+	}
+
+	const int32 NewRouteTargetCount = RouteTargetPositions.Num();
+	const bool bCountChanged = LastPushedRouteTargetCount != NewRouteTargetCount;
+	DroneFleetNiagara->SetVariableInt(RouteTargetCountParameter, NewRouteTargetCount);
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayPosition(
+		DroneFleetNiagara,
+		RouteTargetPositionsParameter,
+		RouteTargetPositions);
+	DroneFleetNiagara->SetVariableBool(
+		RouteTargetsVisibleParameter,
+		bRouteTargetsVisible
+			&& VisualizationMode == EGCSVisualizationMode::Live
+			&& NewRouteTargetCount > 0);
+
+	if (bCountChanged)
+	{
+		// Route target spawn count is evaluated during emitter initialization.
+		DroneFleetNiagara->ReinitializeSystem();
+	}
+	else if (!DroneFleetNiagara->IsActive())
+	{
+		DroneFleetNiagara->Activate(true);
+	}
+	LastPushedRouteTargetCount = NewRouteTargetCount;
+}
+
 void ADroneFleetVisualizationActor::HandleFleetChanged()
 {
 	RefreshFromFleet();
@@ -626,6 +921,75 @@ bool ADroneFleetVisualizationActor::SetRoutePreviewFrame(
 		return false;
 	}
 
+	TArray<FVector> NewWorldPositions;
+	FVector RouteOriginWorld = FVector::ZeroVector;
+	if (!ConvertRouteENUPositionsToWorld(
+		PositionsENU,
+		OriginLatitude,
+		OriginLongitude,
+		OriginAltitude,
+		NewWorldPositions,
+		RouteOriginWorld,
+		OutError))
+	{
+		return false;
+	}
+
+	if (VisualizationMode == EGCSVisualizationMode::Live)
+	{
+		SuspendedLiveParticleDroneIDs = ParticleDroneIDs;
+		SuspendedLiveDroneColors = DroneColors;
+	}
+	const bool bEnteringRoutePreview = VisualizationMode != EGCSVisualizationMode::RoutePreview;
+	VisualizationMode = EGCSVisualizationMode::RoutePreview;
+	if (bEnteringRoutePreview)
+	{
+		UpdateLiveDroneHaloVisibility();
+	}
+	SetRouteTargetsVisible(false);
+	RoutePreviewOriginWorldPosition = RouteOriginWorld;
+	bRoutePreviewOriginWorldPositionInitialized = true;
+	ParticleDroneIDs.Reset();
+	DronePositions = MoveTemp(NewWorldPositions);
+	DroneColors = Colors;
+	for (FLinearColor& Color : DroneColors)
+	{
+		Color.R = FMath::Clamp(Color.R, 0.0f, 1.0f);
+		Color.G = FMath::Clamp(Color.G, 0.0f, 1.0f);
+		Color.B = FMath::Clamp(Color.B, 0.0f, 1.0f);
+		Color.A = 1.0f;
+	}
+	bDroneColorsDirty = true;
+	RebuildDroneLabelAttributes();
+	PushArraysToNiagara();
+	return true;
+}
+
+bool ADroneFleetVisualizationActor::ConvertRouteENUPositionsToWorld(
+	const TArray<FVector3f>& PositionsENU,
+	const double OriginLatitude,
+	const double OriginLongitude,
+	const double OriginAltitude,
+	TArray<FVector>& OutWorldPositions,
+	FVector& OutRouteOriginWorld,
+	FString& OutError)
+{
+	OutError.Reset();
+	OutWorldPositions.Reset();
+	OutRouteOriginWorld = FVector::ZeroVector;
+	if (PositionsENU.IsEmpty())
+	{
+		OutError = TEXT("Route position array must be non-empty.");
+		return false;
+	}
+	if (!FMath::IsFinite(OriginLatitude) || OriginLatitude < -90.0 || OriginLatitude > 90.0
+		|| !FMath::IsFinite(OriginLongitude) || OriginLongitude < -180.0 || OriginLongitude > 180.0
+		|| !FMath::IsFinite(OriginAltitude))
+	{
+		OutError = TEXT("Preview geographic origin is invalid.");
+		return false;
+	}
+
 	CacheCesiumGeoreference();
 	ACesiumGeoreference* Georeference = CesiumGeoreference.Get();
 	if (!Georeference)
@@ -643,20 +1007,30 @@ bool ADroneFleetVisualizationActor::SetRoutePreviewFrame(
 		Georeference->ComputeEastSouthUpToUnrealTransformation(OriginInGeoreference);
 	const double UnrealUnitsPerMeter = Georeference->GetScale();
 	const FTransform GeoreferenceActorTransform = Georeference->GetActorTransform();
+	OutRouteOriginWorld =
+		GeoreferenceActorTransform.TransformPosition(OriginInGeoreference);
+	if (OutRouteOriginWorld.ContainsNaN())
+	{
+		OutRouteOriginWorld = FVector::ZeroVector;
+		OutError = TEXT("Cesium conversion failed for the route ShowOrigin.");
+		return false;
+	}
 
-	TArray<FVector> NewWorldPositions;
-	NewWorldPositions.SetNumUninitialized(PositionsENU.Num());
+	OutWorldPositions.SetNumUninitialized(PositionsENU.Num());
 	for (int32 RouteSlotIndex = 0; RouteSlotIndex < PositionsENU.Num(); ++RouteSlotIndex)
 	{
 		const FVector3f LocalENU = PositionsENU[RouteSlotIndex];
 		if (LocalENU.ContainsNaN())
 		{
-			OutError = FString::Printf(TEXT("RouteSlotIndex %d has a non-finite position."), RouteSlotIndex);
+			OutWorldPositions.Reset();
+			OutError = FString::Printf(
+				TEXT("RouteSlotIndex %d has a non-finite position."),
+				RouteSlotIndex);
 			return false;
 		}
 
-		// Cesium's local horizontal frame is East-South-Up and its Unreal-local
-		// units use Georeference scale (normally 100 units per meter).
+		// Route X/Y/Z are East/North/Up meters. Cesium's tangent frame is
+		// East/South/Up in Unreal units, hence the single North sign inversion.
 		const FVector LocalESUUnrealUnits(
 			static_cast<double>(LocalENU.X) * UnrealUnitsPerMeter,
 			-static_cast<double>(LocalENU.Y) * UnrealUnitsPerMeter,
@@ -667,31 +1041,14 @@ bool ADroneFleetVisualizationActor::SetRoutePreviewFrame(
 			GeoreferenceActorTransform.TransformPosition(PositionInGeoreference);
 		if (WorldPosition.ContainsNaN())
 		{
-			OutError = FString::Printf(TEXT("Cesium conversion failed for RouteSlotIndex %d."), RouteSlotIndex);
+			OutWorldPositions.Reset();
+			OutError = FString::Printf(
+				TEXT("Cesium conversion failed for RouteSlotIndex %d."),
+				RouteSlotIndex);
 			return false;
 		}
-		NewWorldPositions[RouteSlotIndex] = WorldPosition;
+		OutWorldPositions[RouteSlotIndex] = WorldPosition;
 	}
-
-	if (VisualizationMode == EGCSVisualizationMode::Live)
-	{
-		SuspendedLiveParticleDroneIDs = ParticleDroneIDs;
-		SuspendedLiveDroneColors = DroneColors;
-	}
-	VisualizationMode = EGCSVisualizationMode::RoutePreview;
-	ParticleDroneIDs.Reset();
-	DronePositions = MoveTemp(NewWorldPositions);
-	DroneColors = Colors;
-	for (FLinearColor& Color : DroneColors)
-	{
-		Color.R = FMath::Clamp(Color.R, 0.0f, 1.0f);
-		Color.G = FMath::Clamp(Color.G, 0.0f, 1.0f);
-		Color.B = FMath::Clamp(Color.B, 0.0f, 1.0f);
-		Color.A = 1.0f;
-	}
-	bDroneColorsDirty = true;
-	RebuildDroneLabelAttributes();
-	PushArraysToNiagara();
 	return true;
 }
 
@@ -703,6 +1060,9 @@ void ADroneFleetVisualizationActor::ExitRoutePreview()
 	}
 
 	VisualizationMode = EGCSVisualizationMode::Live;
+	UpdateLiveDroneHaloVisibility();
+	bRoutePreviewOriginWorldPositionInitialized = false;
+	RoutePreviewOriginWorldPosition = FVector::ZeroVector;
 	ParticleDroneIDs = MoveTemp(SuspendedLiveParticleDroneIDs);
 	DroneColors = MoveTemp(SuspendedLiveDroneColors);
 	bDroneColorsDirty = true;

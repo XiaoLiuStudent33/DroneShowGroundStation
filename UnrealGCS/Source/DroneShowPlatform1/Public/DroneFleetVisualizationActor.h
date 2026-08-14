@@ -72,6 +72,31 @@ public:
 	void SetDroneLabelsVisible(bool bVisible);
 
 	/**
+	 * Converts one RouteSlot-ordered Local ENU position array through the same
+	 * Cesium ShowOrigin path used by full route preview playback.
+	 */
+	bool ConvertRouteENUPositionsToWorld(
+		const TArray<FVector3f>& PositionsENU,
+		double OriginLatitude,
+		double OriginLongitude,
+		double OriginAltitude,
+		TArray<FVector>& OutWorldPositions,
+		FVector& OutRouteOriginWorld,
+		FString& OutError);
+
+	/** Submits RouteSlotIndex-ordered world positions to the independent overlay channel. */
+	void SetRouteTargetPositions(const TArray<FVector>& Positions);
+
+	/** Changes only the route-target renderer visibility user parameter. */
+	void SetRouteTargetsVisible(bool bVisible);
+
+	/** Clears all route-target render data without touching live drone arrays. */
+	void ClearRouteTargets();
+
+	int32 GetRouteTargetCount() const { return RouteTargetPositions.Num(); }
+	bool AreRouteTargetsVisible() const { return bRouteTargetsVisible; }
+
+	/**
 	 * Replaces only the visualization source with one route frame. Route slots
 	 * are preview identities and are never inserted into FleetManager.
 	 */
@@ -89,8 +114,19 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization")
 	EGCSVisualizationMode GetVisualizationMode() const { return VisualizationMode; }
 
+	/**
+	 * Returns the Cesium local tangent basis used by the current visualization
+	 * source. Route preview uses its ShowOrigin; Live uses the Fleet geo origin.
+	 */
+	bool TryGetGeographicTangentBasis(
+		FVector& OutOriginWorld,
+		FVector& OutEastWorld,
+		FVector& OutNorthWorld,
+		FVector& OutUpWorld) const;
+
 protected:
 	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaSeconds) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
@@ -123,6 +159,10 @@ private:
 	UPROPERTY(Transient)
 	TArray<float> DroneSelectedMasks;
 
+	/** Frame-0 RouteSlot-ordered world positions; independent from User.DronePositions. */
+	UPROPERTY(Transient)
+	TArray<FVector> RouteTargetPositions;
+
 	/** Derived render cache only; GCSUIBridgeSubsystem remains selection authority. */
 	TSet<FString> CommandSelectedDroneIDs;
 	EGCSVisualizationMode VisualizationMode = EGCSVisualizationMode::Live;
@@ -135,9 +175,11 @@ private:
 	TArray<FLinearColor> SuspendedLiveDroneColors;
 	bool bDroneLabelAttributesDirty = true;
 	bool bDroneColorsDirty = true;
+	bool bRouteTargetsVisible = false;
 
 	/** 仅粒子数量变化时重建系统；普通遥测更新只批量刷新数组。 */
 	int32 LastPushedDroneCount = INDEX_NONE;
+	int32 LastPushedRouteTargetCount = INDEX_NONE;
 	int32 LastLoggedFleetCount = INDEX_NONE;
 	int32 LastLoggedParticleCount = INDEX_NONE;
 
@@ -149,11 +191,16 @@ private:
 	bool bCesiumMissingLogged = false;
 	bool bOriginWorldPositionInitialized = false;
 	FVector OriginWorldPosition = FVector::ZeroVector;
+	bool bRoutePreviewOriginWorldPositionInitialized = false;
+	FVector RoutePreviewOriginWorldPosition = FVector::ZeroVector;
 	FString CachedOriginDroneID;
 	double CachedOriginLatitude = 0.0;
 	double CachedOriginLongitude = 0.0;
 	float CachedOriginAltitudeAMSL = 0.0f;
 	bool bCachedOriginAltitudeValid = false;
+	bool bAdaptiveFlightMarkerSizeInitialized = false;
+	float CurrentAdaptiveFlightMarkerSize = 32.0f;
+	float LastSubmittedFlightMarkerSize = -1.0f;
 
 	void BindFleetManager();
 	void UnbindFleetManager();
@@ -163,9 +210,12 @@ private:
 		const FDroneData& Drone,
 		const FFleetGeoOrigin& FleetGeoOrigin) const;
 	void RebuildDroneLabelAttributes();
+	void UpdateLiveDroneHaloVisibility();
+	void UpdateAdaptiveFlightMarkerSize(float DeltaSeconds);
 	void PushDroneLabelAttributesToNiagara();
 	bool PushDroneColorsToNiagara();
 	void PushArraysToNiagara();
+	void PushRouteTargetsToNiagara();
 
 	UFUNCTION()
 	void HandleFleetChanged();

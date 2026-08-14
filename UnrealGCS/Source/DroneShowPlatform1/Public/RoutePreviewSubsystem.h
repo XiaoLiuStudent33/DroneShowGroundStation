@@ -98,6 +98,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Route Preview")
 	double GetDurationSeconds() const;
 
+	/** Enables/disables the independent Live + Route Frame-0 target overlay preference. */
+	bool SetRouteOverlayEnabled(bool bEnabled, FString& OutError);
+
+	bool IsRouteOverlayEnabled() const { return bRouteOverlayEnabled; }
+	bool IsRouteOverlayVisible() const { return bRouteOverlayVisible; }
+
+	/** Rebuilds the O(DroneCount) Frame-0 world-position cache and submits it once. */
+	bool RefreshRouteOverlay(FString& OutError);
+
+	int32 GetCachedRouteTargetCount() const { return CachedRouteTargetWorldPositions.Num(); }
+	void LogRouteOverlayStatus() const;
+
 	const FRoutePreviewData& GetRouteData() const { return RouteData; }
 
 private:
@@ -108,15 +120,21 @@ private:
 	double CurrentTimeSeconds = 0.0;
 	ERoutePreviewPlaybackState PlaybackState = ERoutePreviewPlaybackState::Stopped;
 	bool bPreviewModeActive = false;
+	bool bRouteOverlayEnabled = false;
+	bool bRouteOverlayVisible = false;
 	FTSTicker::FDelegateHandle PlaybackTickerHandle;
 
 	/** Reused frame scratch buffers; SetPreviewFrame does not reparse the NPZ. */
 	TArray<FVector3f> FramePositionsENU;
 	TArray<FLinearColor> FrameColors;
 
+	/** Frame-0 only, ordered exactly by RouteSlotIndex; never a Fleet identity mapping. */
+	TArray<FVector> CachedRouteTargetWorldPositions;
+
 	bool ApplyPreviewFrame(int32 FrameIndex, FString& OutError);
 	bool TickPlayback(float DeltaSeconds);
 	void StartPlaybackTicker();
 	void StopPlaybackTicker();
+	void ClearRouteOverlayRenderData();
 	class ADroneFleetVisualizationActor* FindVisualizationActor() const;
 };

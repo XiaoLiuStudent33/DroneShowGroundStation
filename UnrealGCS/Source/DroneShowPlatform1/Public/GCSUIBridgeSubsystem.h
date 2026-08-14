@@ -134,6 +134,12 @@ private:
 	void HandleRouteNextFrameClicked();
 
 	UFUNCTION()
+	void HandleRouteExitPreviewClicked();
+
+	UFUNCTION()
+	void HandleRouteUnloadClicked();
+
+	UFUNCTION()
 	void HandleRouteTimelineValueChanged(float NormalizedValue);
 
 	UFUNCTION()
@@ -348,6 +354,8 @@ private:
 	TWeakObjectPtr<UButton> RoutePlayButton;
 	TWeakObjectPtr<UButton> RouteStopButton;
 	TWeakObjectPtr<UButton> RouteNextButton;
+	TWeakObjectPtr<UButton> RouteExitPreviewButton;
+	TWeakObjectPtr<UButton> RouteUnloadButton;
 	TWeakObjectPtr<USlider> RouteTimelineSlider;
 	TWeakObjectPtr<UTextBlock> RouteTimeText;
 	TWeakObjectPtr<UTextBlock> RouteFrameText;
@@ -379,8 +387,15 @@ private:
 	float TopDownFitOrthoWidth = 0.0f;
 	FVector TopDownLockedCameraLocation = FVector::ZeroVector;
 	FRotator TopDownLockedCameraRotation = FRotator::ZeroRotator;
+	FVector TopDownLocalEast = FVector::XAxisVector;
+	FVector TopDownLocalNorth = -FVector::YAxisVector;
+	FVector TopDownLocalUp = FVector::ZAxisVector;
+	bool bTopDownGeographicBasisActive = false;
 	TWeakObjectPtr<ACameraActor> TopDownOrthographicCamera;
 	TWeakObjectPtr<AActor> PreviousTopDownViewTarget;
+	TWeakObjectPtr<APlayerController> TopDownPlayerController;
+	FRotator PreviousTopDownControlRotation = FRotator::ZeroRotator;
+	bool bHasPreviousTopDownControlRotation = false;
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UGCSDroneRowView>> FleetRowViews;

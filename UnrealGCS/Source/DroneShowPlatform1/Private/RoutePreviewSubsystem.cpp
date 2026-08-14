@@ -10,11 +10,13 @@ void URoutePreviewSubsystem::Deinitialize()
 {
 	StopPlaybackTicker();
 	ExitPreviewMode();
+	ClearRouteOverlayRenderData();
 	RouteData = FRoutePreviewData{};
 	PreparedRouteData = FRoutePreviewData{};
 	PreparedRouteFilePath.Reset();
 	FramePositionsENU.Reset();
 	FrameColors.Reset();
+	CachedRouteTargetWorldPositions.Reset();
 	Super::Deinitialize();
 }
 
@@ -58,9 +60,13 @@ bool URoutePreviewSubsystem::CommitPreparedRoute(FString& OutError)
 
 	RouteData = MoveTemp(PreparedRouteData);
 	PreparedRouteData = FRoutePreviewData{};
-	CurrentFrame = INDEX_NONE;
+	// A committed import starts at logical frame zero while remaining in Live
+	// visualization. Full preview ownership begins only after an explicit
+	// playback/seek action.
+	CurrentFrame = 0;
 	FramePositionsENU.SetNumUninitialized(RouteData.DroneCount);
 	FrameColors.SetNumUninitialized(RouteData.DroneCount);
+	ClearRouteOverlayRenderData();
 	UE_LOG(
 		LogTemp,
 		Display,
@@ -69,6 +75,11 @@ bool URoutePreviewSubsystem::CommitPreparedRoute(FString& OutError)
 		RouteData.FrameCount,
 		RouteData.DroneCount);
 	PreparedRouteFilePath.Reset();
+	if (bRouteOverlayEnabled)
+	{
+		FString OverlayError;
+		RefreshRouteOverlay(OverlayError);
+	}
 	return true;
 }
 
@@ -95,6 +106,7 @@ bool URoutePreviewSubsystem::LoadRoute(const FString& FilePath, FString& OutErro
 	CurrentFrame = INDEX_NONE;
 	FramePositionsENU.SetNumUninitialized(RouteData.DroneCount);
 	FrameColors.SetNumUninitialized(RouteData.DroneCount);
+	ClearRouteOverlayRenderData();
 	const double ElapsedSeconds = FPlatformTime::Seconds() - StartSeconds;
 	UE_LOG(
 		LogTemp,
@@ -109,6 +121,11 @@ bool URoutePreviewSubsystem::LoadRoute(const FString& FilePath, FString& OutErro
 		RouteData.GetColorMemoryBytes() / (1024.0 * 1024.0),
 		(RouteData.GetPositionMemoryBytes() + RouteData.GetColorMemoryBytes()) / (1024.0 * 1024.0),
 		ElapsedSeconds);
+	if (bRouteOverlayEnabled)
+	{
+		FString OverlayError;
+		RefreshRouteOverlay(OverlayError);
+	}
 	return true;
 }
 
@@ -116,13 +133,18 @@ void URoutePreviewSubsystem::UnloadRoute()
 {
 	StopPlaybackTicker();
 	ExitPreviewMode();
+	ClearRouteOverlayRenderData();
 	RouteData = FRoutePreviewData{};
 	CurrentFrame = INDEX_NONE;
 	CurrentTimeSeconds = 0.0;
 	PlaybackState = ERoutePreviewPlaybackState::Stopped;
 	FramePositionsENU.Reset();
 	FrameColors.Reset();
-	UE_LOG(LogTemp, Display, TEXT("[RoutePreview] Unloaded"));
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[RoutePreview] Unloaded; route overlay cleared (EnabledPreference=%s)"),
+		bRouteOverlayEnabled ? TEXT("YES") : TEXT("NO"));
 }
 
 bool URoutePreviewSubsystem::SetShowOrigin(
@@ -159,6 +181,11 @@ bool URoutePreviewSubsystem::SetShowOrigin(
 		Latitude,
 		Longitude,
 		Altitude);
+	if (bRouteOverlayEnabled)
+	{
+		FString OverlayError;
+		RefreshRouteOverlay(OverlayError);
+	}
 	return true;
 }
 
@@ -182,6 +209,16 @@ bool URoutePreviewSubsystem::EnterPreviewMode(FString& OutError)
 	}
 
 	bPreviewModeActive = true;
+	if (ADroneFleetVisualizationActor* VisualizationActor = FindVisualizationActor())
+	{
+		const bool bWasVisible = bRouteOverlayVisible || VisualizationActor->AreRouteTargetsVisible();
+		VisualizationActor->SetRouteTargetsVisible(false);
+		bRouteOverlayVisible = false;
+		if (bWasVisible)
+		{
+			UE_LOG(LogTemp, Display, TEXT("[RouteOverlay] Hidden while full RoutePreview is active"));
+		}
+	}
 	return true;
 }
 
@@ -201,6 +238,156 @@ void URoutePreviewSubsystem::ExitPreviewMode()
 	bPreviewModeActive = false;
 	CurrentFrame = INDEX_NONE;
 	UE_LOG(LogTemp, Display, TEXT("[RoutePreview] Exit -> Live visualization restored"));
+	if (bRouteOverlayEnabled)
+	{
+		FString OverlayError;
+		if (RefreshRouteOverlay(OverlayError))
+		{
+			UE_LOG(LogTemp, Display, TEXT("[RouteOverlay] Restored in Live mode"));
+		}
+	}
+}
+
+bool URoutePreviewSubsystem::SetRouteOverlayEnabled(
+	const bool bEnabled,
+	FString& OutError)
+{
+	OutError.Reset();
+	bRouteOverlayEnabled = bEnabled;
+	if (!bEnabled)
+	{
+		if (ADroneFleetVisualizationActor* VisualizationActor = FindVisualizationActor())
+		{
+			VisualizationActor->SetRouteTargetsVisible(false);
+		}
+		bRouteOverlayVisible = false;
+		UE_LOG(LogTemp, Display, TEXT("[RouteOverlay] Disabled"));
+		return true;
+	}
+
+	UE_LOG(LogTemp, Display, TEXT("[RouteOverlay] Enabled"));
+	return RefreshRouteOverlay(OutError);
+}
+
+bool URoutePreviewSubsystem::RefreshRouteOverlay(FString& OutError)
+{
+	OutError.Reset();
+	bRouteOverlayVisible = false;
+	ADroneFleetVisualizationActor* VisualizationActor = FindVisualizationActor();
+	if (!VisualizationActor)
+	{
+		OutError = TEXT("DroneFleetVisualizationActor is unavailable in the current world.");
+		UE_LOG(LogTemp, Warning, TEXT("[RouteOverlay] Requested but visualization actor is unavailable"));
+		return false;
+	}
+
+	VisualizationActor->SetRouteTargetsVisible(false);
+	if (!RouteData.IsLoaded())
+	{
+		VisualizationActor->ClearRouteTargets();
+		CachedRouteTargetWorldPositions.Reset();
+		OutError = TEXT("Route overlay requested but no route is loaded.");
+		UE_LOG(LogTemp, Warning, TEXT("[RouteOverlay] Requested but no route is loaded"));
+		return false;
+	}
+	if (!RouteData.bShowOriginSet)
+	{
+		VisualizationActor->ClearRouteTargets();
+		CachedRouteTargetWorldPositions.Reset();
+		OutError = TEXT("Route overlay requested but Show Origin is unavailable.");
+		UE_LOG(LogTemp, Warning, TEXT("[RouteOverlay] Requested but Show Origin is unavailable"));
+		return false;
+	}
+
+	if (FramePositionsENU.Num() != RouteData.DroneCount)
+	{
+		FramePositionsENU.SetNumUninitialized(RouteData.DroneCount);
+	}
+	for (int32 RouteSlotIndex = 0; RouteSlotIndex < RouteData.DroneCount; ++RouteSlotIndex)
+	{
+		// Frame 0 is contiguous in the frame-major route store. Array index is
+		// deliberately identical to RouteSlotIndex and never a Fleet DroneID.
+		FramePositionsENU[RouteSlotIndex] = RouteData.GetPosition(0, RouteSlotIndex);
+	}
+
+	FVector RouteOriginWorld = FVector::ZeroVector;
+	if (!VisualizationActor->ConvertRouteENUPositionsToWorld(
+		FramePositionsENU,
+		RouteData.ShowOriginLatitude,
+		RouteData.ShowOriginLongitude,
+		RouteData.ShowOriginAltitude,
+		CachedRouteTargetWorldPositions,
+		RouteOriginWorld,
+		OutError))
+	{
+		VisualizationActor->ClearRouteTargets();
+		CachedRouteTargetWorldPositions.Reset();
+		UE_LOG(LogTemp, Warning, TEXT("[RouteOverlay] Refresh failed: %s"), *OutError);
+		return false;
+	}
+
+	if (CachedRouteTargetWorldPositions.Num() != RouteData.DroneCount)
+	{
+		VisualizationActor->ClearRouteTargets();
+		CachedRouteTargetWorldPositions.Reset();
+		OutError = TEXT("Route overlay conversion returned an unexpected target count.");
+		UE_LOG(LogTemp, Warning, TEXT("[RouteOverlay] %s"), *OutError);
+		return false;
+	}
+
+	VisualizationActor->SetRouteTargetPositions(CachedRouteTargetWorldPositions);
+	const bool bCanShow = bRouteOverlayEnabled
+		&& VisualizationActor->GetVisualizationMode() == EGCSVisualizationMode::Live;
+	VisualizationActor->SetRouteTargetsVisible(bCanShow);
+	bRouteOverlayVisible = bCanShow && VisualizationActor->AreRouteTargetsVisible();
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[RouteOverlay] Refreshed Targets=%d Frame=0 Visible=%s"),
+		CachedRouteTargetWorldPositions.Num(),
+		bRouteOverlayVisible ? TEXT("YES") : TEXT("NO"));
+	return true;
+}
+
+void URoutePreviewSubsystem::LogRouteOverlayStatus() const
+{
+	const ADroneFleetVisualizationActor* VisualizationActor = FindVisualizationActor();
+	const EGCSVisualizationMode VisualizationMode = VisualizationActor
+		? VisualizationActor->GetVisualizationMode()
+		: EGCSVisualizationMode::Live;
+	const TCHAR* VisualizationModeName = VisualizationActor
+		? (VisualizationMode == EGCSVisualizationMode::RoutePreview
+			? TEXT("RoutePreview")
+			: TEXT("Live"))
+		: TEXT("Unavailable");
+	const int32 SubmittedTargetCount = VisualizationActor
+		? VisualizationActor->GetRouteTargetCount()
+		: 0;
+	const bool bVisible = VisualizationActor
+		? VisualizationActor->AreRouteTargetsVisible()
+		: false;
+
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[RouteOverlay] Status Enabled=%s Visible=%s RouteLoaded=%s OriginSet=%s RouteTargetCount=%d VisualizationMode=%s CachedTargetCount=%d"),
+		bRouteOverlayEnabled ? TEXT("YES") : TEXT("NO"),
+		bVisible ? TEXT("YES") : TEXT("NO"),
+		RouteData.IsLoaded() ? TEXT("YES") : TEXT("NO"),
+		RouteData.bShowOriginSet ? TEXT("YES") : TEXT("NO"),
+		SubmittedTargetCount,
+		VisualizationModeName,
+		CachedRouteTargetWorldPositions.Num());
+}
+
+void URoutePreviewSubsystem::ClearRouteOverlayRenderData()
+{
+	CachedRouteTargetWorldPositions.Reset();
+	bRouteOverlayVisible = false;
+	if (ADroneFleetVisualizationActor* VisualizationActor = FindVisualizationActor())
+	{
+		VisualizationActor->ClearRouteTargets();
+	}
 }
 
 bool URoutePreviewSubsystem::SetPreviewFrame(const int32 FrameIndex, FString& OutError)
@@ -278,7 +465,9 @@ bool URoutePreviewSubsystem::Play(FString& OutError)
 		CurrentTimeSeconds = 0.0;
 		CurrentFrame = INDEX_NONE;
 	}
-	if (CurrentFrame == INDEX_NONE && !ApplyPreviewFrame(0, OutError))
+	const int32 StartFrame = CurrentFrame == INDEX_NONE ? 0 : CurrentFrame;
+	if ((!bPreviewModeActive || CurrentFrame == INDEX_NONE)
+		&& !ApplyPreviewFrame(StartFrame, OutError))
 	{
 		return false;
 	}
@@ -343,6 +532,12 @@ bool URoutePreviewSubsystem::ApplyPreviewFrame(const int32 FrameIndex, FString& 
 		return false;
 	}
 
+	const int32 ClampedFrameIndex = FMath::Clamp(FrameIndex, 0, RouteData.FrameCount - 1);
+	if (bPreviewModeActive && CurrentFrame == ClampedFrameIndex)
+	{
+		return true;
+	}
+
 	if (!bPreviewModeActive && !EnterPreviewMode(OutError))
 	{
 		return false;
@@ -355,11 +550,6 @@ bool URoutePreviewSubsystem::ApplyPreviewFrame(const int32 FrameIndex, FString& 
 		return false;
 	}
 
-	const int32 ClampedFrameIndex = FMath::Clamp(FrameIndex, 0, RouteData.FrameCount - 1);
-	if (CurrentFrame == ClampedFrameIndex)
-	{
-		return true;
-	}
 	if (FramePositionsENU.Num() != RouteData.DroneCount)
 	{
 		FramePositionsENU.SetNumUninitialized(RouteData.DroneCount);

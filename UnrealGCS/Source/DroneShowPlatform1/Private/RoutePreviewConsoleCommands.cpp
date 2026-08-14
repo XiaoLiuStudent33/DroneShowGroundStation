@@ -157,6 +157,45 @@ namespace DroneGCSRoutePreviewConsolePrivate
 		}
 	}
 
+	void OverlayOn(const TArray<FString>& Args, UWorld* World)
+	{
+		(void)Args;
+		if (URoutePreviewSubsystem* Subsystem = GetSubsystem(World))
+		{
+			FString Error;
+			Subsystem->SetRouteOverlayEnabled(true, Error);
+		}
+	}
+
+	void OverlayOff(const TArray<FString>& Args, UWorld* World)
+	{
+		(void)Args;
+		if (URoutePreviewSubsystem* Subsystem = GetSubsystem(World))
+		{
+			FString Error;
+			Subsystem->SetRouteOverlayEnabled(false, Error);
+		}
+	}
+
+	void OverlayRefresh(const TArray<FString>& Args, UWorld* World)
+	{
+		(void)Args;
+		if (URoutePreviewSubsystem* Subsystem = GetSubsystem(World))
+		{
+			FString Error;
+			Subsystem->RefreshRouteOverlay(Error);
+		}
+	}
+
+	void OverlayStatus(const TArray<FString>& Args, UWorld* World)
+	{
+		(void)Args;
+		if (URoutePreviewSubsystem* Subsystem = GetSubsystem(World))
+		{
+			Subsystem->LogRouteOverlayStatus();
+		}
+	}
+
 	FAutoConsoleCommandWithWorldAndArgs LoadCommand(
 		TEXT("RoutePreview.Load"),
 		TEXT("Load a legacy route NPZ into memory."),
@@ -197,5 +236,21 @@ namespace DroneGCSRoutePreviewConsolePrivate
 		TEXT("RoutePreview.Unload"),
 		TEXT("Exit preview mode and unload route memory."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Unload));
+	FAutoConsoleCommandWithWorldAndArgs OverlayOnCommand(
+		TEXT("RouteOverlay.On"),
+		TEXT("Enable and refresh the Live + Route Frame-0 target overlay."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&OverlayOn));
+	FAutoConsoleCommandWithWorldAndArgs OverlayOffCommand(
+		TEXT("RouteOverlay.Off"),
+		TEXT("Hide the route target overlay while retaining its preference cache."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&OverlayOff));
+	FAutoConsoleCommandWithWorldAndArgs OverlayRefreshCommand(
+		TEXT("RouteOverlay.Refresh"),
+		TEXT("Rebuild route target world positions from route frame zero."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&OverlayRefresh));
+	FAutoConsoleCommandWithWorldAndArgs OverlayStatusCommand(
+		TEXT("RouteOverlay.Status"),
+		TEXT("Print route overlay authority, visibility, mode, and target counts."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&OverlayStatus));
 }
 #endif

@@ -35,6 +35,7 @@
 #include "InputCoreTypes.h"
 #include "Misc/App.h"
 #include "Misc/Paths.h"
+#include "Math/RotationMatrix.h"
 #include "RoutePreviewSubsystem.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/SWidget.h"
@@ -361,6 +362,8 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 	RoutePlayButton.Reset();
 	RouteStopButton.Reset();
 	RouteNextButton.Reset();
+	RouteExitPreviewButton.Reset();
+	RouteUnloadButton.Reset();
 	RouteTimelineSlider.Reset();
 	RouteTimeText.Reset();
 	RouteFrameText.Reset();
@@ -947,12 +950,19 @@ void UGCSUIBridgeSubsystem::UpdateTopDownViewInput(APlayerController* PlayerCont
 		(void)ViewportHeight;
 		if (ViewportWidth > 0 && !MouseDelta.IsNearlyZero())
 		{
-			FVector CameraRight = TopDownCamera->GetActorRightVector();
-			FVector CameraUp = TopDownCamera->GetActorUpVector();
-			CameraRight.Z = 0.0f;
-			CameraUp.Z = 0.0f;
-			CameraRight = CameraRight.GetSafeNormal();
-			CameraUp = CameraUp.GetSafeNormal();
+			FVector CameraRight = bTopDownGeographicBasisActive
+				? TopDownLocalEast
+				: TopDownCamera->GetActorRightVector();
+			FVector CameraUp = bTopDownGeographicBasisActive
+				? TopDownLocalNorth
+				: TopDownCamera->GetActorUpVector();
+			if (!bTopDownGeographicBasisActive)
+			{
+				CameraRight.Z = 0.0f;
+				CameraUp.Z = 0.0f;
+				CameraRight = CameraRight.GetSafeNormal();
+				CameraUp = CameraUp.GetSafeNormal();
+			}
 			if (!CameraRight.IsNearlyZero() && !CameraUp.IsNearlyZero())
 			{
 				const float WorldUnitsPerPixel =
@@ -960,8 +970,7 @@ void UGCSUIBridgeSubsystem::UpdateTopDownViewInput(APlayerController* PlayerCont
 				const FVector CameraMove =
 					(-MouseDelta.X * CameraRight + MouseDelta.Y * CameraUp)
 					* WorldUnitsPerPixel;
-				TopDownLockedCameraLocation.X += CameraMove.X;
-				TopDownLockedCameraLocation.Y += CameraMove.Y;
+				TopDownLockedCameraLocation += CameraMove;
 			}
 		}
 		TopDownLastMousePosition = CurrentMousePosition;
@@ -997,21 +1006,51 @@ void UGCSUIBridgeSubsystem::HandleTopDownLocateClicked()
 		return;
 	}
 
-	FBox2D FleetXYBounds(EForceInit::ForceInit);
-	float FleetMaxZ = -TNumericLimits<float>::Max();
+	ADroneFleetVisualizationActor* Visualization = nullptr;
+	TArray<FVector> WorldPositions;
 	for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
 	{
-		for (const FVector& WorldPosition : It->GetDronePositions())
-		{
-			if (!WorldPosition.ContainsNaN())
-			{
-				FleetXYBounds += FVector2D(WorldPosition.X, WorldPosition.Y);
-				FleetMaxZ = FMath::Max(FleetMaxZ, WorldPosition.Z);
-			}
-		}
+		Visualization = *It;
+		WorldPositions = It->GetDronePositions();
 		break;
 	}
-	if (!FleetXYBounds.bIsValid || FleetMaxZ == -TNumericLimits<float>::Max())
+	if (!Visualization || WorldPositions.IsEmpty())
+	{
+		return;
+	}
+
+	FVector BasisOriginWorld = FVector::ZeroVector;
+	bTopDownGeographicBasisActive = Visualization->TryGetGeographicTangentBasis(
+		BasisOriginWorld,
+		TopDownLocalEast,
+		TopDownLocalNorth,
+		TopDownLocalUp);
+
+	FBox2D FleetPlaneBounds(EForceInit::ForceInit);
+	double FleetMaxUp = -TNumericLimits<double>::Max();
+	for (const FVector& WorldPosition : WorldPositions)
+	{
+		if (WorldPosition.ContainsNaN())
+		{
+			continue;
+		}
+
+		if (bTopDownGeographicBasisActive)
+		{
+			const FVector RelativePosition = WorldPosition - BasisOriginWorld;
+			const double East = FVector::DotProduct(RelativePosition, TopDownLocalEast);
+			const double North = FVector::DotProduct(RelativePosition, TopDownLocalNorth);
+			const double Up = FVector::DotProduct(RelativePosition, TopDownLocalUp);
+			FleetPlaneBounds += FVector2D(East, North);
+			FleetMaxUp = FMath::Max(FleetMaxUp, Up);
+		}
+		else
+		{
+			FleetPlaneBounds += FVector2D(WorldPosition.X, WorldPosition.Y);
+			FleetMaxUp = FMath::Max(FleetMaxUp, static_cast<double>(WorldPosition.Z));
+		}
+	}
+	if (!FleetPlaneBounds.bIsValid || FleetMaxUp == -TNumericLimits<double>::Max())
 	{
 		return;
 	}
@@ -1022,17 +1061,49 @@ void UGCSUIBridgeSubsystem::HandleTopDownLocateClicked()
 	const float AspectRatio = ViewportHeight > 0
 		? static_cast<float>(ViewportWidth) / static_cast<float>(ViewportHeight)
 		: (16.0f / 9.0f);
-	const FVector2D FleetCenterXY = FleetXYBounds.GetCenter();
-	const FVector2D FleetSizeXY = FleetXYBounds.GetSize();
+	const FVector2D FleetCenterPlane = FleetPlaneBounds.GetCenter();
+	const FVector2D FleetSizePlane = FleetPlaneBounds.GetSize();
 	const float OrthoWidth = FMath::Max(
 		1000.0f,
-		FMath::Max(FleetSizeXY.X, FleetSizeXY.Y * FMath::Max(AspectRatio, KINDA_SMALL_NUMBER)) * 1.15f);
+		FMath::Max(
+			FleetSizePlane.X,
+			FleetSizePlane.Y * FMath::Max(AspectRatio, KINDA_SMALL_NUMBER)) * 1.15f);
 
-	TopDownLockedCameraLocation = FVector(
-		FleetCenterXY.X,
-		FleetCenterXY.Y,
-		FleetMaxZ + 1000.0f);
-	TopDownLockedCameraRotation = FRotator(-90.0f, 0.0f, 0.0f);
+	if (bTopDownGeographicBasisActive)
+	{
+		const FVector FleetCenterWorld =
+			BasisOriginWorld
+			+ TopDownLocalEast * FleetCenterPlane.X
+			+ TopDownLocalNorth * FleetCenterPlane.Y;
+		TopDownLockedCameraLocation =
+			FleetCenterWorld + TopDownLocalUp * (FleetMaxUp + 1000.0);
+		TopDownLockedCameraRotation =
+			FRotationMatrix::MakeFromXY(-TopDownLocalUp, TopDownLocalEast).Rotator();
+		UE_LOG(
+			LogTemp,
+			Display,
+			TEXT("[GCSLocate] TopDown geographic basis active Origin=%s East=%s North=%s Up=%s OrthoWidth=%.3f"),
+			*BasisOriginWorld.ToString(),
+			*TopDownLocalEast.ToString(),
+			*TopDownLocalNorth.ToString(),
+			*TopDownLocalUp.ToString(),
+			OrthoWidth);
+	}
+	else
+	{
+		TopDownLocalEast = FVector::XAxisVector;
+		TopDownLocalNorth = -FVector::YAxisVector;
+		TopDownLocalUp = FVector::ZAxisVector;
+		TopDownLockedCameraLocation = FVector(
+			FleetCenterPlane.X,
+			FleetCenterPlane.Y,
+			FleetMaxUp + 1000.0);
+		TopDownLockedCameraRotation = FRotator(-90.0f, 0.0f, 0.0f);
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("[GCSLocate] TopDown geographic basis unavailable, falling back to world topdown"));
+	}
 
 	if (!TopDownOrthographicCamera.IsValid())
 	{
@@ -1063,6 +1134,17 @@ void UGCSUIBridgeSubsystem::HandleTopDownLocateClicked()
 	if (!bTopDownLocateLocked)
 	{
 		PreviousTopDownViewTarget = PlayerController->GetViewTarget();
+		TopDownPlayerController = PlayerController;
+		PreviousTopDownControlRotation = PlayerController->GetControlRotation();
+		bHasPreviousTopDownControlRotation = true;
+		UE_LOG(
+			LogTemp,
+			Log,
+			TEXT("[GCSLocate] TopDown enter: Saved ViewTarget=%s Saved ControlRotation=%s"),
+			PreviousTopDownViewTarget.IsValid()
+				? *PreviousTopDownViewTarget->GetName()
+				: TEXT("None"),
+			*PreviousTopDownControlRotation.ToString());
 	}
 	PlayerController->SetControlRotation(TopDownLockedCameraRotation);
 	PlayerController->SetViewTargetWithBlend(TopDownCamera, 0.2f);
@@ -1175,6 +1257,45 @@ void UGCSUIBridgeSubsystem::HandleRouteStopClicked()
 void UGCSUIBridgeSubsystem::HandleRouteNextFrameClicked()
 {
 	StepRoutePreviewFrame(1);
+}
+
+void UGCSUIBridgeSubsystem::HandleRouteExitPreviewClicked()
+{
+	UE_LOG(LogTemp, Display, TEXT("[GCSPlayback] Exit Preview clicked"));
+	UGameInstance* GameInstance = GetGameInstance();
+	URoutePreviewSubsystem* RoutePreview = GameInstance
+		? GameInstance->GetSubsystem<URoutePreviewSubsystem>()
+		: nullptr;
+	if (!RoutePreview)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[GCSPlayback] RoutePreviewSubsystem is unavailable"));
+		return;
+	}
+
+	const bool bWasPreviewActive = RoutePreview->IsPreviewModeActive();
+	RoutePreview->ExitPreviewMode();
+	if (!bWasPreviewActive)
+	{
+		UE_LOG(LogTemp, Display, TEXT("[GCSPlayback] Route preview is already exited / Live"));
+	}
+	RefreshRoutePlaybackUI();
+}
+
+void UGCSUIBridgeSubsystem::HandleRouteUnloadClicked()
+{
+	UE_LOG(LogTemp, Display, TEXT("[GCSPlayback] Unload Route clicked"));
+	UGameInstance* GameInstance = GetGameInstance();
+	URoutePreviewSubsystem* RoutePreview = GameInstance
+		? GameInstance->GetSubsystem<URoutePreviewSubsystem>()
+		: nullptr;
+	if (!RoutePreview)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[GCSPlayback] RoutePreviewSubsystem is unavailable"));
+		return;
+	}
+
+	RoutePreview->UnloadRoute();
+	RefreshRoutePlaybackUI();
 }
 
 void UGCSUIBridgeSubsystem::HandleRouteTimelineValueChanged(const float NormalizedValue)
@@ -1310,13 +1431,16 @@ void UGCSUIBridgeSubsystem::HandleRouteLoadPreviewClicked()
 	if (!RoutePreview->CommitPreparedRoute(Error)
 		|| !RoutePreview->SetShowOrigin(Latitude, Longitude, Altitude, Error)
 		|| !RoutePreview->SetSampleRateHz(SampleRate, Error)
-		|| !RoutePreview->EnterPreviewMode(Error)
-		|| !RoutePreview->SeekToFrame(0, Error))
+		|| !RoutePreview->SetRouteOverlayEnabled(true, Error))
 	{
 		UE_LOG(LogTemp, Error, TEXT("[RoutePreviewUI] Load preview failed: %s"), *Error);
 		return;
 	}
 
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[RouteImport] Import complete; remaining in Live mode with Frame-0 overlay enabled"));
 	RefreshRoutePlaybackUI();
 	CloseRouteImport();
 }
@@ -1393,16 +1517,69 @@ void UGCSUIBridgeSubsystem::UpdateTopDownLocateLock(APlayerController* PlayerCon
 
 void UGCSUIBridgeSubsystem::EndTopDownLocateLock(APlayerController* PlayerController)
 {
-	if (!PlayerController)
+	const bool bWasTopDownActive = bTopDownLocateLocked;
+	APlayerController* RestoreController = TopDownPlayerController.Get();
+	if (!RestoreController && !bWasTopDownActive && !PlayerController)
 	{
 		if (UUserWidget* MainWidget = MainWidgetRef.Get())
 		{
-			PlayerController = MainWidget->GetOwningPlayer();
+			RestoreController = MainWidget->GetOwningPlayer();
 		}
 	}
-	if (bTopDownLocateLocked && PlayerController && PreviousTopDownViewTarget.IsValid())
+
+	// Disable every TopDown-only update before restoring the normal camera so
+	// the centralized input poll cannot overwrite the restored controller state.
+	bTopDownLocateLocked = false;
+	TopDownFitOrthoWidth = 0.0f;
+	bTopDownGeographicBasisActive = false;
+	TopDownLocalEast = FVector::XAxisVector;
+	TopDownLocalNorth = -FVector::YAxisVector;
+	TopDownLocalUp = FVector::ZAxisVector;
+	ResetTopDownViewInputState();
+
+	bool bRestoredViewTarget = false;
+	bool bRestoredControlRotation = false;
+	if (bWasTopDownActive && RestoreController)
 	{
-		PlayerController->SetViewTargetWithBlend(PreviousTopDownViewTarget.Get(), 0.2f);
+		if (PreviousTopDownViewTarget.IsValid())
+		{
+			RestoreController->SetViewTargetWithBlend(PreviousTopDownViewTarget.Get(), 0.2f);
+			bRestoredViewTarget = true;
+		}
+		if (bHasPreviousTopDownControlRotation)
+		{
+			RestoreController->SetControlRotation(PreviousTopDownControlRotation);
+			bRestoredControlRotation = true;
+		}
+	}
+	if (bWasTopDownActive)
+	{
+		if (!RestoreController)
+		{
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT("[GCSLocate] TopDown exit: original PlayerController is unavailable; cached camera state could not be restored"));
+		}
+		else
+		{
+			if (bRestoredViewTarget && bRestoredControlRotation)
+			{
+				UE_LOG(
+					LogTemp,
+					Log,
+					TEXT("[GCSLocate] TopDown exit: Restored ViewTarget=YES Restored ControlRotation=YES"));
+			}
+			else
+			{
+				UE_LOG(
+					LogTemp,
+					Warning,
+					TEXT("[GCSLocate] TopDown exit: Restored ViewTarget=%s Restored ControlRotation=%s"),
+					bRestoredViewTarget ? TEXT("YES") : TEXT("NO"),
+					bRestoredControlRotation ? TEXT("YES") : TEXT("NO"));
+			}
+		}
 	}
 	if (UUserWidget* MainWidget = MainWidgetRef.Get())
 	{
@@ -1415,10 +1592,10 @@ void UGCSUIBridgeSubsystem::EndTopDownLocateLock(APlayerController* PlayerContro
 			}
 		}
 	}
-	bTopDownLocateLocked = false;
-	TopDownFitOrthoWidth = 0.0f;
-	ResetTopDownViewInputState();
 	PreviousTopDownViewTarget.Reset();
+	TopDownPlayerController.Reset();
+	PreviousTopDownControlRotation = FRotator::ZeroRotator;
+	bHasPreviousTopDownControlRotation = false;
 }
 
 void UGCSUIBridgeSubsystem::HandleMarqueeMouseButtonDown(
@@ -2356,6 +2533,8 @@ void UGCSUIBridgeSubsystem::BindRoutePlaybackControls()
 	RoutePlayButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_Play")));
 	RouteStopButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_Stop")));
 	RouteNextButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_NextFrame")));
+	RouteExitPreviewButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_ExitPreview")));
+	RouteUnloadButton = Cast<UButton>(WidgetTree->FindWidget(TEXT("BTN_UnloadRoute")));
 	RouteTimelineSlider = Cast<USlider>(WidgetTree->FindWidget(TEXT("SLD_RouteTimeline")));
 	RouteTimeText = Cast<UTextBlock>(WidgetTree->FindWidget(TEXT("TXT_RouteTime")));
 	RouteFrameText = Cast<UTextBlock>(WidgetTree->FindWidget(TEXT("TXT_RouteFrame")));
@@ -2366,6 +2545,8 @@ void UGCSUIBridgeSubsystem::BindRoutePlaybackControls()
 		&& RoutePlayButton.IsValid()
 		&& RouteStopButton.IsValid()
 		&& RouteNextButton.IsValid()
+		&& RouteExitPreviewButton.IsValid()
+		&& RouteUnloadButton.IsValid()
 		&& RouteTimelineSlider.IsValid()
 		&& RouteTimeText.IsValid()
 		&& RouteFrameText.IsValid();
@@ -2417,6 +2598,18 @@ void UGCSUIBridgeSubsystem::BindRoutePlaybackControls()
 	RouteNextButton->OnClicked.AddDynamic(
 		this,
 		&UGCSUIBridgeSubsystem::HandleRouteNextFrameClicked);
+	RouteExitPreviewButton->OnClicked.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteExitPreviewClicked);
+	RouteExitPreviewButton->OnClicked.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteExitPreviewClicked);
+	RouteUnloadButton->OnClicked.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteUnloadClicked);
+	RouteUnloadButton->OnClicked.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleRouteUnloadClicked);
 
 	RouteTimelineSlider->OnValueChanged.RemoveDynamic(
 		this,
@@ -2668,6 +2861,14 @@ void UGCSUIBridgeSubsystem::RefreshRoutePlaybackUI()
 	if (UButton* Button = RouteNextButton.Get())
 	{
 		Button->SetIsEnabled(bLoaded && !bPlaying && !bCompleted);
+	}
+	if (UButton* Button = RouteExitPreviewButton.Get())
+	{
+		Button->SetIsEnabled(bLoaded);
+	}
+	if (UButton* Button = RouteUnloadButton.Get())
+	{
+		Button->SetIsEnabled(bLoaded);
 	}
 
 	const int32 FrameCount = bLoaded ? RoutePreview->GetFrameCount() : 0;
