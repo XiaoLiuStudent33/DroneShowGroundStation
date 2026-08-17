@@ -26,6 +26,13 @@ enum class EGCSVisualizationMode : uint8
 	RoutePreview
 };
 
+/** Global renderer handoff state shared by Live and full RoutePreview. */
+enum class EDronePrimaryDisplayMode : uint8
+{
+	Marker,
+	Mesh
+};
+
 /**
  * Fleet 到 Niagara 的轻量数据桥。
  *
@@ -82,7 +89,8 @@ public:
 		double OriginAltitude,
 		TArray<FVector>& OutWorldPositions,
 		FVector& OutRouteOriginWorld,
-		FString& OutError);
+		FString& OutError,
+		FVector* OutWorldBoundsCenter = nullptr);
 
 	/** Submits RouteSlotIndex-ordered world positions to the independent overlay channel. */
 	void SetRouteTargetPositions(const TArray<FVector>& Positions);
@@ -113,6 +121,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization")
 	EGCSVisualizationMode GetVisualizationMode() const { return VisualizationMode; }
+
+	/** Prints one O(1) snapshot of the shared Flight Marker renderer state. */
+	void LogFlightMarkerStatus() const;
 
 	/**
 	 * Returns the Cesium local tangent basis used by the current visualization
@@ -176,6 +187,10 @@ private:
 	bool bDroneLabelAttributesDirty = true;
 	bool bDroneColorsDirty = true;
 	bool bRouteTargetsVisible = false;
+	EDronePrimaryDisplayMode DronePrimaryDisplayMode = EDronePrimaryDisplayMode::Marker;
+	bool bDroneRendererVisibilityInitialized = false;
+	bool bDroneMeshVisible = false;
+	bool bLiveDroneHaloVisible = false;
 
 	/** 仅粒子数量变化时重建系统；普通遥测更新只批量刷新数组。 */
 	int32 LastPushedDroneCount = INDEX_NONE;
@@ -193,6 +208,8 @@ private:
 	FVector OriginWorldPosition = FVector::ZeroVector;
 	bool bRoutePreviewOriginWorldPositionInitialized = false;
 	FVector RoutePreviewOriginWorldPosition = FVector::ZeroVector;
+	bool bCachedFleetVisualCenterValid = false;
+	FVector CachedFleetVisualCenter = FVector::ZeroVector;
 	FString CachedOriginDroneID;
 	double CachedOriginLatitude = 0.0;
 	double CachedOriginLongitude = 0.0;
@@ -201,6 +218,17 @@ private:
 	bool bAdaptiveFlightMarkerSizeInitialized = false;
 	float CurrentAdaptiveFlightMarkerSize = 32.0f;
 	float LastSubmittedFlightMarkerSize = -1.0f;
+	bool bLastFlightMarkerCalculationValid = false;
+	bool bLastFlightMarkerCalculationOrthographic = false;
+	int32 LastFlightMarkerViewportWidth = 0;
+	int32 LastFlightMarkerViewportHeight = 0;
+	double LastFlightMarkerCameraDistance = 0.0;
+	float LastFlightMarkerFOV = 0.0f;
+	float LastFlightMarkerOrthoWidth = 0.0f;
+	float LastRawFlightMarkerSize = 0.0f;
+	float LastClampedFlightMarkerSize = 0.0f;
+	bool bLastSphereProjectedDiameterValid = false;
+	float LastSphereProjectedDiameterPixels = 0.0f;
 
 	void BindFleetManager();
 	void UnbindFleetManager();
@@ -210,7 +238,9 @@ private:
 		const FDroneData& Drone,
 		const FFleetGeoOrigin& FleetGeoOrigin) const;
 	void RebuildDroneLabelAttributes();
-	void UpdateLiveDroneHaloVisibility();
+	void UpdatePrimaryDroneRendererVisibility();
+	void SetPrimaryDroneDisplayMode(EDronePrimaryDisplayMode NewDisplayMode);
+	bool UpdatePrimaryDroneDisplayModeForProjectedDiameter(double ProjectedDiameterPixels);
 	void UpdateAdaptiveFlightMarkerSize(float DeltaSeconds);
 	void PushDroneLabelAttributesToNiagara();
 	bool PushDroneColorsToNiagara();

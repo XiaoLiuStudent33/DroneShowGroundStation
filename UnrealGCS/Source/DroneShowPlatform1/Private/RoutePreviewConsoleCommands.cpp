@@ -1,7 +1,10 @@
 #include "RoutePreviewSubsystem.h"
 
+#include "DroneFleetVisualizationActor.h"
+
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
 
 #if !UE_BUILD_SHIPPING
@@ -196,6 +199,20 @@ namespace DroneGCSRoutePreviewConsolePrivate
 		}
 	}
 
+	void FlightMarkerStatus(const TArray<FString>& Args, UWorld* World)
+	{
+		(void)Args;
+		if (World)
+		{
+			for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
+			{
+				It->LogFlightMarkerStatus();
+				return;
+			}
+		}
+		UE_LOG(LogTemp, Warning, TEXT("[FlightMarker] DroneFleetVisualizationActor is unavailable."));
+	}
+
 	FAutoConsoleCommandWithWorldAndArgs LoadCommand(
 		TEXT("RoutePreview.Load"),
 		TEXT("Load a legacy route NPZ into memory."),
@@ -252,5 +269,9 @@ namespace DroneGCSRoutePreviewConsolePrivate
 		TEXT("RouteOverlay.Status"),
 		TEXT("Print route overlay authority, visibility, mode, and target counts."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&OverlayStatus));
+	FAutoConsoleCommandWithWorldAndArgs FlightMarkerStatusCommand(
+		TEXT("GCS.FlightMarker.Status"),
+		TEXT("Print the shared Flight Marker size, projection, viewport, and visibility state."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&FlightMarkerStatus));
 }
 #endif

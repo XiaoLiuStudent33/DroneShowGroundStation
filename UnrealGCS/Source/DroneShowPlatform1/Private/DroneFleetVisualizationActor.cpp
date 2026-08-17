@@ -26,18 +26,22 @@ namespace
 	const FName DroneDisplayIDsParameter(TEXT("User.DroneDisplayIDs"));
 	const FName DroneSelectedMasksParameter(TEXT("User.DroneSelectedMasks"));
 	const FName DroneLabelsVisibleParameter(TEXT("User.ShowDroneLabels"));
+	const FName DroneMeshVisibleParameter(TEXT("User.ShowDroneMesh"));
 	const FName LiveDroneHaloVisibleParameter(TEXT("User.ShowLiveDroneHalo"));
 	const FName FlightMarkerSizeParameter(TEXT("User.FlightMarkerSize"));
 	const FName RouteTargetCountParameter(TEXT("User.RouteTargetCount"));
 	const FName RouteTargetPositionsParameter(TEXT("User.RouteTargetPositions"));
 	const FName RouteTargetsVisibleParameter(TEXT("User.ShowRouteTargets"));
 
-	constexpr float FlightMarkerTargetPixels = 5.0f;
+	constexpr float FlightMarkerTargetPixels = 6.0f;
 	constexpr float FlightMarkerMinWorldSize = 24.0f;
 	constexpr float FlightMarkerMaxWorldSize = 64.0f;
 	constexpr float FlightMarkerUpdateIntervalSeconds = 0.05f;
 	constexpr float FlightMarkerInterpolationSpeed = 8.0f;
 	constexpr float FlightMarkerWriteThreshold = 0.25f;
+	constexpr float DroneSphereWorldDiameterUU = 30.0f;
+	constexpr float EnterMeshProjectedDiameterPixels = 14.0f;
+	constexpr float ExitMeshProjectedDiameterPixels = 10.0f;
 }
 
 ADroneFleetVisualizationActor::ADroneFleetVisualizationActor()
@@ -84,7 +88,7 @@ void ADroneFleetVisualizationActor::BeginPlay()
 	}
 
 	DroneFleetNiagara->SetAsset(DroneFleetSystem);
-	UpdateLiveDroneHaloVisibility();
+	UpdatePrimaryDroneRendererVisibility();
 	SetDroneLabelsVisible(false);
 	ClearRouteTargets();
 	BindFleetManager();
@@ -105,6 +109,9 @@ void ADroneFleetVisualizationActor::Tick(const float DeltaSeconds)
 
 void ADroneFleetVisualizationActor::UpdateAdaptiveFlightMarkerSize(const float DeltaSeconds)
 {
+	bLastFlightMarkerCalculationValid = false;
+	bLastSphereProjectedDiameterValid = false;
+	LastSphereProjectedDiameterPixels = 0.0f;
 	if (!DroneFleetNiagara || !DroneFleetNiagara->GetAsset())
 	{
 		return;
@@ -120,50 +127,55 @@ void ADroneFleetVisualizationActor::UpdateAdaptiveFlightMarkerSize(const float D
 	int32 ViewportWidth = 0;
 	int32 ViewportHeight = 0;
 	PlayerController->GetViewportSize(ViewportWidth, ViewportHeight);
+	LastFlightMarkerViewportWidth = ViewportWidth;
+	LastFlightMarkerViewportHeight = ViewportHeight;
 	if (ViewportWidth <= 0 || ViewportHeight <= 0)
 	{
 		return;
 	}
 
 	const FMinimalViewInfo& CameraView = CameraManager->GetCameraCacheView();
+	bLastFlightMarkerCalculationOrthographic =
+		CameraView.ProjectionMode == ECameraProjectionMode::Orthographic;
+	LastFlightMarkerCameraDistance = 0.0;
+	LastFlightMarkerFOV = CameraView.FOV;
+	LastFlightMarkerOrthoWidth = CameraView.OrthoWidth;
 	float DesiredWorldSize = 0.0f;
 	if (CameraView.ProjectionMode == ECameraProjectionMode::Orthographic)
 	{
-		if (!FMath::IsFinite(CameraView.OrthoWidth) || CameraView.OrthoWidth <= 0.0f)
+		if (!FMath::IsFinite(CameraView.OrthoWidth)
+			|| CameraView.OrthoWidth <= UE_DOUBLE_SMALL_NUMBER)
 		{
 			return;
 		}
 
-		// Orthographic screen scale depends only on OrthoWidth, never camera height.
+		// UE OrthoWidth is the horizontal world-space span represented by the
+		// viewport width. This is the exact inverse of the existing Marker sizing.
+		const double SphereProjectedDiameterPixels =
+			static_cast<double>(DroneSphereWorldDiameterUU)
+			* static_cast<double>(ViewportWidth)
+			/ static_cast<double>(CameraView.OrthoWidth);
+		if (!UpdatePrimaryDroneDisplayModeForProjectedDiameter(
+			SphereProjectedDiameterPixels))
+		{
+			return;
+		}
+
 		DesiredWorldSize = FlightMarkerTargetPixels
 			* CameraView.OrthoWidth
 			/ static_cast<float>(ViewportWidth);
 	}
 	else
 	{
-		FVector VisualizationReference = FVector::ZeroVector;
-		if (VisualizationMode == EGCSVisualizationMode::RoutePreview
-			&& bRoutePreviewOriginWorldPositionInitialized)
-		{
-			VisualizationReference = RoutePreviewOriginWorldPosition;
-		}
-		else if (bOriginWorldPositionInitialized)
-		{
-			VisualizationReference = OriginWorldPosition;
-		}
-		else if (!DronePositions.IsEmpty())
-		{
-			// O(1) startup fallback until the current geographic origin is available.
-			VisualizationReference = DronePositions[0];
-		}
-		else
+		if (!bCachedFleetVisualCenterValid)
 		{
 			return;
 		}
 
 		const double CameraDistance = FVector::Distance(
 			CameraView.Location,
-			VisualizationReference);
+			CachedFleetVisualCenter);
+		LastFlightMarkerCameraDistance = CameraDistance;
 		if (!FMath::IsFinite(CameraDistance) || CameraDistance <= 0.0)
 		{
 			return;
@@ -181,6 +193,21 @@ void ADroneFleetVisualizationActor::UpdateAdaptiveFlightMarkerSize(const float D
 		}
 
 		const double VisibleWorldHeight = 2.0 * CameraDistance * TanVerticalHalfFov;
+		if (!FMath::IsFinite(VisibleWorldHeight) || VisibleWorldHeight <= UE_DOUBLE_SMALL_NUMBER)
+		{
+			return;
+		}
+
+		const double SphereProjectedDiameterPixels =
+			static_cast<double>(DroneSphereWorldDiameterUU)
+			* static_cast<double>(ViewportHeight)
+			/ VisibleWorldHeight;
+		if (!UpdatePrimaryDroneDisplayModeForProjectedDiameter(
+			SphereProjectedDiameterPixels))
+		{
+			return;
+		}
+
 		DesiredWorldSize = static_cast<float>(
 			FlightMarkerTargetPixels
 			* VisibleWorldHeight
@@ -191,10 +218,13 @@ void ADroneFleetVisualizationActor::UpdateAdaptiveFlightMarkerSize(const float D
 	{
 		return;
 	}
+	LastRawFlightMarkerSize = DesiredWorldSize;
 	DesiredWorldSize = FMath::Clamp(
 		DesiredWorldSize,
 		FlightMarkerMinWorldSize,
 		FlightMarkerMaxWorldSize);
+	LastClampedFlightMarkerSize = DesiredWorldSize;
+	bLastFlightMarkerCalculationValid = true;
 
 	if (!bAdaptiveFlightMarkerSizeInitialized)
 	{
@@ -223,6 +253,53 @@ void ADroneFleetVisualizationActor::UpdateAdaptiveFlightMarkerSize(const float D
 	LastSubmittedFlightMarkerSize = CurrentAdaptiveFlightMarkerSize;
 }
 
+void ADroneFleetVisualizationActor::LogFlightMarkerStatus() const
+{
+	const TCHAR* const ModeName = VisualizationMode == EGCSVisualizationMode::RoutePreview
+		? TEXT("RoutePreview")
+		: TEXT("Live");
+	const TCHAR* const ProjectionName = bLastFlightMarkerCalculationValid
+		? (bLastFlightMarkerCalculationOrthographic ? TEXT("Orthographic") : TEXT("Perspective"))
+		: TEXT("Unavailable");
+	const TCHAR* const DisplayModeName =
+		DronePrimaryDisplayMode == EDronePrimaryDisplayMode::Mesh
+			? TEXT("Mesh")
+			: TEXT("Marker");
+
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[FlightMarker] Status Mode=%s DroneCount=%d RouteTargetCount=%d DisplayMode=%s ShowDroneMesh=%s ShowLiveDroneHalo=%s ShowRouteTargets=%s FleetVisualCenter=(%.3f,%.3f,%.3f) FleetVisualCenterValid=%s CameraDistanceReference=FleetCenter SphereWorldDiameterUU=%.3f SphereProjectedDiameterPx=%.3f SphereProjectionValid=%s EnterMeshThresholdPx=%.3f ExitMeshThresholdPx=%.3f MarkerSize=(%.3f,%.3f) Projection=%s Viewport=%dx%d CameraDistance=%.3f FOV=%.3f OrthoWidth=%.3f RawSize=%.3f ClampedSize=%.3f LastNiagaraWrite=%.3f CalculationValid=%s"),
+		ModeName,
+		DronePositions.Num(),
+		RouteTargetPositions.Num(),
+		DisplayModeName,
+		bDroneMeshVisible ? TEXT("YES") : TEXT("NO"),
+		bLiveDroneHaloVisible ? TEXT("YES") : TEXT("NO"),
+		bRouteTargetsVisible ? TEXT("YES") : TEXT("NO"),
+		CachedFleetVisualCenter.X,
+		CachedFleetVisualCenter.Y,
+		CachedFleetVisualCenter.Z,
+		bCachedFleetVisualCenterValid ? TEXT("YES") : TEXT("NO"),
+		DroneSphereWorldDiameterUU,
+		LastSphereProjectedDiameterPixels,
+		bLastSphereProjectedDiameterValid ? TEXT("YES") : TEXT("NO"),
+		EnterMeshProjectedDiameterPixels,
+		ExitMeshProjectedDiameterPixels,
+		CurrentAdaptiveFlightMarkerSize,
+		CurrentAdaptiveFlightMarkerSize,
+		ProjectionName,
+		LastFlightMarkerViewportWidth,
+		LastFlightMarkerViewportHeight,
+		LastFlightMarkerCameraDistance,
+		LastFlightMarkerFOV,
+		LastFlightMarkerOrthoWidth,
+		LastRawFlightMarkerSize,
+		LastClampedFlightMarkerSize,
+		LastSubmittedFlightMarkerSize,
+		bLastFlightMarkerCalculationValid ? TEXT("YES") : TEXT("NO"));
+}
+
 void ADroneFleetVisualizationActor::SetDroneLabelsVisible(const bool bVisible)
 {
 	if (DroneFleetNiagara)
@@ -231,21 +308,83 @@ void ADroneFleetVisualizationActor::SetDroneLabelsVisible(const bool bVisible)
 	}
 }
 
-void ADroneFleetVisualizationActor::UpdateLiveDroneHaloVisibility()
+void ADroneFleetVisualizationActor::SetPrimaryDroneDisplayMode(
+	const EDronePrimaryDisplayMode NewDisplayMode)
+{
+	if (bDroneRendererVisibilityInitialized
+		&& DronePrimaryDisplayMode == NewDisplayMode)
+	{
+		return;
+	}
+
+	DronePrimaryDisplayMode = NewDisplayMode;
+	UpdatePrimaryDroneRendererVisibility();
+}
+
+bool ADroneFleetVisualizationActor::UpdatePrimaryDroneDisplayModeForProjectedDiameter(
+	const double ProjectedDiameterPixels)
+{
+	if (!FMath::IsFinite(ProjectedDiameterPixels) || ProjectedDiameterPixels < 0.0)
+	{
+		return false;
+	}
+
+	LastSphereProjectedDiameterPixels = static_cast<float>(ProjectedDiameterPixels);
+	bLastSphereProjectedDiameterValid = true;
+	if (DronePrimaryDisplayMode == EDronePrimaryDisplayMode::Marker
+		&& ProjectedDiameterPixels > EnterMeshProjectedDiameterPixels)
+	{
+		SetPrimaryDroneDisplayMode(EDronePrimaryDisplayMode::Mesh);
+	}
+	else if (DronePrimaryDisplayMode == EDronePrimaryDisplayMode::Mesh
+		&& ProjectedDiameterPixels < ExitMeshProjectedDiameterPixels)
+	{
+		SetPrimaryDroneDisplayMode(EDronePrimaryDisplayMode::Marker);
+	}
+	return true;
+}
+
+void ADroneFleetVisualizationActor::UpdatePrimaryDroneRendererVisibility()
 {
 	if (!DroneFleetNiagara)
 	{
 		return;
 	}
 
-	DroneFleetNiagara->SetVariableBool(LiveDroneHaloVisibleParameter, true);
+	const bool bShouldShowMesh =
+		DronePrimaryDisplayMode == EDronePrimaryDisplayMode::Mesh;
+	const bool bShouldShowMarker = !bShouldShowMesh;
+	if (bDroneRendererVisibilityInitialized
+		&& bDroneMeshVisible == bShouldShowMesh
+		&& bLiveDroneHaloVisible == bShouldShowMarker)
+	{
+		return;
+	}
+
+	// Disable the old renderer before enabling the new one. Both writes happen
+	// on the game thread before Niagara renders the next frame; no cross-fade.
+	if (bShouldShowMesh)
+	{
+		DroneFleetNiagara->SetVariableBool(LiveDroneHaloVisibleParameter, false);
+		DroneFleetNiagara->SetVariableBool(DroneMeshVisibleParameter, true);
+	}
+	else
+	{
+		DroneFleetNiagara->SetVariableBool(DroneMeshVisibleParameter, false);
+		DroneFleetNiagara->SetVariableBool(LiveDroneHaloVisibleParameter, true);
+	}
+
+	bDroneMeshVisible = bShouldShowMesh;
+	bLiveDroneHaloVisible = bShouldShowMarker;
+	bDroneRendererVisibilityInitialized = true;
 	UE_LOG(
 		LogTemp,
 		Display,
-		TEXT("[DroneViz] Shared drone halo enabled for %s"),
-		VisualizationMode == EGCSVisualizationMode::Live
-			? TEXT("Live")
-			: TEXT("RoutePreview"));
+		TEXT("[DroneViz] Primary display=%s ShowDroneMesh=%s ShowLiveDroneHalo=%s VisualizationMode=%s"),
+		bShouldShowMesh ? TEXT("Mesh") : TEXT("Marker"),
+		bDroneMeshVisible ? TEXT("YES") : TEXT("NO"),
+		bLiveDroneHaloVisible ? TEXT("YES") : TEXT("NO"),
+		VisualizationMode == EGCSVisualizationMode::Live ? TEXT("Live") : TEXT("RoutePreview"));
 }
 
 void ADroneFleetVisualizationActor::SetRouteTargetPositions(
@@ -417,6 +556,8 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 	}
 
 	DronePositions.Reset();
+	bCachedFleetVisualCenterValid = false;
+	CachedFleetVisualCenter = FVector::ZeroVector;
 	TMap<FString, FLinearColor> ExistingColorsByDroneID;
 	ExistingColorsByDroneID.Reserve(FMath::Min(ParticleDroneIDs.Num(), DroneColors.Num()));
 	for (int32 Index = 0;
@@ -439,6 +580,7 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 
 		const FFleetGeoOrigin FleetGeoOrigin = Fleet->GetFleetGeoOrigin();
 		UpdateOriginWorldPosition(FleetGeoOrigin);
+		FBox FleetVisualBounds(ForceInit);
 		for (int32 Index = 0; Index < OrderedDrones.Num(); ++Index)
 		{
 			const FDroneData& Drone = OrderedDrones[Index];
@@ -448,10 +590,19 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 
 			// FleetGeoOrigin 尚未建立时，任何后续无人机都不能抢占逻辑原点。
 			// 单机 GPS 无效时必须回到 ZeroVector，禁止保留历史坐标或使用索引占位。
-			if (FleetGeoOrigin.bOriginInitialized && DroneGPS::IsValid(Drone))
+			if (FleetGeoOrigin.bOriginInitialized
+				&& bOriginWorldPositionInitialized
+				&& DroneGPS::IsValid(Drone))
 			{
 				DronePositions[Index] = ConvertDroneGPSPosition(Drone, FleetGeoOrigin);
+				FleetVisualBounds += DronePositions[Index];
 			}
+		}
+
+		if (FleetVisualBounds.IsValid)
+		{
+			CachedFleetVisualCenter = FleetVisualBounds.GetCenter();
+			bCachedFleetVisualCenterValid = true;
 		}
 
 		// Offline 只改变状态，不删除粒子，也不改变 DroneOrder -> ParticleIndex 映射。
@@ -923,6 +1074,7 @@ bool ADroneFleetVisualizationActor::SetRoutePreviewFrame(
 
 	TArray<FVector> NewWorldPositions;
 	FVector RouteOriginWorld = FVector::ZeroVector;
+	FVector NewFleetVisualCenter = FVector::ZeroVector;
 	if (!ConvertRouteENUPositionsToWorld(
 		PositionsENU,
 		OriginLatitude,
@@ -930,7 +1082,8 @@ bool ADroneFleetVisualizationActor::SetRoutePreviewFrame(
 		OriginAltitude,
 		NewWorldPositions,
 		RouteOriginWorld,
-		OutError))
+		OutError,
+		&NewFleetVisualCenter))
 	{
 		return false;
 	}
@@ -944,13 +1097,15 @@ bool ADroneFleetVisualizationActor::SetRoutePreviewFrame(
 	VisualizationMode = EGCSVisualizationMode::RoutePreview;
 	if (bEnteringRoutePreview)
 	{
-		UpdateLiveDroneHaloVisibility();
+		UpdatePrimaryDroneRendererVisibility();
 	}
 	SetRouteTargetsVisible(false);
 	RoutePreviewOriginWorldPosition = RouteOriginWorld;
 	bRoutePreviewOriginWorldPositionInitialized = true;
 	ParticleDroneIDs.Reset();
 	DronePositions = MoveTemp(NewWorldPositions);
+	CachedFleetVisualCenter = NewFleetVisualCenter;
+	bCachedFleetVisualCenterValid = true;
 	DroneColors = Colors;
 	for (FLinearColor& Color : DroneColors)
 	{
@@ -972,11 +1127,16 @@ bool ADroneFleetVisualizationActor::ConvertRouteENUPositionsToWorld(
 	const double OriginAltitude,
 	TArray<FVector>& OutWorldPositions,
 	FVector& OutRouteOriginWorld,
-	FString& OutError)
+	FString& OutError,
+	FVector* OutWorldBoundsCenter)
 {
 	OutError.Reset();
 	OutWorldPositions.Reset();
 	OutRouteOriginWorld = FVector::ZeroVector;
+	if (OutWorldBoundsCenter)
+	{
+		*OutWorldBoundsCenter = FVector::ZeroVector;
+	}
 	if (PositionsENU.IsEmpty())
 	{
 		OutError = TEXT("Route position array must be non-empty.");
@@ -1017,6 +1177,7 @@ bool ADroneFleetVisualizationActor::ConvertRouteENUPositionsToWorld(
 	}
 
 	OutWorldPositions.SetNumUninitialized(PositionsENU.Num());
+	FBox WorldBounds(ForceInit);
 	for (int32 RouteSlotIndex = 0; RouteSlotIndex < PositionsENU.Num(); ++RouteSlotIndex)
 	{
 		const FVector3f LocalENU = PositionsENU[RouteSlotIndex];
@@ -1048,6 +1209,11 @@ bool ADroneFleetVisualizationActor::ConvertRouteENUPositionsToWorld(
 			return false;
 		}
 		OutWorldPositions[RouteSlotIndex] = WorldPosition;
+		WorldBounds += WorldPosition;
+	}
+	if (OutWorldBoundsCenter && WorldBounds.IsValid)
+	{
+		*OutWorldBoundsCenter = WorldBounds.GetCenter();
 	}
 	return true;
 }
@@ -1060,7 +1226,7 @@ void ADroneFleetVisualizationActor::ExitRoutePreview()
 	}
 
 	VisualizationMode = EGCSVisualizationMode::Live;
-	UpdateLiveDroneHaloVisibility();
+	UpdatePrimaryDroneRendererVisibility();
 	bRoutePreviewOriginWorldPositionInitialized = false;
 	RoutePreviewOriginWorldPosition = FVector::ZeroVector;
 	ParticleDroneIDs = MoveTemp(SuspendedLiveParticleDroneIDs);
