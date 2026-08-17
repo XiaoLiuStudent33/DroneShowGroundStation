@@ -7,6 +7,8 @@
  */
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
 
+#include "DSPGCSFrozenAssignmentProtocol.h"
+
 #include "DSPGCSProtocol.h"
 #include "DSPGCSTransportFactory.h"
 #include "GCSServerAdapterSubsystem.h"
@@ -117,6 +119,7 @@ void UDSPGCSProductionTelemetryProviderSubsystem::Stop()
 	LastValidTelemetryReceiveTimeSeconds.store(0.0);
 	SetTelemetryLinkState(EDSPGCSTelemetryLinkState::Disconnected);
 	SetCommandResultHandler({});
+	SetFrozenAssignmentAckHandler({});
 	if (Transport)
 	{
 		Transport->Receive({});
@@ -152,6 +155,13 @@ void UDSPGCSProductionTelemetryProviderSubsystem::SetCommandResultHandler(
 {
 	FScopeLock Lock(&CommandResultHandlerMutex);
 	CommandResultHandler = MoveTemp(Handler);
+}
+
+void UDSPGCSProductionTelemetryProviderSubsystem::SetFrozenAssignmentAckHandler(
+	FFrozenAssignmentAckHandler Handler)
+{
+	FScopeLock Lock(&FrozenAssignmentAckHandlerMutex);
+	FrozenAssignmentAckHandler = MoveTemp(Handler);
 }
 
 bool UDSPGCSProductionTelemetryProviderSubsystem::CreateTransport()
@@ -268,6 +278,27 @@ void UDSPGCSProductionTelemetryProviderSubsystem::HandleTransportFrame(
 		if (Handler)
 		{
 			Handler(Envelope, Payload);
+		}
+		return;
+	}
+
+	if (Envelope.messageType == dspgcs::FrozenAssignmentMessageTypes::Ack)
+	{
+		dspgcs::FrozenAssignmentAckDTO Ack;
+		std::string DecodeError;
+		if (!dspgcs::DecodeFrozenAssignmentAck(Payload, Ack, DecodeError))
+		{
+			return;
+		}
+
+		FFrozenAssignmentAckHandler Handler;
+		{
+			FScopeLock Lock(&FrozenAssignmentAckHandlerMutex);
+			Handler = FrozenAssignmentAckHandler;
+		}
+		if (Handler)
+		{
+			Handler(Envelope, Ack);
 		}
 		return;
 	}

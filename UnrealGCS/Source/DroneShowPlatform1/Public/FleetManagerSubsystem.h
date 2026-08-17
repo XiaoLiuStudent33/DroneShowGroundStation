@@ -106,6 +106,9 @@ public:
 	int64 GetFleetRevision() const { return FleetRevision; }
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Fleet")
+	FString GetActiveFleetSessionID() const { return ActiveFleetSessionID; }
+
+	UFUNCTION(BlueprintPure, Category = "Drone GCS|Fleet")
 	bool GetDroneByID(const FString& DroneID, FDroneData& OutDroneData) const;
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Fleet")

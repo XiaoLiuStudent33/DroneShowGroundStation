@@ -145,6 +145,7 @@
     <ClCompile Include="DroneCommandRequest.cpp" />
     <ClCompile Include="DroneManager.cpp" />
     <ClCompile Include="DroneSession.cpp" />
+    <ClCompile Include="DSPGCSFrozenAssignmentReceiver.cpp" />
     <ClCompile Include="DSPGCSProductionCommandReceiver.cpp" />
     <ClCompile Include="DSPGCSProductionTelemetryProvider.cpp" />
     <ClCompile Include="DSPGCSTransportConfigLoader.cpp" />
@@ -154,6 +155,8 @@
     <ClCompile Include="MavlinkUdpReceiver.cpp" />
     <ClCompile Include="FlightControl.cpp" />
     <ClCompile Include="FlightData.cpp" />
+    <ClCompile Include="FrozenAssignmentStore.cpp" />
+    <ClCompile Include="FrozenAssignmentTransactionAssembler.cpp" />
     <ClCompile Include="HoverTest.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="MavlinkCommand.cpp" />
@@ -171,6 +174,7 @@
     <ClInclude Include="DroneCommandRequest.h" />
     <ClInclude Include="DroneManager.h" />
     <ClInclude Include="DroneSession.h" />
+    <ClInclude Include="DSPGCSFrozenAssignmentReceiver.h" />
     <ClInclude Include="DSPGCSProductionCommandReceiver.h" />
     <ClInclude Include="DSPGCSProductionTelemetryProvider.h" />
     <ClInclude Include="DSPGCSTransportConfigLoader.h" />
@@ -181,6 +185,8 @@
     <ClInclude Include="MavlinkUdpReceiver.h" />
     <ClInclude Include="FlightControl.h" />
     <ClInclude Include="FlightData.h" />
+    <ClInclude Include="FrozenAssignmentStore.h" />
+    <ClInclude Include="FrozenAssignmentTransactionAssembler.h" />
     <ClInclude Include="HoverTest.h" />
     <ClInclude Include="MavlinkCommand.h" />
     <ClInclude Include="MavlinkParser.h" />

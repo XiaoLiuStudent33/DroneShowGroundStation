@@ -30,6 +30,9 @@ extern "C"
 
 int RunCommandTests();
 int RunDSPCommandTests();
+int RunDSPFrozenAssignmentProtocolTests();
+int RunDSPFrozenAssignmentReceiverTests();
+int RunDSPFrozenAssignmentE2EServer(int argc, char** argv);
 
 namespace
 {
@@ -1381,13 +1384,22 @@ int RunConsolePipelineTests()
     }
 }
 
-int main()
+int main(const int argc, char** argv)
 {
+    if (argc > 1 && std::string(argv[1]) == "--frozen-e2e-server")
+    {
+        return RunDSPFrozenAssignmentE2EServer(argc, argv);
+    }
+
     const int pipelineResult = RunConsolePipelineTests();
     const int commandResult = RunCommandTests();
     const int dspCommandResult = RunDSPCommandTests();
+    const int frozenAssignmentResult = RunDSPFrozenAssignmentProtocolTests();
+    const int frozenAssignmentReceiverResult =
+        RunDSPFrozenAssignmentReceiverTests();
 
-    if (pipelineResult == 0 && commandResult == 0 && dspCommandResult == 0)
+    if (pipelineResult == 0 && commandResult == 0 && dspCommandResult == 0 &&
+        frozenAssignmentResult == 0 && frozenAssignmentReceiverResult == 0)
     {
         std::cout << "ConsoleGCS regression suite passed\n";
         return 0;
@@ -1396,6 +1408,9 @@ int main()
     std::cerr
         << "ConsoleGCS regression suite failed: pipeline=" << pipelineResult
         << " command=" << commandResult
-        << " dspCommand=" << dspCommandResult << '\n';
+        << " dspCommand=" << dspCommandResult
+        << " frozenAssignment=" << frozenAssignmentResult
+        << " frozenAssignmentReceiver=" << frozenAssignmentReceiverResult
+        << '\n';
     return 1;
 }

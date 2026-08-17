@@ -43,6 +43,9 @@
     <ClCompile Include="tests\ConsolePipelineTests.cpp" />
     <ClCompile Include="tests\CommandTests.cpp" />
     <ClCompile Include="tests\DSPCommandTests.cpp" />
+    <ClCompile Include="tests\DSPFrozenAssignmentProtocolTests.cpp" />
+    <ClCompile Include="tests\DSPFrozenAssignmentReceiverTests.cpp" />
+    <ClCompile Include="tests\DSPFrozenAssignmentE2EServer.cpp" />
     <ClCompile Include="AppConfig.cpp" />
     <ClCompile Include="CommandManager.cpp" />
     <ClCompile Include="MavlinkDiscoveryService.cpp" />
@@ -50,6 +53,7 @@
     <ClCompile Include="MavlinkUdpReceiver.cpp" />
     <ClCompile Include="ConsoleDSPGCSLoopbackTransport.cpp" />
     <ClCompile Include="DSPGCSProductionTelemetryProvider.cpp" />
+    <ClCompile Include="DSPGCSFrozenAssignmentReceiver.cpp" />
     <ClCompile Include="DSPGCSProductionCommandReceiver.cpp" />
     <ClCompile Include="DSPGCSTransportConfigLoader.cpp" />
     <ClCompile Include="DSPGCSTransportFactory.cpp" />
@@ -61,6 +65,8 @@
     <ClCompile Include="DroneCommandRequest.cpp" />
     <ClCompile Include="FlightControl.cpp" />
     <ClCompile Include="FlightData.cpp" />
+    <ClCompile Include="FrozenAssignmentStore.cpp" />
+    <ClCompile Include="FrozenAssignmentTransactionAssembler.cpp" />
     <ClCompile Include="HoverTest.cpp" />
     <ClCompile Include="MavlinkCommand.cpp" />
     <ClCompile Include="MavlinkParser.cpp" />
@@ -77,9 +83,12 @@
     <ClInclude Include="MavlinkUdpReceiver.h" />
     <ClInclude Include="ConsoleDSPGCSLoopbackTransport.h" />
     <ClInclude Include="DSPGCSProductionTelemetryProvider.h" />
+    <ClInclude Include="DSPGCSFrozenAssignmentReceiver.h" />
     <ClInclude Include="DSPGCSProductionCommandReceiver.h" />
     <ClInclude Include="DSPGCSTransportConfigLoader.h" />
     <ClInclude Include="SafetyConfig.h" />
+    <ClInclude Include="FrozenAssignmentStore.h" />
+    <ClInclude Include="FrozenAssignmentTransactionAssembler.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

@@ -22,7 +22,7 @@
 #include "DSPGCSProductionTelemetryProviderSubsystem.generated.h"
 
 class UGCSServerAdapterSubsystem;
-namespace dspgcs { struct MessageEnvelope; }
+namespace dspgcs { struct MessageEnvelope; struct FrozenAssignmentAckDTO; }
 
 UENUM(BlueprintType)
 enum class EDSPGCSTelemetryLinkState : uint8
@@ -49,6 +49,9 @@ public:
 	using FCommandResultHandler = std::function<void(
 		const dspgcs::MessageEnvelope&,
 		const std::vector<std::uint8_t>&)>;
+	using FFrozenAssignmentAckHandler = std::function<void(
+		const dspgcs::MessageEnvelope&,
+		const dspgcs::FrozenAssignmentAckDTO&)>;
 
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
@@ -78,6 +81,7 @@ public:
 	/** Shared production Transport output used by the command provider. */
 	bool SendFrame(const std::vector<std::uint8_t>& Frame);
 	void SetCommandResultHandler(FCommandResultHandler Handler);
+	void SetFrozenAssignmentAckHandler(FFrozenAssignmentAckHandler Handler);
 
 private:
 #if WITH_DEV_AUTOMATION_TESTS
@@ -106,6 +110,8 @@ private:
 	std::unique_ptr<dspgcs::IDSPGCSTransport> Transport;
 	FCriticalSection CommandResultHandlerMutex;
 	FCommandResultHandler CommandResultHandler;
+	FCriticalSection FrozenAssignmentAckHandlerMutex;
+	FFrozenAssignmentAckHandler FrozenAssignmentAckHandler;
 	bool bEnabled = false;
 	std::atomic<int32> ReceivedDroneCount{0};
 	int32 TelemetryTimeoutMs = 2000;

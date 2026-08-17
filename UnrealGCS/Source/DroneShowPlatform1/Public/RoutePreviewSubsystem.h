@@ -111,11 +111,13 @@ public:
 	void LogRouteOverlayStatus() const;
 
 	const FRoutePreviewData& GetRouteData() const { return RouteData; }
+	int64 GetRouteDatasetGeneration() const { return RouteDatasetGeneration; }
 
 private:
 	FRoutePreviewData RouteData;
 	FRoutePreviewData PreparedRouteData;
 	FString PreparedRouteFilePath;
+	int64 RouteDatasetGeneration = 0;
 	int32 CurrentFrame = INDEX_NONE;
 	double CurrentTimeSeconds = 0.0;
 	ERoutePreviewPlaybackState PlaybackState = ERoutePreviewPlaybackState::Stopped;

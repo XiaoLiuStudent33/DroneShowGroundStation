@@ -8,6 +8,7 @@
  */
 #pragma once
 
+#include "DSPGCSFrozenAssignmentProtocol.h"
 #include "DSPGCSProtocol.h"
 #include "DSPGCSTransportConfig.h"
 #include "IDSPGCSTransport.h"
@@ -33,6 +34,9 @@ public:
     bool PublishSnapshot(const DroneManager& droneManager);
     bool SendCommandResult(
         const dspgcs::CommandResultBatchDTO& resultBatch);
+    bool SendFrozenAssignmentAck(
+        const dspgcs::FrozenAssignmentAckDTO& acknowledgement);
+    const std::string& GetCurrentFleetSessionID() const;
     bool IsRunning() const;
 
 private:

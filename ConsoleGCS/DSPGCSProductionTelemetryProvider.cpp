@@ -263,6 +263,40 @@ bool DSPGCSProductionTelemetryProvider::SendCommandResult(
         { dspgcs::EncodeCommandResult(envelope, resultBatch) });
 }
 
+bool DSPGCSProductionTelemetryProvider::SendFrozenAssignmentAck(
+    const dspgcs::FrozenAssignmentAckDTO& acknowledgement)
+{
+    if (!IsRunning())
+    {
+        return false;
+    }
+
+    std::vector<std::uint8_t> payload;
+    std::string error;
+    if (!dspgcs::EncodeFrozenAssignmentAck(
+            acknowledgement, payload, error))
+    {
+        return false;
+    }
+
+    dspgcs::MessageEnvelope envelope;
+    envelope.messageType = dspgcs::FrozenAssignmentMessageTypes::Ack;
+    envelope.sourceId = "ConsoleGCS-FrozenAssignment";
+    envelope.sessionId = sessionId_;
+    envelope.sequence = ++sequence_;
+    envelope.timestampUtcMs = UtcNowMs();
+    envelope.correlationId = acknowledgement.transactionId;
+    envelope.fleetRevision = fleetRevision_;
+    return transport_->Send(
+        { dspgcs::MakeFrame(envelope, payload) });
+}
+
+const std::string&
+DSPGCSProductionTelemetryProvider::GetCurrentFleetSessionID() const
+{
+    return sessionId_;
+}
+
 bool DSPGCSProductionTelemetryProvider::IsRunning() const
 {
     return transport_ &&

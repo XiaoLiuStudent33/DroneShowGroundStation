@@ -922,7 +922,7 @@ void ADroneFleetVisualizationActor::RebuildDroneLabelAttributes()
 	DroneSelectedMasks.SetNumUninitialized(ParticleCount);
 	for (int32 Index = 0; Index < ParticleCount; ++Index)
 	{
-		DroneDisplayIDs[Index] = static_cast<float>(Index + 1);
+		DroneDisplayIDs[Index] = static_cast<float>(Index);
 		DroneSelectedMasks[Index] = VisualizationMode == EGCSVisualizationMode::Live
 			&& ParticleDroneIDs.IsValidIndex(Index)
 			&& CommandSelectedDroneIDs.Contains(ParticleDroneIDs[Index])

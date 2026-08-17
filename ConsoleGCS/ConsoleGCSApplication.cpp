@@ -13,6 +13,7 @@
 #include "CommandManager.h"
 #include "ConsoleUI.h"
 #include "DroneManager.h"
+#include "DSPGCSFrozenAssignmentReceiver.h"
 #include "DSPGCSProductionCommandReceiver.h"
 #include "DSPGCSProductionTelemetryProvider.h"
 #include "DSPGCSTransportConfigLoader.h"
@@ -20,6 +21,7 @@
 #include "MavlinkReadOnlyIngress.h"
 #include "MavlinkUdpReceiver.h"
 #include "SafetyConfig.h"
+#include "FrozenAssignmentStore.h"
 
 #include <windows.h>
 
@@ -246,6 +248,8 @@ int ConsoleGCSApplication::RunProductionMavlink(
     DroneManager droneManager;
     CommandManager commandManager(droneManager);
     DSPGCSProductionCommandReceiver commandReceiver;
+    DSPGCSFrozenAssignmentReceiver frozenAssignmentReceiver;
+    FrozenAssignmentStore frozenAssignmentStore;
     commandReceiver.SetRealCommandEnabled(appConfig.realCommandEnabled);
     DroneSessionConfig discoveredSessionDefaults;
     // Discovery Sessions share the same bound endpoint for receive, heartbeat,
@@ -264,12 +268,34 @@ int ConsoleGCSApplication::RunProductionMavlink(
     MavlinkReadOnlyIngress ingress(droneManager, discovery);
     std::unordered_set<std::string> announcedDroneIds;
     DSPGCSProductionTelemetryProvider telemetryProvider;
-    if (appConfig.dspgcsCommandEnabled)
+    if (dspgcsEnabled)
     {
         telemetryProvider.SetReceiveHandler(
-            [&commandReceiver](dspgcs::TransportFrame frame)
+            [&commandReceiver,
+             &frozenAssignmentReceiver,
+             commandEnabled = appConfig.dspgcsCommandEnabled](
+                dspgcs::TransportFrame frame)
             {
-                commandReceiver.EnqueueFrame(std::move(frame));
+                dspgcs::MessageEnvelope envelope;
+                std::vector<std::uint8_t> payload;
+                if (!dspgcs::DecodeEnvelope(frame.bytes, envelope, payload))
+                {
+                    return;
+                }
+                if (envelope.messageType ==
+                        dspgcs::MessageType::CommandRequest)
+                {
+                    if (commandEnabled)
+                    {
+                        commandReceiver.EnqueueFrame(std::move(frame));
+                    }
+                    return;
+                }
+                if (DSPGCSFrozenAssignmentReceiver::
+                        IsFrozenAssignmentMessageType(envelope.messageType))
+                {
+                    frozenAssignmentReceiver.EnqueueFrame(std::move(frame));
+                }
             });
     }
     if (dspgcsEnabled)
@@ -354,6 +380,31 @@ int ConsoleGCSApplication::RunProductionMavlink(
                 {
                     return telemetryProvider.SendCommandResult(resultBatch);
                 });
+        }
+
+        if (telemetryProvider.IsRunning())
+        {
+            const DSPGCSFrozenAssignmentProcessStats assignmentStats =
+                frozenAssignmentReceiver.ProcessPending(
+                    telemetryProvider.GetCurrentFleetSessionID(),
+                    droneManager,
+                    frozenAssignmentStore,
+                    [&telemetryProvider](
+                        const dspgcs::FrozenAssignmentAckDTO& acknowledgement)
+                    {
+                        return telemetryProvider.SendFrozenAssignmentAck(
+                            acknowledgement);
+                    },
+                    now);
+            if (assignmentStats.transactionsAccepted > 0 ||
+                assignmentStats.transactionsRejected > 0)
+            {
+                ConsoleUI::AddLog(
+                    "Frozen Assignment transactions accepted=" +
+                    std::to_string(assignmentStats.transactionsAccepted) +
+                    " rejected=" +
+                    std::to_string(assignmentStats.transactionsRejected));
+            }
         }
 
         if (telemetryProvider.IsRunning() &&

@@ -60,6 +60,7 @@ bool URoutePreviewSubsystem::CommitPreparedRoute(FString& OutError)
 
 	RouteData = MoveTemp(PreparedRouteData);
 	PreparedRouteData = FRoutePreviewData{};
+	++RouteDatasetGeneration;
 	// A committed import starts at logical frame zero while remaining in Live
 	// visualization. Full preview ownership begins only after an explicit
 	// playback/seek action.
@@ -103,6 +104,7 @@ bool URoutePreviewSubsystem::LoadRoute(const FString& FilePath, FString& OutErro
 	}
 
 	RouteData = MoveTemp(LoadedData);
+	++RouteDatasetGeneration;
 	CurrentFrame = INDEX_NONE;
 	FramePositionsENU.SetNumUninitialized(RouteData.DroneCount);
 	FrameColors.SetNumUninitialized(RouteData.DroneCount);
@@ -131,10 +133,15 @@ bool URoutePreviewSubsystem::LoadRoute(const FString& FilePath, FString& OutErro
 
 void URoutePreviewSubsystem::UnloadRoute()
 {
+	const bool bHadActiveRouteDataset = RouteData.IsLoaded();
 	StopPlaybackTicker();
 	ExitPreviewMode();
 	ClearRouteOverlayRenderData();
 	RouteData = FRoutePreviewData{};
+	if (bHadActiveRouteDataset)
+	{
+		++RouteDatasetGeneration;
+	}
 	CurrentFrame = INDEX_NONE;
 	CurrentTimeSeconds = 0.0;
 	PlaybackState = ERoutePreviewPlaybackState::Stopped;
