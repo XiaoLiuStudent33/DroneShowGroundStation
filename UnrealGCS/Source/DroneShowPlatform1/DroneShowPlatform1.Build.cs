@@ -52,13 +52,52 @@ public class DroneShowPlatform1 : ModuleRules
 		}
 		PublicIncludePaths.Add(TransportIncludePath);
 
+		string RouteWaypointIncludePath = Path.GetFullPath(
+			Path.Combine(ModuleDirectory, "..", "..", "..", "Shared", "RouteWaypoint"));
+		if (!Directory.Exists(RouteWaypointIncludePath))
+		{
+			RouteWaypointIncludePath = Path.Combine(
+				Path.GetPathRoot(ModuleDirectory),
+				"DroneShowPlatformShared",
+				"RouteWaypoint");
+		}
+		PublicIncludePaths.Add(RouteWaypointIncludePath);
+
+		string RouteArtifactIncludePath = Path.GetFullPath(
+			Path.Combine(ModuleDirectory, "..", "..", "..", "Shared", "RouteArtifact"));
+		if (!Directory.Exists(RouteArtifactIncludePath))
+		{
+			RouteArtifactIncludePath = Path.Combine(
+				Path.GetPathRoot(ModuleDirectory),
+				"DroneShowPlatformShared",
+				"RouteArtifact");
+		}
+		PublicIncludePaths.Add(RouteArtifactIncludePath);
+
+		string RouteMissionIncludePath = Path.GetFullPath(
+			Path.Combine(ModuleDirectory, "..", "..", "..", "Shared", "RouteMission"));
+		if (!Directory.Exists(RouteMissionIncludePath))
+		{
+			RouteMissionIncludePath = Path.Combine(
+				Path.GetPathRoot(ModuleDirectory),
+				"DroneShowPlatformShared",
+				"RouteMission");
+		}
+		PublicIncludePaths.Add(RouteMissionIncludePath);
+
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"CesiumRuntime"
 		});
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
-			PublicSystemLibraries.AddRange(new string[] { "Ole32.lib", "Shell32.lib", "Uuid.lib" });
+			PublicSystemLibraries.AddRange(new string[]
+			{
+				"Ole32.lib",
+				"Shell32.lib",
+				"Uuid.lib",
+				"Bcrypt.lib"
+			});
 		}
 		AddEngineThirdPartyPrivateStaticDependencies(Target, "zlib");
 

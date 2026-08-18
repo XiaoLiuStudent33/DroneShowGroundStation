@@ -77,7 +77,7 @@
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;$(ProjectDir)\..\Shared\RouteWaypoint;$(ProjectDir)\..\Shared\RouteArtifact;$(ProjectDir)\..\Shared\RouteMission;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -94,7 +94,7 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;$(ProjectDir)\..\Shared\RouteWaypoint;$(ProjectDir)\..\Shared\RouteArtifact;$(ProjectDir)\..\Shared\RouteMission;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -109,7 +109,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;$(ProjectDir)\..\Shared\RouteWaypoint;$(ProjectDir)\..\Shared\RouteArtifact;$(ProjectDir)\..\Shared\RouteMission;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -126,7 +126,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;$(ProjectDir)\..\Shared\RouteWaypoint;$(ProjectDir)\..\Shared\RouteArtifact;$(ProjectDir)\..\Shared\RouteMission;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -138,6 +138,8 @@
     <ClCompile Include="AppConfig.cpp" />
     <ClCompile Include="CommandDispatcher.cpp" />
     <ClCompile Include="CommandManager.cpp" />
+    <ClCompile Include="ConsoleArtifactConsumer.cpp" />
+    <ClCompile Include="ConsoleUploadJobAuthority.cpp" />
     <ClCompile Include="ConsoleGCSApplication.cpp" />
     <ClCompile Include="ConsoleDSPGCSLoopbackTransport.cpp" />
     <ClCompile Include="ConsoleUI.cpp" />
@@ -148,6 +150,7 @@
     <ClCompile Include="DSPGCSFrozenAssignmentReceiver.cpp" />
     <ClCompile Include="DSPGCSProductionCommandReceiver.cpp" />
     <ClCompile Include="DSPGCSProductionTelemetryProvider.cpp" />
+    <ClCompile Include="DSPGCSUploadJobReceiver.cpp" />
     <ClCompile Include="DSPGCSTransportConfigLoader.cpp" />
     <ClCompile Include="DSPGCSTransportFactory.cpp" />
     <ClCompile Include="MavlinkDiscoveryService.cpp" />
@@ -167,6 +170,8 @@
     <ClInclude Include="AppConfig.h" />
     <ClInclude Include="CommandDispatcher.h" />
     <ClInclude Include="CommandManager.h" />
+    <ClInclude Include="ConsoleArtifactConsumer.h" />
+    <ClInclude Include="ConsoleUploadJobAuthority.h" />
     <ClInclude Include="ConsoleGCSApplication.h" />
     <ClInclude Include="ConsoleDSPGCSLoopbackTransport.h" />
     <ClInclude Include="ConsoleUI.h" />
@@ -177,6 +182,7 @@
     <ClInclude Include="DSPGCSFrozenAssignmentReceiver.h" />
     <ClInclude Include="DSPGCSProductionCommandReceiver.h" />
     <ClInclude Include="DSPGCSProductionTelemetryProvider.h" />
+    <ClInclude Include="DSPGCSUploadJobReceiver.h" />
     <ClInclude Include="DSPGCSTransportConfigLoader.h" />
     <ClInclude Include="DroneDiscovery.h" />
     <ClInclude Include="MavlinkDiscoveryService.h" />

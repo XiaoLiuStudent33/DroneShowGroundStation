@@ -1,13 +1,14 @@
-/**
- * @brief ÊµÏÖ UE Production DSP Frame ½ÓÊÕ¡¢½âÂë¡¢·ÖÆ¬ÖØ×éºÍÁìÓòÄ£ĞÍ×ª»»¡£
+ï»¿/**
+ * @brief å®ç° UE Production DSP Frame æ¥æ”¶ã€è§£ç ã€åˆ†ç‰‡é‡ç»„å’Œé¢†åŸŸæ¨¡å‹è½¬æ¢ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * µ÷ÓÃÁ´£ºDSPGCSLoopbackTransport -> ProductionTelemetryProvider -> GCSServerAdapter -> FleetManager¡£
- * µ±Ç° localhost Transport ÊÇÊµ¼Ê Production Í¨µÀ£¬²»ÊÇ Test Only¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è°ƒç”¨é“¾ï¼šDSPGCSLoopbackTransport -> ProductionTelemetryProvider -> GCSServerAdapter -> FleetManagerã€‚
+ * å½“å‰ localhost Transport æ˜¯å®é™… Production é€šé“ï¼Œä¸æ˜¯ Test Onlyã€‚
  */
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
 
 #include "DSPGCSFrozenAssignmentProtocol.h"
+#include "DSPGCSUploadJobProtocol.h"
 
 #include "DSPGCSProtocol.h"
 #include "DSPGCSTransportFactory.h"
@@ -164,6 +165,13 @@ void UDSPGCSProductionTelemetryProviderSubsystem::SetFrozenAssignmentAckHandler(
 	FrozenAssignmentAckHandler = MoveTemp(Handler);
 }
 
+void UDSPGCSProductionTelemetryProviderSubsystem::SetUploadJobFrameHandler(
+	FUploadJobFrameHandler Handler)
+{
+	FScopeLock Lock(&UploadJobFrameHandlerMutex);
+	UploadJobFrameHandler = MoveTemp(Handler);
+}
+
 bool UDSPGCSProductionTelemetryProviderSubsystem::CreateTransport()
 {
     dspgcs::DSPGCSTransportConfig Config =
@@ -303,6 +311,23 @@ void UDSPGCSProductionTelemetryProviderSubsystem::HandleTransportFrame(
 		return;
 	}
 
+	if (Envelope.messageType == dspgcs::UploadJobMessageTypes::CommandAck ||
+		Envelope.messageType == dspgcs::UploadJobMessageTypes::Snapshot ||
+		Envelope.messageType == dspgcs::UploadJobMessageTypes::RouteStatePage ||
+		Envelope.messageType == dspgcs::UploadJobMessageTypes::RouteStateDelta)
+	{
+		FUploadJobFrameHandler Handler;
+		{
+			FScopeLock Lock(&UploadJobFrameHandlerMutex);
+			Handler = UploadJobFrameHandler;
+		}
+		if (Handler)
+		{
+			Handler(Envelope, Payload);
+		}
+		return;
+	}
+
 	if (Envelope.messageType != dspgcs::MessageType::TelemetryBatch)
 	{
 		return;
@@ -384,8 +409,8 @@ bool UDSPGCSProductionTelemetryProviderSubsystem::TryAssembleTelemetrySnapshot(
 		return false;
 	}
 
-	// SessionID + SnapshotID + FleetRevision ¹²Í¬±êÊ¶Ò»¸öÔ­×Ó Snapshot¡£
-	// ÈÎÒ»Î¬¶È±ä»¯¶¼·ÅÆúÎ´Íê³É¾ÉÅú´Î£¬½ûÖ¹°Ñ²»Í¬ Snapshot µÄ·ÖÆ¬Æ´ÔÚÒ»Æğ¡£
+	// SessionID + SnapshotID + FleetRevision å…±åŒæ ‡è¯†ä¸€ä¸ªåŸå­ Snapshotã€‚
+	// ä»»ä¸€ç»´åº¦å˜åŒ–éƒ½æ”¾å¼ƒæœªå®Œæˆæ—§æ‰¹æ¬¡ï¼Œç¦æ­¢æŠŠä¸åŒ Snapshot çš„åˆ†ç‰‡æ‹¼åœ¨ä¸€èµ·ã€‚
 	const bool bStartsNewSnapshot =
 		PendingSnapshotSessionID != Envelope.sessionId ||
 		PendingSnapshotID != Chunk.snapshotId ||
@@ -409,13 +434,13 @@ bool UDSPGCSProductionTelemetryProviderSubsystem::TryAssembleTelemetrySnapshot(
 		++PendingSnapshotReceivedCount;
 	}
 
-	// ·ÖÆ¬Î´ÊÕÆëÊ±Ö»±£´æÔÚ Provider ÄÚ²¿£¬¾ø²»Ïò Adapter/FleetManager Ìá½»°ë¸ö Fleet¡£
+	// åˆ†ç‰‡æœªæ”¶é½æ—¶åªä¿å­˜åœ¨ Provider å†…éƒ¨ï¼Œç»ä¸å‘ Adapter/FleetManager æäº¤åŠä¸ª Fleetã€‚
 	if (PendingSnapshotReceivedCount != PendingSnapshotChunks.size())
 	{
 		return false;
 	}
 
-	// Ö»ÓĞÈ«²¿·ÖÆ¬Æë±¸ºó²ÅºÏ³ÉÒ»¸öÍêÕû Batch£»µ÷ÓÃ·½ËæºóÖ»½øĞĞÒ»´Î GameThread Ô­×ÓÌá½»¡£
+	// åªæœ‰å…¨éƒ¨åˆ†ç‰‡é½å¤‡åæ‰åˆæˆä¸€ä¸ªå®Œæ•´ Batchï¼›è°ƒç”¨æ–¹éšååªè¿›è¡Œä¸€æ¬¡ GameThread åŸå­æäº¤ã€‚
 	CompleteBatch = MoveTemp(Chunk);
 	CompleteBatch.chunkIndex = 0;
 	CompleteBatch.chunkCount = 1;

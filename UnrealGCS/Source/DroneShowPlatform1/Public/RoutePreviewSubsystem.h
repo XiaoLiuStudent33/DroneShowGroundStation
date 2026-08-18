@@ -39,6 +39,10 @@ public:
 	bool HasPreparedRoute() const { return PreparedRouteData.IsLoaded(); }
 	int32 GetPreparedFrameCount() const { return PreparedRouteData.FrameCount; }
 	int32 GetPreparedDroneCount() const { return PreparedRouteData.DroneCount; }
+	const FRouteArtifactSourceIdentity& GetPreparedSourceIdentity() const
+	{
+		return PreparedRouteData.SourceIdentity;
+	}
 
 	UFUNCTION(BlueprintCallable, Category = "Drone GCS|Route Preview")
 	void UnloadRoute();
@@ -72,16 +76,16 @@ public:
 	bool Stop(FString& OutError);
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Route Preview")
-	int32 GetFrameCount() const { return RouteData.FrameCount; }
+	int32 GetFrameCount() const { return GetActiveRouteData().FrameCount; }
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Route Preview")
-	int32 GetDroneCount() const { return RouteData.DroneCount; }
+	int32 GetDroneCount() const { return GetActiveRouteData().DroneCount; }
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Route Preview")
 	int32 GetCurrentFrame() const { return CurrentFrame; }
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Route Preview")
-	bool IsRouteLoaded() const { return RouteData.IsLoaded(); }
+	bool IsRouteLoaded() const { return GetActiveRouteData().IsLoaded(); }
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Route Preview")
 	bool IsPreviewModeActive() const { return bPreviewModeActive; }
@@ -90,7 +94,7 @@ public:
 	ERoutePreviewPlaybackState GetPlaybackState() const { return PlaybackState; }
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Route Preview")
-	double GetSampleRateHz() const { return RouteData.SampleRateHz; }
+	double GetSampleRateHz() const { return GetActiveRouteData().SampleRateHz; }
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Route Preview")
 	double GetCurrentTime() const { return CurrentTimeSeconds; }
@@ -110,11 +114,17 @@ public:
 	int32 GetCachedRouteTargetCount() const { return CachedRouteTargetWorldPositions.Num(); }
 	void LogRouteOverlayStatus() const;
 
-	const FRoutePreviewData& GetRouteData() const { return RouteData; }
+	const FRoutePreviewData& GetRouteData() const { return GetActiveRouteData(); }
+	/** Captures the active dataset lifetime without copying PositionsENU or Colors. */
+	TSharedPtr<const FRoutePreviewData, ESPMode::ThreadSafe> CaptureRouteDataSnapshot() const;
+	const FRouteArtifactSourceIdentity& GetActiveSourceIdentity() const
+	{
+		return GetActiveRouteData().SourceIdentity;
+	}
 	int64 GetRouteDatasetGeneration() const { return RouteDatasetGeneration; }
 
 private:
-	FRoutePreviewData RouteData;
+	TSharedPtr<FRoutePreviewData, ESPMode::ThreadSafe> ActiveRouteData;
 	FRoutePreviewData PreparedRouteData;
 	FString PreparedRouteFilePath;
 	int64 RouteDatasetGeneration = 0;
@@ -139,4 +149,6 @@ private:
 	void StopPlaybackTicker();
 	void ClearRouteOverlayRenderData();
 	class ADroneFleetVisualizationActor* FindVisualizationActor() const;
+	const FRoutePreviewData& GetActiveRouteData() const;
+	FRoutePreviewData& GetMutableActiveRouteData();
 };

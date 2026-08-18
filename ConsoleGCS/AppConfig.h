@@ -30,6 +30,8 @@ struct AppConfig
     bool dspgcsTelemetryEnabled = false;
     bool dspgcsCommandEnabled = false;
     std::string dspgcsTransportConfigPath = "config/DSPGCSTransport.ini";
+    /** UTF-8 absolute local path; empty disables Artifact validation requests. */
+    std::string artifactWorkspaceRoot;
     int dspgcsTelemetryIntervalMs =
         AppConfigDefaults::DSPGCSTelemetryIntervalMs;
     int mavlinkReceiveBufferBytes =

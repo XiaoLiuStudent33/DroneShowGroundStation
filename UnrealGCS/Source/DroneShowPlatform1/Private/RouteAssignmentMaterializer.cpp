@@ -4,7 +4,7 @@
 
 namespace
 {
-	int32 CompareDroneIDs(const FString& Left, const FString& Right)
+	int32 CompareMaterializerDroneIDs(const FString& Left, const FString& Right)
 	{
 		const int32 IdentityOrder = Left.Compare(Right, ESearchCase::IgnoreCase);
 		return IdentityOrder != 0
@@ -12,9 +12,9 @@ namespace
 			: Left.Compare(Right, ESearchCase::CaseSensitive);
 	}
 
-	bool DroneIDLess(const FString& Left, const FString& Right)
+	bool MaterializerDroneIDLess(const FString& Left, const FString& Right)
 	{
-		return CompareDroneIDs(Left, Right) < 0;
+		return CompareMaterializerDroneIDs(Left, Right) < 0;
 	}
 
 	FString MakeDroneIdentityKey(const FString& DroneID)
@@ -22,12 +22,12 @@ namespace
 		return DroneID.ToLower();
 	}
 
-	bool IsLatitudeValid(const double Latitude)
+	bool IsMaterializerLatitudeValid(const double Latitude)
 	{
 		return FMath::IsFinite(Latitude) && Latitude >= -90.0 && Latitude <= 90.0;
 	}
 
-	bool IsLongitudeValid(const double Longitude)
+	bool IsMaterializerLongitudeValid(const double Longitude)
 	{
 		return FMath::IsFinite(Longitude) && Longitude >= -180.0 && Longitude <= 180.0;
 	}
@@ -38,8 +38,8 @@ namespace
 			&& Drone.bGPSValid
 			&& Drone.GPSFixType >= 3
 			&& !(Drone.Latitude == 0.0 && Drone.Longitude == 0.0)
-			&& IsLatitudeValid(Drone.Latitude)
-			&& IsLongitudeValid(Drone.Longitude);
+			&& IsMaterializerLatitudeValid(Drone.Latitude)
+			&& IsMaterializerLongitudeValid(Drone.Longitude);
 	}
 
 	ERouteAssignmentExcludedReason DetermineExcludedReason(
@@ -58,8 +58,8 @@ namespace
 			return ERouteAssignmentExcludedReason::InsufficientGPSFix;
 		}
 		if ((Drone.Latitude == 0.0 && Drone.Longitude == 0.0)
-			|| !IsLatitudeValid(Drone.Latitude)
-			|| !IsLongitudeValid(Drone.Longitude))
+			|| !IsMaterializerLatitudeValid(Drone.Latitude)
+			|| !IsMaterializerLongitudeValid(Drone.Longitude))
 		{
 			return ERouteAssignmentExcludedReason::InvalidGeo;
 		}
@@ -88,8 +88,8 @@ namespace
 			return false;
 		}
 		if (!Identity.bShowOriginSet
-			|| !IsLatitudeValid(Identity.Latitude)
-			|| !IsLongitudeValid(Identity.Longitude)
+			|| !IsMaterializerLatitudeValid(Identity.Latitude)
+			|| !IsMaterializerLongitudeValid(Identity.Longitude)
 			|| !FMath::IsFinite(Identity.Altitude))
 		{
 			OutError = TEXT("SourceIdentity ShowOrigin is missing or invalid.");
@@ -110,7 +110,7 @@ namespace
 			[](const FRouteAssignmentMinimumCostPair& Left,
 				const FRouteAssignmentMinimumCostPair& Right)
 			{
-				const int32 DroneOrder = CompareDroneIDs(Left.DroneID, Right.DroneID);
+				const int32 DroneOrder = CompareMaterializerDroneIDs(Left.DroneID, Right.DroneID);
 				return DroneOrder != 0
 					? DroneOrder < 0
 					: Left.RouteSlotIndex < Right.RouteSlotIndex;
@@ -266,7 +266,7 @@ bool RouteAssignmentMaterializer::MaterializeAssignmentCandidate(
 			return false;
 		}
 		if (GraphDroneIndex > 0
-			&& CompareDroneIDs(
+			&& CompareMaterializerDroneIDs(
 				CandidateGraph.EligibleDroneIDs[GraphDroneIndex - 1],
 				GraphDroneID) >= 0)
 		{
@@ -461,19 +461,19 @@ bool RouteAssignmentMaterializer::MaterializeAssignmentCandidate(
 	LocalCandidate.SpareDrones.Sort(
 		[](const FRouteAssignmentSpareDrone& Left, const FRouteAssignmentSpareDrone& Right)
 		{
-			return DroneIDLess(Left.DroneID, Right.DroneID);
+			return MaterializerDroneIDLess(Left.DroneID, Right.DroneID);
 		});
 	LocalCandidate.ExcludedDrones.Sort(
 		[](const FRouteAssignmentExcludedDrone& Left,
 			const FRouteAssignmentExcludedDrone& Right)
 		{
-			return DroneIDLess(Left.DroneID, Right.DroneID);
+			return MaterializerDroneIDLess(Left.DroneID, Right.DroneID);
 		});
 	LocalCandidate.UnresolvedDrones.Sort(
 		[](const FRouteAssignmentUnresolvedDrone& Left,
 			const FRouteAssignmentUnresolvedDrone& Right)
 		{
-			return DroneIDLess(Left.DroneID, Right.DroneID);
+			return MaterializerDroneIDLess(Left.DroneID, Right.DroneID);
 		});
 	LocalCandidate.VacantRouteSlots.Sort();
 	LocalCandidate.Conflicts.Reset();

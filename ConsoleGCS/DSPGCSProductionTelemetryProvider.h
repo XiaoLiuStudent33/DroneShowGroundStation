@@ -1,15 +1,16 @@
-/**
- * @brief ½« Console Fleet ¿ìÕÕ±àÂëÎª DSP-GCS Ò£²âÖ¡²¢·¢ËÍÃüÁî½á¹û¡£
+ï»¿/**
+ * @brief å°† Console Fleet å¿«ç…§ç¼–ç ä¸º DSP-GCS é¥æµ‹å¸§å¹¶å‘é€å‘½ä»¤ç»“æœã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * ÊäÈë£ºDroneManager È«Á¿ Session Óë CommandResult£»Êä³ö£º·ÖÆ¬ Telemetry Snapshot/Result Frame¡£
- * µ÷ÓÃÁ´£ºConsoleGCSApplication -> Provider -> DSP Transport -> Unreal Production Provider¡£
- * ¹Ø¼üÔ¼Êø£º´ó Fleet ±ØĞëÍêÕû·ÖÆ¬£¬²»ÄÜ·¢ËÍ²»¿ÉÖØ×éµÄ°ë¸ö Snapshot¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è¾“å…¥ï¼šDroneManager å…¨é‡ Session ä¸ CommandResultï¼›è¾“å‡ºï¼šåˆ†ç‰‡ Telemetry Snapshot/Result Frameã€‚
+ * è°ƒç”¨é“¾ï¼šConsoleGCSApplication -> Provider -> DSP Transport -> Unreal Production Providerã€‚
+ * å…³é”®çº¦æŸï¼šå¤§ Fleet å¿…é¡»å®Œæ•´åˆ†ç‰‡ï¼Œä¸èƒ½å‘é€ä¸å¯é‡ç»„çš„åŠä¸ª Snapshotã€‚
  */
 #pragma once
 
 #include "DSPGCSFrozenAssignmentProtocol.h"
 #include "DSPGCSProtocol.h"
+#include "DSPGCSUploadJobProtocol.h"
 #include "DSPGCSTransportConfig.h"
 #include "IDSPGCSTransport.h"
 
@@ -36,10 +37,22 @@ public:
         const dspgcs::CommandResultBatchDTO& resultBatch);
     bool SendFrozenAssignmentAck(
         const dspgcs::FrozenAssignmentAckDTO& acknowledgement);
+    bool SendUploadJobCommandAck(
+        const dspgcs::UploadJobCommandAckDTO& acknowledgement);
+    bool SendUploadJobSnapshot(
+        const dspgcs::UploadJobSnapshotDTO& snapshot);
+    bool SendUploadJobRouteStatePage(
+        const dspgcs::UploadJobRouteStatePageDTO& page);
+    bool SendUploadJobRouteStateDelta(
+        const dspgcs::UploadJobRouteStateDeltaDTO& delta);
     const std::string& GetCurrentFleetSessionID() const;
     bool IsRunning() const;
 
 private:
+    bool SendUploadJobPayload(
+        dspgcs::MessageType messageType,
+        const std::string& correlationId,
+        std::vector<std::uint8_t> payload);
     std::unique_ptr<dspgcs::IDSPGCSTransport> transport_;
     dspgcs::TransportReceiveHandler receiveHandler_;
     std::uint64_t sequence_ = 0;

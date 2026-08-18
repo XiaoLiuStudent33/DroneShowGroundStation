@@ -11,7 +11,7 @@ void URoutePreviewSubsystem::Deinitialize()
 	StopPlaybackTicker();
 	ExitPreviewMode();
 	ClearRouteOverlayRenderData();
-	RouteData = FRoutePreviewData{};
+	ActiveRouteData.Reset();
 	PreparedRouteData = FRoutePreviewData{};
 	PreparedRouteFilePath.Reset();
 	FramePositionsENU.Reset();
@@ -58,8 +58,9 @@ bool URoutePreviewSubsystem::CommitPreparedRoute(FString& OutError)
 		ExitPreviewMode();
 	}
 
-	RouteData = MoveTemp(PreparedRouteData);
+	ActiveRouteData = MakeShared<FRoutePreviewData, ESPMode::ThreadSafe>(MoveTemp(PreparedRouteData));
 	PreparedRouteData = FRoutePreviewData{};
+	const FRoutePreviewData& RouteData = GetActiveRouteData();
 	++RouteDatasetGeneration;
 	// A committed import starts at logical frame zero while remaining in Live
 	// visualization. Full preview ownership begins only after an explicit
@@ -103,7 +104,8 @@ bool URoutePreviewSubsystem::LoadRoute(const FString& FilePath, FString& OutErro
 		return false;
 	}
 
-	RouteData = MoveTemp(LoadedData);
+	ActiveRouteData = MakeShared<FRoutePreviewData, ESPMode::ThreadSafe>(MoveTemp(LoadedData));
+	const FRoutePreviewData& RouteData = GetActiveRouteData();
 	++RouteDatasetGeneration;
 	CurrentFrame = INDEX_NONE;
 	FramePositionsENU.SetNumUninitialized(RouteData.DroneCount);
@@ -133,11 +135,11 @@ bool URoutePreviewSubsystem::LoadRoute(const FString& FilePath, FString& OutErro
 
 void URoutePreviewSubsystem::UnloadRoute()
 {
-	const bool bHadActiveRouteDataset = RouteData.IsLoaded();
+	const bool bHadActiveRouteDataset = GetActiveRouteData().IsLoaded();
 	StopPlaybackTicker();
 	ExitPreviewMode();
 	ClearRouteOverlayRenderData();
-	RouteData = FRoutePreviewData{};
+	ActiveRouteData.Reset();
 	if (bHadActiveRouteDataset)
 	{
 		++RouteDatasetGeneration;
@@ -160,6 +162,7 @@ bool URoutePreviewSubsystem::SetShowOrigin(
 	const double Altitude,
 	FString& OutError)
 {
+	FRoutePreviewData& RouteData = GetMutableActiveRouteData();
 	OutError.Reset();
 	if (!FMath::IsFinite(Latitude) || Latitude < -90.0 || Latitude > 90.0)
 	{
@@ -198,6 +201,7 @@ bool URoutePreviewSubsystem::SetShowOrigin(
 
 bool URoutePreviewSubsystem::EnterPreviewMode(FString& OutError)
 {
+	const FRoutePreviewData& RouteData = GetActiveRouteData();
 	OutError.Reset();
 	if (!RouteData.IsLoaded())
 	{
@@ -278,6 +282,7 @@ bool URoutePreviewSubsystem::SetRouteOverlayEnabled(
 
 bool URoutePreviewSubsystem::RefreshRouteOverlay(FString& OutError)
 {
+	const FRoutePreviewData& RouteData = GetActiveRouteData();
 	OutError.Reset();
 	bRouteOverlayVisible = false;
 	ADroneFleetVisualizationActor* VisualizationActor = FindVisualizationActor();
@@ -358,6 +363,7 @@ bool URoutePreviewSubsystem::RefreshRouteOverlay(FString& OutError)
 
 void URoutePreviewSubsystem::LogRouteOverlayStatus() const
 {
+	const FRoutePreviewData& RouteData = GetActiveRouteData();
 	const ADroneFleetVisualizationActor* VisualizationActor = FindVisualizationActor();
 	const EGCSVisualizationMode VisualizationMode = VisualizationActor
 		? VisualizationActor->GetVisualizationMode()
@@ -404,6 +410,7 @@ bool URoutePreviewSubsystem::SetPreviewFrame(const int32 FrameIndex, FString& Ou
 
 bool URoutePreviewSubsystem::SeekToFrame(const int32 FrameIndex, FString& OutError)
 {
+	const FRoutePreviewData& RouteData = GetActiveRouteData();
 	if (PlaybackState == ERoutePreviewPlaybackState::Playing)
 	{
 		Pause();
@@ -427,6 +434,7 @@ bool URoutePreviewSubsystem::SeekToFrame(const int32 FrameIndex, FString& OutErr
 
 bool URoutePreviewSubsystem::SetSampleRateHz(const double Hz, FString& OutError)
 {
+	FRoutePreviewData& RouteData = GetMutableActiveRouteData();
 	OutError.Reset();
 	if (!FMath::IsFinite(Hz) || Hz <= 0.0)
 	{
@@ -445,6 +453,7 @@ bool URoutePreviewSubsystem::SetSampleRateHz(const double Hz, FString& OutError)
 
 bool URoutePreviewSubsystem::Play(FString& OutError)
 {
+	const FRoutePreviewData& RouteData = GetActiveRouteData();
 	OutError.Reset();
 	if (!RouteData.IsLoaded())
 	{
@@ -498,6 +507,7 @@ void URoutePreviewSubsystem::Pause()
 
 bool URoutePreviewSubsystem::Stop(FString& OutError)
 {
+	const FRoutePreviewData& RouteData = GetActiveRouteData();
 	OutError.Reset();
 	if (!RouteData.IsLoaded())
 	{
@@ -520,6 +530,7 @@ bool URoutePreviewSubsystem::Stop(FString& OutError)
 
 double URoutePreviewSubsystem::GetDurationSeconds() const
 {
+	const FRoutePreviewData& RouteData = GetActiveRouteData();
 	return RouteData.FrameCount > 0 && RouteData.SampleRateHz > 0.0
 		? (RouteData.FrameCount - 1) / RouteData.SampleRateHz
 		: 0.0;
@@ -527,6 +538,7 @@ double URoutePreviewSubsystem::GetDurationSeconds() const
 
 bool URoutePreviewSubsystem::ApplyPreviewFrame(const int32 FrameIndex, FString& OutError)
 {
+	const FRoutePreviewData& RouteData = GetActiveRouteData();
 	OutError.Reset();
 	if (!RouteData.IsLoaded())
 	{
@@ -598,6 +610,7 @@ bool URoutePreviewSubsystem::ApplyPreviewFrame(const int32 FrameIndex, FString& 
 
 bool URoutePreviewSubsystem::TickPlayback(const float DeltaSeconds)
 {
+	const FRoutePreviewData& RouteData = GetActiveRouteData();
 	if (PlaybackState != ERoutePreviewPlaybackState::Playing)
 	{
 		PlaybackTickerHandle.Reset();
@@ -676,4 +689,27 @@ ADroneFleetVisualizationActor* URoutePreviewSubsystem::FindVisualizationActor() 
 		return *It;
 	}
 	return nullptr;
+}
+
+TSharedPtr<const FRoutePreviewData, ESPMode::ThreadSafe>
+URoutePreviewSubsystem::CaptureRouteDataSnapshot() const
+{
+	check(IsInGameThread());
+	return ActiveRouteData;
+}
+
+const FRoutePreviewData& URoutePreviewSubsystem::GetActiveRouteData() const
+{
+	static const FRoutePreviewData Empty;
+	return ActiveRouteData.IsValid() ? *ActiveRouteData : Empty;
+}
+
+FRoutePreviewData& URoutePreviewSubsystem::GetMutableActiveRouteData()
+{
+	check(IsInGameThread());
+	if (!ActiveRouteData.IsValid())
+	{
+		ActiveRouteData = MakeShared<FRoutePreviewData, ESPMode::ThreadSafe>();
+	}
+	return *ActiveRouteData;
 }

@@ -1,9 +1,9 @@
-/**
- * @brief ÊµÏÖ Console µ½ UE µÄ Production Snapshot ·ÖÆ¬ÓëÃüÁî½á¹û·¢ËÍ¡£
+ï»¿/**
+ * @brief å®ç° Console åˆ° UE çš„ Production Snapshot åˆ†ç‰‡ä¸å‘½ä»¤ç»“æœå‘é€ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * ÊäÈë£ºÎÈ¶¨ SessionOrder ÏÂµÄ Fleet£»Êä³ö£º´ø Session/Snapshot/Revision µÄ DSP-GCS Frame¡£
- * µ±Ç°Í¬Ò» Transport Ò²½ÓÊÕ UE ÃüÁî£¬Òò´Ë²¢·Çµ¥ÏòÒ£²â×¨ÓÃ Socket¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è¾“å…¥ï¼šç¨³å®š SessionOrder ä¸‹çš„ Fleetï¼›è¾“å‡ºï¼šå¸¦ Session/Snapshot/Revision çš„ DSP-GCS Frameã€‚
+ * å½“å‰åŒä¸€ Transport ä¹Ÿæ¥æ”¶ UE å‘½ä»¤ï¼Œå› æ­¤å¹¶éå•å‘é¥æµ‹ä¸“ç”¨ Socketã€‚
  */
 #include "DSPGCSProductionTelemetryProvider.h"
 
@@ -189,8 +189,8 @@ bool DSPGCSProductionTelemetryProvider::PublishSnapshot(
     const std::size_t fixedFrameBytes =
         dspgcs::EncodeTelemetry(sizingEnvelope, emptyBatch).size();
 
-    // 1000 ¼ÜÈ«Á¿ Snapshot ²»ÄÜ¼Ù¶¨ÓÉµ¥¸ö UDP Datagram ³ĞÔØ£»±ØĞëÏÈĞÎ³É
-    // ÓĞ¹²Í¬ SnapshotID/Revision µÄ·ÖÆ¬¼¯ºÏ£¬ÔÙÖğÆ¬½»¸ø DSP-GCS Transport¡£
+    // 1000 æ¶å…¨é‡ Snapshot ä¸èƒ½å‡å®šç”±å•ä¸ª UDP Datagram æ‰¿è½½ï¼›å¿…é¡»å…ˆå½¢æˆ
+    // æœ‰å…±åŒ SnapshotID/Revision çš„åˆ†ç‰‡é›†åˆï¼Œå†é€ç‰‡äº¤ç»™ DSP-GCS Transportã€‚
     std::vector<std::vector<dspgcs::TelemetryDTO>> chunks;
     chunks.emplace_back();
     std::size_t currentFrameBytes = fixedFrameBytes;
@@ -289,6 +289,61 @@ bool DSPGCSProductionTelemetryProvider::SendFrozenAssignmentAck(
     envelope.fleetRevision = fleetRevision_;
     return transport_->Send(
         { dspgcs::MakeFrame(envelope, payload) });
+}
+
+bool DSPGCSProductionTelemetryProvider::SendUploadJobPayload(
+    const dspgcs::MessageType messageType,
+    const std::string& correlationId,
+    std::vector<std::uint8_t> payload)
+{
+    if (!IsRunning()) return false;
+    dspgcs::MessageEnvelope envelope;
+    envelope.messageType = messageType;
+    envelope.sourceId = "ConsoleGCS-UploadJob";
+    envelope.sessionId = sessionId_;
+    envelope.sequence = ++sequence_;
+    envelope.timestampUtcMs = UtcNowMs();
+    envelope.correlationId = correlationId;
+    envelope.fleetRevision = fleetRevision_;
+    std::vector<std::uint8_t> frame = dspgcs::MakeFrame(envelope, payload);
+    return frame.size() <= dspgcs::UploadJobDefaultDatagramBudgetBytes &&
+        transport_->Send({ std::move(frame) });
+}
+
+bool DSPGCSProductionTelemetryProvider::SendUploadJobCommandAck(
+    const dspgcs::UploadJobCommandAckDTO& acknowledgement)
+{
+    std::vector<std::uint8_t> payload; std::string error;
+    return dspgcs::EncodeUploadJobCommandAck(acknowledgement, payload, error) &&
+        SendUploadJobPayload(dspgcs::UploadJobMessageTypes::CommandAck,
+            acknowledgement.clientCommandId, std::move(payload));
+}
+
+bool DSPGCSProductionTelemetryProvider::SendUploadJobSnapshot(
+    const dspgcs::UploadJobSnapshotDTO& snapshot)
+{
+    std::vector<std::uint8_t> payload; std::string error;
+    return dspgcs::EncodeUploadJobSnapshot(snapshot, payload, error) &&
+        SendUploadJobPayload(dspgcs::UploadJobMessageTypes::Snapshot,
+            snapshot.clientRequestId, std::move(payload));
+}
+
+bool DSPGCSProductionTelemetryProvider::SendUploadJobRouteStatePage(
+    const dspgcs::UploadJobRouteStatePageDTO& page)
+{
+    std::vector<std::uint8_t> payload; std::string error;
+    return dspgcs::EncodeUploadJobRouteStatePage(page, payload, error) &&
+        SendUploadJobPayload(dspgcs::UploadJobMessageTypes::RouteStatePage,
+            page.clientRequestId, std::move(payload));
+}
+
+bool DSPGCSProductionTelemetryProvider::SendUploadJobRouteStateDelta(
+    const dspgcs::UploadJobRouteStateDeltaDTO& delta)
+{
+    std::vector<std::uint8_t> payload; std::string error;
+    return dspgcs::EncodeUploadJobRouteStateDelta(delta, payload, error) &&
+        SendUploadJobPayload(dspgcs::UploadJobMessageTypes::RouteStateDelta,
+            delta.uploadJobId, std::move(payload));
 }
 
 const std::string&

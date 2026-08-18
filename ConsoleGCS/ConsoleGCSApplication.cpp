@@ -1,9 +1,9 @@
-/**
- * @brief ÊµÏÖ ConsoleGCS Æô¶¯Ð£ÑéºÍÖ÷·þÎñÑ­»·¡£
+ï»¿/**
+ * @brief å®žçŽ° ConsoleGCS å¯åŠ¨æ ¡éªŒå’Œä¸»æœåŠ¡å¾ªçŽ¯ã€‚
  *
- * ·ÖÀà£ºProduction£»µ±Ç°ÅäÖÃÖ»½øÈë¶à»ú MAVLink Production Â·¾¶¡£
- * ÊäÈë£ºgcs-config.ini£»Êä³ö£ºMAVLink ÊÕ·¢¡¢DSP-GCS ¿ìÕÕ/ÃüÁî´¦ÀíºÍ ConsoleUI ÕªÒª¡£
- * µ÷ÓÃÁ´£ºmain -> Run -> RunProductionMavlink¡£
+ * åˆ†ç±»ï¼šProductionï¼›å½“å‰é…ç½®åªè¿›å…¥å¤šæœº MAVLink Production è·¯å¾„ã€‚
+ * è¾“å…¥ï¼šgcs-config.iniï¼›è¾“å‡ºï¼šMAVLink æ”¶å‘ã€DSP-GCS å¿«ç…§/å‘½ä»¤å¤„ç†å’Œ ConsoleUI æ‘˜è¦ã€‚
+ * è°ƒç”¨é“¾ï¼šmain -> Run -> RunProductionMavlinkã€‚
  */
 #define WIN32_LEAN_AND_MEAN
 
@@ -11,11 +11,14 @@
 
 #include "AppConfig.h"
 #include "CommandManager.h"
+#include "ConsoleArtifactConsumer.h"
+#include "ConsoleUploadJobAuthority.h"
 #include "ConsoleUI.h"
 #include "DroneManager.h"
 #include "DSPGCSFrozenAssignmentReceiver.h"
 #include "DSPGCSProductionCommandReceiver.h"
 #include "DSPGCSProductionTelemetryProvider.h"
+#include "DSPGCSUploadJobReceiver.h"
 #include "DSPGCSTransportConfigLoader.h"
 #include "MavlinkDiscoveryService.h"
 #include "MavlinkReadOnlyIngress.h"
@@ -250,6 +253,12 @@ int ConsoleGCSApplication::RunProductionMavlink(
     DSPGCSProductionCommandReceiver commandReceiver;
     DSPGCSFrozenAssignmentReceiver frozenAssignmentReceiver;
     FrozenAssignmentStore frozenAssignmentStore;
+    ConsoleArtifactConsumer artifactConsumer(appConfig.artifactWorkspaceRoot);
+    ConsoleUploadJobAuthority uploadJobAuthority(
+        appConfig.artifactWorkspaceRoot,
+        &artifactConsumer,
+        &frozenAssignmentStore);
+    DSPGCSUploadJobReceiver uploadJobReceiver;
     commandReceiver.SetRealCommandEnabled(appConfig.realCommandEnabled);
     DroneSessionConfig discoveredSessionDefaults;
     // Discovery Sessions share the same bound endpoint for receive, heartbeat,
@@ -273,6 +282,7 @@ int ConsoleGCSApplication::RunProductionMavlink(
         telemetryProvider.SetReceiveHandler(
             [&commandReceiver,
              &frozenAssignmentReceiver,
+             &uploadJobReceiver,
              commandEnabled = appConfig.dspgcsCommandEnabled](
                 dspgcs::TransportFrame frame)
             {
@@ -295,6 +305,11 @@ int ConsoleGCSApplication::RunProductionMavlink(
                         IsFrozenAssignmentMessageType(envelope.messageType))
                 {
                     frozenAssignmentReceiver.EnqueueFrame(std::move(frame));
+                    return;
+                }
+                if (dspgcs::IsUploadJobMessageType(envelope.messageType))
+                {
+                    uploadJobReceiver.EnqueueFrame(std::move(frame));
                 }
             });
     }
@@ -405,6 +420,28 @@ int ConsoleGCSApplication::RunProductionMavlink(
                     " rejected=" +
                     std::to_string(assignmentStats.transactionsRejected));
             }
+
+            uploadJobAuthority.Tick();
+            uploadJobReceiver.ProcessPending(
+                uploadJobAuthority,
+                [&telemetryProvider](
+                    const dspgcs::UploadJobCommandAckDTO& acknowledgement)
+                {
+                    return telemetryProvider.SendUploadJobCommandAck(
+                        acknowledgement);
+                },
+                [&telemetryProvider](
+                    const dspgcs::UploadJobSnapshotDTO& snapshot)
+                {
+                    return telemetryProvider.SendUploadJobSnapshot(snapshot);
+                },
+                [&telemetryProvider](
+                    const dspgcs::UploadJobRouteStatePageDTO& page)
+                {
+                    return telemetryProvider.SendUploadJobRouteStatePage(page);
+                });
+            for (const auto& delta : uploadJobAuthority.DrainRouteDeltas())
+                telemetryProvider.SendUploadJobRouteStateDelta(delta);
         }
 
         if (telemetryProvider.IsRunning() &&

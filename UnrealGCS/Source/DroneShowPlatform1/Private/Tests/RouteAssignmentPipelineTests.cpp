@@ -100,7 +100,7 @@ namespace
 		return Candidate;
 	}
 
-	bool CandidatesEquivalent(
+	bool PipelineCandidatesEquivalent(
 		const FRouteAssignmentCandidate& Left,
 		const FRouteAssignmentCandidate& Right)
 	{
@@ -450,7 +450,7 @@ bool FPipeline10RepeatTest::RunTest(const FString& Parameters)
 	FString Error;
 	TestTrue(TEXT("First succeeds"), Build(Source, First, Error));
 	TestTrue(TEXT("Second succeeds"), Build(Source, Second, Error));
-	TestTrue(TEXT("Repeat is equivalent"), CandidatesEquivalent(First, Second));
+	TestTrue(TEXT("Repeat is equivalent"), PipelineCandidatesEquivalent(First, Second));
 	return true;
 }
 
@@ -469,7 +469,7 @@ bool FPipeline11CanonicalTest::RunTest(const FString& Parameters)
 	FString Error;
 	TestTrue(TEXT("First succeeds"), Build(Source, First, Error));
 	TestTrue(TEXT("Same snapshot succeeds again"), Build(Source, Second, Error));
-	TestTrue(TEXT("Canonical Candidates equivalent"), CandidatesEquivalent(First, Second));
+	TestTrue(TEXT("Canonical Candidates equivalent"), PipelineCandidatesEquivalent(First, Second));
 	TestTrue(TEXT("Spare array exists"), !First.SpareDrones.IsEmpty());
 	return true;
 }

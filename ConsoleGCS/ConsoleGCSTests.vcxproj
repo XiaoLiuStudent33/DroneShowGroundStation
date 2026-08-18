@@ -32,22 +32,28 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;$(ProjectDir)\..\Shared\RouteWaypoint;$(ProjectDir)\..\Shared\RouteArtifact;$(ProjectDir)\..\Shared\RouteMission;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>%(AdditionalDependencies);ws2_32.lib</AdditionalDependencies>
+      <AdditionalDependencies>%(AdditionalDependencies);ws2_32.lib;psapi.lib</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="tests\ConsolePipelineTests.cpp" />
     <ClCompile Include="tests\CommandTests.cpp" />
+    <ClCompile Include="tests\ConsoleArtifactConsumerTests.cpp" />
+    <ClCompile Include="tests\DSPUploadJobProtocolTests.cpp" />
+    <ClCompile Include="tests\RouteMissionCodecTests.cpp" />
     <ClCompile Include="tests\DSPCommandTests.cpp" />
     <ClCompile Include="tests\DSPFrozenAssignmentProtocolTests.cpp" />
     <ClCompile Include="tests\DSPFrozenAssignmentReceiverTests.cpp" />
     <ClCompile Include="tests\DSPFrozenAssignmentE2EServer.cpp" />
     <ClCompile Include="AppConfig.cpp" />
     <ClCompile Include="CommandManager.cpp" />
+    <ClCompile Include="ConsoleArtifactConsumer.cpp" />
+    <ClCompile Include="ConsoleUploadJobAuthority.cpp" />
+    <ClCompile Include="DSPGCSUploadJobReceiver.cpp" />
     <ClCompile Include="MavlinkDiscoveryService.cpp" />
     <ClCompile Include="MavlinkReadOnlyIngress.cpp" />
     <ClCompile Include="MavlinkUdpReceiver.cpp" />
@@ -74,6 +80,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AppConfig.h" />
+    <ClInclude Include="ConsoleArtifactConsumer.h" />
+    <ClInclude Include="ConsoleUploadJobAuthority.h" />
+    <ClInclude Include="DSPGCSUploadJobReceiver.h" />
     <ClInclude Include="DroneDiscovery.h" />
     <ClInclude Include="DroneManager.h" />
     <ClInclude Include="DroneSession.h" />

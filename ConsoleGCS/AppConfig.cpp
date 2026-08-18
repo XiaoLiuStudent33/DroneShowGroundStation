@@ -12,6 +12,7 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <filesystem>
 #include <limits>
 #include <sstream>
 #include <unordered_map>
@@ -351,6 +352,19 @@ bool AppConfig::Load(
     if (transportConfigPath != values.end())
     {
         config.dspgcsTransportConfigPath = transportConfigPath->second;
+    }
+
+    const auto artifactWorkspaceRoot = values.find("artifact_workspace_root");
+    if (artifactWorkspaceRoot != values.end())
+    {
+        const std::filesystem::path root =
+            std::filesystem::u8path(artifactWorkspaceRoot->second).lexically_normal();
+        if (!root.is_absolute() || root == root.root_path())
+        {
+            error = "artifact_workspace_root must be an absolute non-volume path";
+            return false;
+        }
+        config.artifactWorkspaceRoot = artifactWorkspaceRoot->second;
     }
 
     const auto telemetryInterval =

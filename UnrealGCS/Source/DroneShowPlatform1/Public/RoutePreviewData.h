@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Math/Float16Color.h"
+#include "RouteArtifactTypes.h"
 
 /**
  * Compact, frame-major route data loaded once from a legacy show NPZ.
@@ -22,6 +23,9 @@ struct DRONESHOWPLATFORM1_API FRoutePreviewData
 	double ShowOriginAltitude = 0.0;
 	bool bShowOriginSet = false;
 
+	/** SHA-256 identity of the exact original NPZ bytes parsed for this data. */
+	FRouteArtifactSourceIdentity SourceIdentity;
+
 	/** Frame-major Local ENU meters: FrameIndex * DroneCount + RouteSlotIndex. */
 	TArray<FVector3f> PositionsENU;
 
@@ -36,6 +40,7 @@ struct DRONESHOWPLATFORM1_API FRoutePreviewData
 		const int64 ExpectedSamples = static_cast<int64>(FrameCount) * DroneCount;
 		return FrameCount > 0
 			&& DroneCount > 0
+			&& SourceIdentity.IsValid()
 			&& PositionsENU.Num() == ExpectedSamples
 			&& Colors.Num() == ExpectedSamples;
 	}

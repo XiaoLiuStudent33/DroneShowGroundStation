@@ -15,6 +15,10 @@ dspgcs_command_enabled=false
 dspgcs_transport_config=config/DSPGCSTransport.ini
 dspgcs_telemetry_interval_ms=250
 
+# Local-only UTF-8 absolute path shared with UE Artifact generation settings.
+# DSP messages must never carry this path. Uncomment after choosing the root.
+# artifact_workspace_root=C:/DroneGCSData/ArtifactWorkspace
+
 # Optional Production performance tuning. These values match code fallbacks.
 [performance]
 mavlink_receive_buffer_bytes=4194304

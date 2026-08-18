@@ -5,6 +5,7 @@
 #include "Misc/Crc.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "RouteArtifactTypes.h"
 #include "RoutePreviewData.h"
 #include "Internationalization/Regex.h"
 
@@ -467,6 +468,21 @@ bool FRoutePreviewNpzLoader::Load(
 	if (!FFileHelper::LoadFileToArray(Archive, *FilePath))
 	{
 		OutError = FString::Printf(TEXT("Unable to read NPZ file: %s"), *FilePath);
+		return false;
+	}
+
+	// Hash the exact in-memory archive that will be parsed below. Never reopen
+	// FilePath after parsing: SourceDatasetDigest must be immune to TOCTOU.
+	FRouteArtifactDigest256 SourceDatasetDigest;
+	if (!FRouteArtifactSha256::HashBytes(Archive, SourceDatasetDigest, OutError)
+		|| !FRouteArtifactSourceIdentity::Create(
+			SourceDatasetDigest,
+			Archive.Num(),
+			FilePath,
+			OutData.SourceIdentity,
+			OutError))
+	{
+		OutData = FRoutePreviewData{};
 		return false;
 	}
 

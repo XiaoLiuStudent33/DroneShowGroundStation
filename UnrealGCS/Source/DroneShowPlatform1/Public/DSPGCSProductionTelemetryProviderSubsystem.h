@@ -1,9 +1,9 @@
-/**
- * @brief UE ²à DSP-GCS Production Ò£²â Provider Óë Snapshot ·ÖÆ¬ÖØ×é×´Ì¬¡£
+ï»¿/**
+ * @brief UE ä¾§ DSP-GCS Production é¥æµ‹ Provider ä¸ Snapshot åˆ†ç‰‡é‡ç»„çŠ¶æ€ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * ÊäÈë£ºConsole DSP-GCS Telemetry Frame£»Êä³ö£ºÍêÕû FGCSFleetSnapshot µ½ GCSServerAdapter¡£
- * ¹Ø¼üÔ¼Êø£ºËùÓĞ·ÖÆ¬ÍêÕûÇ°²»µÃÏò FleetManager Ìá½»²¿·Ö Snapshot¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è¾“å…¥ï¼šConsole DSP-GCS Telemetry Frameï¼›è¾“å‡ºï¼šå®Œæ•´ FGCSFleetSnapshot åˆ° GCSServerAdapterã€‚
+ * å…³é”®çº¦æŸï¼šæ‰€æœ‰åˆ†ç‰‡å®Œæ•´å‰ä¸å¾—å‘ FleetManager æäº¤éƒ¨åˆ† Snapshotã€‚
  */
 #pragma once
 
@@ -52,6 +52,9 @@ public:
 	using FFrozenAssignmentAckHandler = std::function<void(
 		const dspgcs::MessageEnvelope&,
 		const dspgcs::FrozenAssignmentAckDTO&)>;
+	using FUploadJobFrameHandler = std::function<void(
+		const dspgcs::MessageEnvelope&,
+		const std::vector<std::uint8_t>&)>;
 
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
@@ -82,6 +85,7 @@ public:
 	bool SendFrame(const std::vector<std::uint8_t>& Frame);
 	void SetCommandResultHandler(FCommandResultHandler Handler);
 	void SetFrozenAssignmentAckHandler(FFrozenAssignmentAckHandler Handler);
+	void SetUploadJobFrameHandler(FUploadJobFrameHandler Handler);
 
 private:
 #if WITH_DEV_AUTOMATION_TESTS
@@ -112,6 +116,8 @@ private:
 	FCommandResultHandler CommandResultHandler;
 	FCriticalSection FrozenAssignmentAckHandlerMutex;
 	FFrozenAssignmentAckHandler FrozenAssignmentAckHandler;
+	FCriticalSection UploadJobFrameHandlerMutex;
+	FUploadJobFrameHandler UploadJobFrameHandler;
 	bool bEnabled = false;
 	std::atomic<int32> ReceivedDroneCount{0};
 	int32 TelemetryTimeoutMs = 2000;

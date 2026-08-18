@@ -33,6 +33,11 @@ int RunDSPCommandTests();
 int RunDSPFrozenAssignmentProtocolTests();
 int RunDSPFrozenAssignmentReceiverTests();
 int RunDSPFrozenAssignmentE2EServer(int argc, char** argv);
+int RunConsoleArtifactConsumerTests();
+int RunConsoleArtifactBenchmark(int argc, char** argv);
+int RunRouteMissionCodecTests();
+int RunRouteMissionBenchmarks(int argc, char** argv);
+int RunDSPUploadJobProtocolTests();
 
 namespace
 {
@@ -89,6 +94,7 @@ dspgcs_telemetry_enabled=true
 dspgcs_command_enabled=true
 dspgcs_transport_config=config/DSPGCSTransport.ini
 dspgcs_telemetry_interval_ms=500
+artifact_workspace_root=C:\DroneGCSArtifactWorkspace
 [performance]
 mavlink_receive_buffer_bytes=8388608
 max_packets_per_drain=8192
@@ -112,6 +118,9 @@ snapshot_items_per_chunk=256
             config.snapshotDatagramBytes == 60000 &&
             config.snapshotItemsPerChunk == 256,
             "Production performance values were not loaded");
+        Expect(
+            config.artifactWorkspaceRoot == "C:\\DroneGCSArtifactWorkspace",
+            "Artifact Workspace root was not loaded");
 
         TemporaryConfigFile fallback("fallback", R"(
 safe_test_mode=true
@@ -1390,6 +1399,27 @@ int main(const int argc, char** argv)
     {
         return RunDSPFrozenAssignmentE2EServer(argc, argv);
     }
+    if (argc > 1 && (std::string(argv[1]) == "--artifact-benchmark"
+        || std::string(argv[1]) == "--artifact-scale-10k"))
+    {
+        return RunConsoleArtifactBenchmark(argc, argv);
+    }
+    if (argc > 1 && std::string(argv[1]) == "--artifact-tests")
+    {
+        return RunConsoleArtifactConsumerTests();
+    }
+    if (argc > 1 && std::string(argv[1]) == "--mission-tests")
+    {
+        return RunRouteMissionCodecTests();
+    }
+    if (argc > 1 && std::string(argv[1]) == "--mission-benchmark")
+    {
+        return RunRouteMissionBenchmarks(argc, argv);
+    }
+    if (argc > 1 && std::string(argv[1]) == "--upload-job-tests")
+    {
+        return RunDSPUploadJobProtocolTests();
+    }
 
     const int pipelineResult = RunConsolePipelineTests();
     const int commandResult = RunCommandTests();
@@ -1397,9 +1427,14 @@ int main(const int argc, char** argv)
     const int frozenAssignmentResult = RunDSPFrozenAssignmentProtocolTests();
     const int frozenAssignmentReceiverResult =
         RunDSPFrozenAssignmentReceiverTests();
+    const int artifactConsumerResult = RunConsoleArtifactConsumerTests();
+    const int missionCodecResult = RunRouteMissionCodecTests();
+    const int uploadJobResult = RunDSPUploadJobProtocolTests();
 
     if (pipelineResult == 0 && commandResult == 0 && dspCommandResult == 0 &&
-        frozenAssignmentResult == 0 && frozenAssignmentReceiverResult == 0)
+        frozenAssignmentResult == 0 && frozenAssignmentReceiverResult == 0
+        && artifactConsumerResult == 0 && missionCodecResult == 0
+        && uploadJobResult == 0)
     {
         std::cout << "ConsoleGCS regression suite passed\n";
         return 0;
@@ -1411,6 +1446,9 @@ int main(const int argc, char** argv)
         << " dspCommand=" << dspCommandResult
         << " frozenAssignment=" << frozenAssignmentResult
         << " frozenAssignmentReceiver=" << frozenAssignmentReceiverResult
+        << " artifactConsumer=" << artifactConsumerResult
+        << " missionCodec=" << missionCodecResult
+        << " uploadJob=" << uploadJobResult
         << '\n';
     return 1;
 }
