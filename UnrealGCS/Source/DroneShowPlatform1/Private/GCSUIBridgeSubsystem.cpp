@@ -25,6 +25,7 @@
 #include "Framework/Application/IInputProcessor.h"
 #include "Framework/Application/SlateApplication.h"
 #include "GCSDroneRowView.h"
+#include "GCSRouteWorkflowCoordinator.h"
 #include "GCSUIWidgetPresenter.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
@@ -193,6 +194,14 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	}
 
 	DroneDetailWidget = DroneDetail;
+	if (!RouteWorkflowCoordinator)
+	{
+		RouteWorkflowCoordinator = NewObject<UGCSRouteWorkflowCoordinator>(this);
+	}
+	if (!RouteWorkflowCoordinator->Initialize(GetGameInstance(), RightPanelWidget.Get()))
+	{
+		UE_LOG(LogTemp, Error, TEXT("Route Workflow coordinator initialization failed."));
+	}
 	CreateNavigationPages();
 	BindNavigationButtons();
 	ShowMainPage(EGCSMainPage::Fleet);
@@ -308,6 +317,11 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 {
 	UnregisterMarqueeInputProcessor();
 	EndTopDownLocateLock();
+	if (RouteWorkflowCoordinator)
+	{
+		RouteWorkflowCoordinator->Shutdown();
+		RouteWorkflowCoordinator = nullptr;
+	}
 	if (UUserWidget* ImportWidget = RouteImportWidget.Get())
 	{
 		ImportWidget->RemoveFromParent();
@@ -3109,3 +3123,5 @@ UUserWidget* UGCSUIBridgeSubsystem::CreateNavigationPage(
 
 	return Page;
 }
+
+#include "GCSRouteWorkflowCoordinator.inl"

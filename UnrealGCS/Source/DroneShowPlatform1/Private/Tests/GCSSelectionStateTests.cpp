@@ -390,3 +390,5 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 }
 
 #endif
+
+#include "GCSRouteWorkflowCoordinatorTests.inl"

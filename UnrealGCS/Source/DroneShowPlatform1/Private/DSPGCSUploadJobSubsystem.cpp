@@ -10,13 +10,13 @@
 
 namespace
 {
-	std::string ToUtf8(const FString& Value)
+	std::string UploadJobToUtf8(const FString& Value)
 	{
 		const FTCHARToUTF8 Converted(*Value);
 		return std::string(Converted.Get(), Converted.Length());
 	}
 
-	FString FromUtf8(const std::string& Value)
+	FString UploadJobFromUtf8(const std::string& Value)
 	{
 		return FString(UTF8_TO_TCHAR(Value.c_str()));
 	}
@@ -72,7 +72,7 @@ void UDSPGCSUploadJobSubsystem::Deinitialize()
 
 std::string UDSPGCSUploadJobSubsystem::MakeCanonicalID()
 {
-	return ToUtf8(FGuid::NewGuid().ToString(EGuidFormats::Digits).ToLower());
+	return UploadJobToUtf8(FGuid::NewGuid().ToString(EGuidFormats::Digits).ToLower());
 }
 
 bool UDSPGCSUploadJobSubsystem::ParseDigestHex(
@@ -115,14 +115,14 @@ bool UDSPGCSUploadJobSubsystem::StartUploadJob(
 	dspgcs::UploadJobCommandDTO Command;
 	Command.clientCommandId = MakeCanonicalID();
 	Command.uploadJobId = RequestedUploadJobID.IsEmpty()
-		? MakeCanonicalID() : ToUtf8(RequestedUploadJobID);
+		? MakeCanonicalID() : UploadJobToUtf8(RequestedUploadJobID);
 	Command.commandType = dspgcs::UploadJobCommandType::Start;
 	Command.requestedMaxConcurrentUploads = RequestedMaxConcurrentUploads > 0
 		? static_cast<std::uint32_t>(RequestedMaxConcurrentUploads) : 0;
-	Command.artifactIdentity.artifactSetId = ToUtf8(ArtifactSetID);
-	Command.artifactIdentity.fleetSessionId = ToUtf8(FleetSessionID);
+	Command.artifactIdentity.artifactSetId = UploadJobToUtf8(ArtifactSetID);
+	Command.artifactIdentity.fleetSessionId = UploadJobToUtf8(FleetSessionID);
 	Command.artifactIdentity.assignmentAuthoritySessionId =
-		ToUtf8(AssignmentAuthoritySessionID);
+		UploadJobToUtf8(AssignmentAuthoritySessionID);
 	Command.artifactIdentity.assignmentRevision = AssignmentRevision > 0
 		? static_cast<std::uint64_t>(AssignmentRevision) : 0;
 	if (!ParseDigestHex(ArtifactSetDigestHex,
@@ -135,7 +135,7 @@ bool UDSPGCSUploadJobSubsystem::StartUploadJob(
 	}
 	if (!SendCommand(Command, OutError)) return false;
 	ActiveJobID = Command.uploadJobId;
-	OutUploadJobID = FromUtf8(ActiveJobID);
+	OutUploadJobID = UploadJobFromUtf8(ActiveJobID);
 	return true;
 }
 
@@ -199,7 +199,7 @@ bool UDSPGCSUploadJobSubsystem::SendCommand(
 	std::string Error;
 	if (!dspgcs::EncodeUploadJobCommand(Command, Payload, Error))
 	{
-		OutError = FromUtf8(Error);
+		OutError = UploadJobFromUtf8(Error);
 		return false;
 	}
 	std::vector<std::uint8_t> Frame;
@@ -274,7 +274,7 @@ bool UDSPGCSUploadJobSubsystem::SendSnapshotRequest(
 	std::string Error;
 	if (!dspgcs::EncodeUploadJobSnapshotRequest(Request, Payload, Error))
 	{
-		OutError = FromUtf8(Error);
+		OutError = UploadJobFromUtf8(Error);
 		return false;
 	}
 	PendingSnapshotRequestFrame.clear();
@@ -454,7 +454,7 @@ FDSPGCSUploadJobMirrorStatus UDSPGCSUploadJobSubsystem::GetMirrorStatus() const
 	Result.MirroredRouteCount = Mirror.GetRouteStateCount();
 	const auto* Snapshot = Mirror.GetSnapshot();
 	if (!Snapshot) return Result;
-	Result.UploadJobID = FromUtf8(Snapshot->uploadJobId);
+	Result.UploadJobID = UploadJobFromUtf8(Snapshot->uploadJobId);
 	Result.JobState = static_cast<int32>(Snapshot->jobState);
 	Result.JobRevision = Snapshot->jobRevision <=
 		static_cast<std::uint64_t>(std::numeric_limits<int64>::max())

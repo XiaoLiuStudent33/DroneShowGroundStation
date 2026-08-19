@@ -32,7 +32,7 @@ namespace
 		return FPaths::Combine(Root, TEXT("Staging"));
 	}
 
-	bool SameBinding(
+	bool WorkspaceSameBinding(
 		const FRouteArtifactAssignmentBinding& Left,
 		const FRouteArtifactAssignmentBinding& Right)
 	{
@@ -71,7 +71,7 @@ namespace
 			return false;
 		}
 		if (!Gate.ConsoleAcceptedBinding.Validate(OutError)
-			|| !SameBinding(BuildIdentity.AssignmentBinding, Gate.ConsoleAcceptedBinding)
+			|| !WorkspaceSameBinding(BuildIdentity.AssignmentBinding, Gate.ConsoleAcceptedBinding)
 			|| Gate.FrozenFleetSessionID != BuildIdentity.AssignmentBinding.FleetSessionID
 			|| Gate.FrozenAssignmentAuthoritySessionID
 				!= BuildIdentity.AssignmentBinding.AssignmentAuthoritySessionID

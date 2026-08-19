@@ -17,6 +17,7 @@ class UButton;
 class ACameraActor;
 class APlayerController;
 class UGCSDroneRowView;
+class UGCSRouteWorkflowCoordinator;
 class UEditableTextBox;
 class USlider;
 class UTextBlock;
@@ -399,6 +400,9 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UGCSDroneRowView>> FleetRowViews;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UGCSRouteWorkflowCoordinator> RouteWorkflowCoordinator;
 
 	int32 FleetPageOffset = 0;
 	static constexpr int32 FleetPageSize = 5;

@@ -8,7 +8,7 @@ namespace
 {
 	constexpr int32 StreamingBufferBytes = 64 * 1024;
 
-	bool SameSourceIdentity(
+	bool ValidatorSameSourceIdentity(
 		const FRouteArtifactSourceIdentity& Left,
 		const FRouteArtifactSourceIdentity& Right)
 	{
@@ -128,7 +128,7 @@ namespace
 bool FRouteWaypointSourceValidationContext::IsValid() const
 {
 	if (!RouteData.IsValid() || !RouteData->IsLoaded()
-		|| !SameSourceIdentity(SourceIdentity, RouteData->SourceIdentity)
+		|| !ValidatorSameSourceIdentity(SourceIdentity, RouteData->SourceIdentity)
 		|| RouteDatasetGeneration <= 0 || !GeneratorContext.IsValid()
 		|| FrameCount <= 0 || RouteCount <= 0
 		|| FrameCount != RouteData->FrameCount || RouteCount != RouteData->DroneCount)
