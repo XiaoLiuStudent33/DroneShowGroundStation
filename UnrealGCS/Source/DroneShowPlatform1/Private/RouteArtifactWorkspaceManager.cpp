@@ -457,6 +457,10 @@ struct FRouteArtifactWorkspaceManager::FImpl
 	ERouteArtifactCurrentStatus CurrentStatus = ERouteArtifactCurrentStatus::None;
 	ERouteArtifactGenerationStatus GenerationStatus = ERouteArtifactGenerationStatus::None;
 	FRouteArtifactCurrentInfo CurrentInfo;
+	FRouteArtifactSourceIdentity CurrentSourceIdentity;
+	TArray<FRouteArtifactRecord> CurrentRouteRecords;
+	TMap<int32, int32> CurrentRouteRecordIndexBySlot;
+	bool bHasCurrentManifestReadCache = false;
 	FRouteArtifactRecoveryResult LastRecoveryResult;
 	bool bCurrentSwapInProgress = false;
 	bool bRegistryOwned = false;
@@ -538,6 +542,20 @@ struct FRouteArtifactWorkspaceManager::FImpl
 			TEXT("Artifact generation failed. Attempt=%s Set=%s"),
 			*FailedAttemptID, *FailedSetID.Left(12));
 		return false;
+	}
+
+	void CacheCurrentManifestReadModel(const FRouteArtifactManifest& Manifest)
+	{
+		CurrentSourceIdentity = Manifest.SourceIdentity;
+		CurrentRouteRecords = Manifest.Routes;
+		CurrentRouteRecordIndexBySlot.Reset();
+		CurrentRouteRecordIndexBySlot.Reserve(CurrentRouteRecords.Num());
+		for (int32 Index = 0; Index < CurrentRouteRecords.Num(); ++Index)
+		{
+			CurrentRouteRecordIndexBySlot.Add(
+				CurrentRouteRecords[Index].RouteSlotIndex, Index);
+		}
+		bHasCurrentManifestReadCache = true;
 	}
 };
 
@@ -672,6 +690,35 @@ const FRouteArtifactRecoveryResult&
 FRouteArtifactWorkspaceManager::GetLastRecoveryResult() const
 {
 	return Impl->LastRecoveryResult;
+}
+
+const FRouteArtifactSourceIdentity*
+FRouteArtifactWorkspaceManager::GetCurrentSourceIdentity() const
+{
+	return Impl->CurrentStatus == ERouteArtifactCurrentStatus::Ready
+		&& Impl->bHasCurrentManifestReadCache
+		? &Impl->CurrentSourceIdentity
+		: nullptr;
+}
+
+bool FRouteArtifactWorkspaceManager::FindCurrentRouteRecord(
+	const int32 RouteSlotIndex,
+	FRouteArtifactRecord& OutRecord) const
+{
+	OutRecord = FRouteArtifactRecord{};
+	if (Impl->CurrentStatus != ERouteArtifactCurrentStatus::Ready
+		|| !Impl->bHasCurrentManifestReadCache)
+	{
+		return false;
+	}
+	const int32* RecordIndex =
+		Impl->CurrentRouteRecordIndexBySlot.Find(RouteSlotIndex);
+	if (!RecordIndex || !Impl->CurrentRouteRecords.IsValidIndex(*RecordIndex))
+	{
+		return false;
+	}
+	OutRecord = Impl->CurrentRouteRecords[*RecordIndex];
+	return true;
 }
 
 bool FRouteArtifactWorkspaceManager::RecoverWorkspace(
@@ -1369,6 +1416,7 @@ bool FRouteArtifactWorkspaceManager::FinalizeGenerationInternal(
 	Impl->CurrentInfo.MatchedCount = PromotedManifest.MatchedCount;
 	Impl->CurrentInfo.CurrentRoot = Current;
 	Impl->CurrentInfo.CreatedAtUtc = PromotedManifest.CreatedAtUtc;
+	Impl->CacheCurrentManifestReadModel(PromotedManifest);
 	Impl->ClearActive(false);
 	if (OutMetrics)
 	{
@@ -1439,6 +1487,7 @@ bool FRouteArtifactWorkspaceManager::LoadAndValidateCurrentArtifact(
 	Impl->CurrentInfo.MatchedCount = OutManifest.MatchedCount;
 	Impl->CurrentInfo.CurrentRoot = Current;
 	Impl->CurrentInfo.CreatedAtUtc = OutManifest.CreatedAtUtc;
+	Impl->CacheCurrentManifestReadModel(OutManifest);
 	return true;
 }
 

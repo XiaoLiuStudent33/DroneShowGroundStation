@@ -88,6 +88,14 @@ bool FDSPGCSUploadJobMirrorReliabilityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Consistent page applies"), Mirror.ApplyRoutePage(Page));
 	TestTrue(TEXT("Page completes route mirror"),
 		Mirror.IsRoutePageComplete() && Mirror.GetRouteStateCount() == 2);
+	TArray<int32> SortedRouteSlots;
+	Mirror.CopySortedRouteSlots(SortedRouteSlots);
+	TestEqual(TEXT("Sorted route slot count"), SortedRouteSlots.Num(), 2);
+	if (SortedRouteSlots.Num() == 2)
+	{
+		TestEqual(TEXT("First sorted route slot"), SortedRouteSlots[0], 0);
+		TestEqual(TEXT("Second sorted route slot"), SortedRouteSlots[1], 1);
+	}
 
 	dspgcs::UploadJobRouteStateDeltaDTO Delta;
 	Delta.uploadJobId = Baseline.uploadJobId;

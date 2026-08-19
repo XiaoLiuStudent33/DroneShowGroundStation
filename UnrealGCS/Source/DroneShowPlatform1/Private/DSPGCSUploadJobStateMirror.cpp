@@ -122,3 +122,14 @@ FDSPGCSUploadJobStateMirror::FindRoute(const int32 RouteSlotIndex) const
 	const auto Item = Routes.find(RouteSlotIndex);
 	return Item == Routes.end() ? nullptr : &Item->second;
 }
+
+void FDSPGCSUploadJobStateMirror::CopySortedRouteSlots(
+	TArray<int32>& OutRouteSlots) const
+{
+	OutRouteSlots.Reset(static_cast<int32>(Routes.size()));
+	for (const auto& Pair : Routes)
+	{
+		OutRouteSlots.Add(Pair.first);
+	}
+	OutRouteSlots.Sort();
+}

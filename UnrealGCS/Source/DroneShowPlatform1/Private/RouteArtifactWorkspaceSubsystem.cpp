@@ -159,6 +159,19 @@ URouteArtifactWorkspaceSubsystem::GetLastRecoveryResult() const
 	return Manager ? Manager->GetLastRecoveryResult() : Empty;
 }
 
+const FRouteArtifactSourceIdentity*
+URouteArtifactWorkspaceSubsystem::GetCurrentSourceIdentity() const
+{
+	return Manager ? Manager->GetCurrentSourceIdentity() : nullptr;
+}
+
+bool URouteArtifactWorkspaceSubsystem::FindCurrentRouteRecord(
+	const int32 RouteSlotIndex,
+	FRouteArtifactRecord& OutRecord) const
+{
+	return Manager && Manager->FindCurrentRouteRecord(RouteSlotIndex, OutRecord);
+}
+
 bool URouteArtifactWorkspaceSubsystem::CaptureAuthorityGate(
 	FRouteArtifactWorkspaceAuthorityGate& OutGate,
 	FString& OutError) const

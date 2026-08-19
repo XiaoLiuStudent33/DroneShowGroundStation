@@ -120,6 +120,11 @@ public:
 	bool HasActiveGeneration() const;
 	const FRouteArtifactCurrentInfo& GetCurrentInfo() const;
 	const FRouteArtifactRecoveryResult& GetLastRecoveryResult() const;
+	/** Read-only views of the already validated and cached Current Manifest. */
+	const FRouteArtifactSourceIdentity* GetCurrentSourceIdentity() const;
+	bool FindCurrentRouteRecord(
+		int32 RouteSlotIndex,
+		FRouteArtifactRecord& OutRecord) const;
 
 	/** Acquires the same per-root writer authority used by generation. */
 	bool RecoverWorkspace(FRouteArtifactRecoveryResult& OutResult, FString& OutError);

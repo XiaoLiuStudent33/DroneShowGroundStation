@@ -49,6 +49,10 @@ public:
 	bool IsCurrentSwapInProgress() const;
 	const FRouteArtifactCurrentInfo& GetCurrentInfo() const;
 	const FRouteArtifactRecoveryResult& GetLastRecoveryResult() const;
+	const FRouteArtifactSourceIdentity* GetCurrentSourceIdentity() const;
+	bool FindCurrentRouteRecord(
+		int32 RouteSlotIndex,
+		FRouteArtifactRecord& OutRecord) const;
 
 private:
 	friend class URouteWaypointGenerationSubsystem;

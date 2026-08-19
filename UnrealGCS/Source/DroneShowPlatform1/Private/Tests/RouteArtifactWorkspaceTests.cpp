@@ -290,6 +290,20 @@ bool FRouteArtifactWorkspaceLifecycleTests::RunTest(const FString& Parameters)
 	TestTrue(TEXT("First Current validates"),
 		Manager.LoadAndValidateCurrentArtifact(Loaded, Error));
 	TestEqual(TEXT("READY/Manifest set identity"), Loaded.ArtifactSetID, HandleA.ArtifactSetID);
+	const FRouteArtifactSourceIdentity* CachedSource = Manager.GetCurrentSourceIdentity();
+	TestNotNull(TEXT("Validated Current exposes cached source identity"), CachedSource);
+	if (CachedSource)
+	{
+		TestEqual(TEXT("Cached source is authoritative Manifest source"),
+			CachedSource->SourceDisplayFileName, ManifestA.SourceIdentity.SourceDisplayFileName);
+	}
+	FRouteArtifactRecord CachedRecord;
+	TestTrue(TEXT("Validated Current resolves cached route record"),
+		Manager.FindCurrentRouteRecord(4, CachedRecord));
+	TestEqual(TEXT("Route path comes from cached Manifest record"),
+		CachedRecord.RelativePath, ManifestA.Routes[4].RelativePath);
+	TestFalse(TEXT("Missing route record is not fabricated"),
+		Manager.FindCurrentRouteRecord(99, CachedRecord));
 
 	const FDirectoryImage CurrentA = CaptureDirectory(Current);
 	FRouteArtifactBuildIdentity BuildB;

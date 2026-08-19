@@ -29,6 +29,8 @@ public:
 		return bHasSnapshot ? &CurrentSnapshot : nullptr;
 	}
 	const dspgcs::UploadRouteStateDTO* FindRoute(int32 RouteSlotIndex) const;
+	/** Copies only deterministic ascending RouteSlot identifiers for one completed UI model build. */
+	void CopySortedRouteSlots(TArray<int32>& OutRouteSlots) const;
 	int32 GetRouteStateCount() const { return static_cast<int32>(Routes.size()); }
 	std::uint32_t GetNextRoutePageStart() const { return NextRoutePageStart; }
 	const std::string& GetPendingCommandID() const { return PendingCommandID; }
