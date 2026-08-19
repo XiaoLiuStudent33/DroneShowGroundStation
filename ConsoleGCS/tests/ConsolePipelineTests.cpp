@@ -34,6 +34,7 @@ int RunDSPFrozenAssignmentProtocolTests();
 int RunDSPFrozenAssignmentReceiverTests();
 int RunDSPFrozenAssignmentE2EServer(int argc, char** argv);
 int RunConsoleArtifactConsumerTests();
+int RunRouteArtifactV2ContractTests();
 int RunConsoleArtifactBenchmark(int argc, char** argv);
 int RunRouteMissionCodecTests();
 int RunRouteMissionBenchmarks(int argc, char** argv);
@@ -1408,6 +1409,10 @@ int main(const int argc, char** argv)
     {
         return RunConsoleArtifactConsumerTests();
     }
+    if (argc > 1 && std::string(argv[1]) == "--artifact-v2-contract-tests")
+    {
+        return RunRouteArtifactV2ContractTests();
+    }
     if (argc > 1 && std::string(argv[1]) == "--mission-tests")
     {
         return RunRouteMissionCodecTests();
@@ -1428,12 +1433,14 @@ int main(const int argc, char** argv)
     const int frozenAssignmentReceiverResult =
         RunDSPFrozenAssignmentReceiverTests();
     const int artifactConsumerResult = RunConsoleArtifactConsumerTests();
+    const int artifactV2ContractResult = RunRouteArtifactV2ContractTests();
     const int missionCodecResult = RunRouteMissionCodecTests();
     const int uploadJobResult = RunDSPUploadJobProtocolTests();
 
     if (pipelineResult == 0 && commandResult == 0 && dspCommandResult == 0 &&
         frozenAssignmentResult == 0 && frozenAssignmentReceiverResult == 0
-        && artifactConsumerResult == 0 && missionCodecResult == 0
+        && artifactConsumerResult == 0 && artifactV2ContractResult == 0
+        && missionCodecResult == 0
         && uploadJobResult == 0)
     {
         std::cout << "ConsoleGCS regression suite passed\n";
@@ -1447,6 +1454,7 @@ int main(const int argc, char** argv)
         << " frozenAssignment=" << frozenAssignmentResult
         << " frozenAssignmentReceiver=" << frozenAssignmentReceiverResult
         << " artifactConsumer=" << artifactConsumerResult
+        << " artifactV2Contract=" << artifactV2ContractResult
         << " missionCodec=" << missionCodecResult
         << " uploadJob=" << uploadJobResult
         << '\n';

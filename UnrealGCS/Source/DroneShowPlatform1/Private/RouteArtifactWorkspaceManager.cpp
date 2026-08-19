@@ -13,6 +13,7 @@
 #include "Misc/Paths.h"
 #include "RouteArtifactFilesystemSafety.h"
 #include "RouteArtifactSharedAdapter.h"
+#include "RouteArtifactSharedAdapterV2.h"
 #include "RouteArtifactWorkspacePaths.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRouteArtifactWorkspace, Log, All);
@@ -90,6 +91,54 @@ namespace
 			return false;
 		}
 		return true;
+	}
+
+	bool ValidateSourceGateV2(
+		const FRouteArtifactBuildIdentityV2& BuildIdentity,
+		const FRouteArtifactWorkspaceSourceGate& Gate,
+		FString& OutError)
+	{
+		if (!BuildIdentity.Validate(OutError))
+		{
+			return false;
+		}
+		if (!Gate.bSourceExists || !Gate.ActiveSourceIdentity.IsValid()
+			|| Gate.RouteDatasetGeneration <= 0
+			|| !Gate.GeneratorInputDigest.IsValid()
+			|| Gate.ActiveSourceIdentity.SourceDatasetDigest
+				!= BuildIdentity.SourceDatasetDigest
+			|| Gate.FrameCount != BuildIdentity.FrameCount
+			|| Gate.RouteSlotCount != BuildIdentity.RouteSlotCount
+			|| Gate.bHasRange != BuildIdentity.bHasRange
+			|| Gate.RangeStart != BuildIdentity.RangeStart
+			|| Gate.RangeEnd != BuildIdentity.RangeEnd
+			|| Gate.ShowOriginLatitudeE7 != BuildIdentity.ShowOriginLatitudeE7
+			|| Gate.ShowOriginLongitudeE7 != BuildIdentity.ShowOriginLongitudeE7
+			|| Gate.WaypointGeneratorVersion != BuildIdentity.WaypointGeneratorVersion
+			|| Gate.GeneratorInputDigest != BuildIdentity.GeneratorInputDigest)
+		{
+			OutError = TEXT("RouteSourceGateMismatch: active Route source or normalized origin differs.");
+			return false;
+		}
+		return true;
+	}
+
+	bool SameSourceGateV2(
+		const FRouteArtifactWorkspaceSourceGate& Left,
+		const FRouteArtifactWorkspaceSourceGate& Right)
+	{
+		return Left.bSourceExists == Right.bSourceExists
+			&& SameSource(Left.ActiveSourceIdentity, Right.ActiveSourceIdentity)
+			&& Left.RouteDatasetGeneration == Right.RouteDatasetGeneration
+			&& Left.FrameCount == Right.FrameCount
+			&& Left.RouteSlotCount == Right.RouteSlotCount
+			&& Left.bHasRange == Right.bHasRange
+			&& Left.RangeStart == Right.RangeStart
+			&& Left.RangeEnd == Right.RangeEnd
+			&& Left.ShowOriginLatitudeE7 == Right.ShowOriginLatitudeE7
+			&& Left.ShowOriginLongitudeE7 == Right.ShowOriginLongitudeE7
+			&& Left.WaypointGeneratorVersion == Right.WaypointGeneratorVersion
+			&& Left.GeneratorInputDigest == Right.GeneratorInputDigest;
 	}
 
 	bool WriteFlushedFile(const FString& Path, const TArray<uint8>& Bytes, FString& OutError)
@@ -273,8 +322,9 @@ namespace
 		}
 	}
 
+	template <typename ManifestType>
 	bool ValidateCurrentEntryAllowlist(
-		const FRouteArtifactManifest& Manifest,
+		const ManifestType& Manifest,
 		const TArray<FString>& RelativeFiles,
 		const TArray<FString>& RelativeDirectories,
 		FString& OutError)
@@ -315,9 +365,10 @@ namespace
 		return true;
 	}
 
+	template <typename ManifestType>
 	bool ValidateArtifactFilesSafe(
 		const FString& ArtifactRoot,
-		const FRouteArtifactManifest& Manifest,
+		const ManifestType& Manifest,
 		FString& OutError)
 	{
 		if (!RouteArtifactFilesystemSafety::ValidatePathNoReparse(
@@ -355,9 +406,10 @@ namespace
 		return true;
 	}
 
+	template <typename ManifestType>
 	bool ValidateArtifactFilePresenceSafe(
 		const FString& ArtifactRoot,
-		const FRouteArtifactManifest& Manifest,
+		const ManifestType& Manifest,
 		FString& OutError)
 	{
 		if (!RouteArtifactFilesystemSafety::ValidatePathNoReparse(
@@ -379,7 +431,7 @@ namespace
 		return true;
 	}
 
-	bool ValidateCurrentDirectory(
+	bool ValidateCurrentDirectoryV1(
 		const FString& Directory,
 		FRouteArtifactManifest& OutManifest,
 		FString& OutError,
@@ -441,6 +493,103 @@ namespace
 			&& ValidateCurrentEntryAllowlist(
 				OutManifest, RelativeFiles, RelativeDirectories, OutError);
 	}
+
+	bool ValidateCurrentDirectoryV2(
+		const FString& Directory,
+		FRouteArtifactManifestV2& OutManifest,
+		FString& OutError,
+		const bool bValidateRouteHashes = true)
+	{
+		IFileManager& Files = IFileManager::Get();
+		if (!Files.DirectoryExists(*Directory))
+		{
+			OutError = TEXT("Current Artifact directory does not exist.");
+			return false;
+		}
+		if (!RouteArtifactFilesystemSafety::ValidatePathNoReparse(
+			Directory, Directory, true, true, OutError))
+		{
+			return false;
+		}
+		const FString ManifestPath = FPaths::Combine(
+			Directory, RouteArtifactManifest::ManifestFilename);
+		const FString ReadyPath = FPaths::Combine(Directory, TEXT("READY"));
+		if (!RouteArtifactFilesystemSafety::ValidatePathNoReparse(
+			Directory, ManifestPath, true, false, OutError)
+			|| !RouteArtifactFilesystemSafety::ValidatePathNoReparse(
+				Directory, ReadyPath, true, false, OutError))
+		{
+			return false;
+		}
+		TArray<uint8> ManifestBytes;
+		if (!LoadBytes(ManifestPath, ManifestBytes, OutError)
+			|| !RouteArtifactManifestV2::ParseCanonicalManifest(
+				ManifestBytes, OutManifest, OutError))
+		{
+			return false;
+		}
+		TArray<uint8> ReadyBytes;
+		FString ReadySetID;
+		FRouteArtifactDigest256 ReadyDigest;
+		if (!LoadBytes(ReadyPath, ReadyBytes, OutError)
+			|| !FRouteArtifactWorkspaceManager::ParseReadyMarker(
+				ReadyBytes, ReadySetID, ReadyDigest, OutError)
+			|| ReadySetID != OutManifest.ArtifactSetID
+			|| ReadyDigest != OutManifest.ArtifactSetDigest)
+		{
+			if (OutError.IsEmpty())
+			{
+				OutError = TEXT("READY marker does not match the canonical v2 Manifest.");
+			}
+			return false;
+		}
+		if (bValidateRouteHashes
+			? !ValidateArtifactFilesSafe(Directory, OutManifest, OutError)
+			: !ValidateArtifactFilePresenceSafe(Directory, OutManifest, OutError))
+		{
+			return false;
+		}
+		TArray<FString> RelativeFiles;
+		TArray<FString> RelativeDirectories;
+		return RouteArtifactFilesystemSafety::EnumerateTreeNoReparse(
+			Directory, RelativeFiles, RelativeDirectories, OutError)
+			&& ValidateCurrentEntryAllowlist(
+				OutManifest, RelativeFiles, RelativeDirectories, OutError);
+	}
+
+	enum class EValidatedArtifactSchema : uint8
+	{
+		None,
+		V1,
+		V2
+	};
+
+	bool ValidateCurrentDirectoryAnySchema(
+		const FString& Directory,
+		EValidatedArtifactSchema& OutSchema,
+		FString& OutError)
+	{
+		OutSchema = EValidatedArtifactSchema::None;
+		FRouteArtifactManifestV2 ManifestV2;
+		FString V2Error;
+		if (ValidateCurrentDirectoryV2(Directory, ManifestV2, V2Error))
+		{
+			OutSchema = EValidatedArtifactSchema::V2;
+			OutError.Reset();
+			return true;
+		}
+		FRouteArtifactManifest ManifestV1;
+		FString V1Error;
+		if (ValidateCurrentDirectoryV1(Directory, ManifestV1, V1Error))
+		{
+			OutSchema = EValidatedArtifactSchema::V1;
+			OutError = TEXT("Legacy Route Artifact v1 Current is unsupported by v2 production consumers.");
+			return true;
+		}
+		OutError = V2Error.Contains(TEXT("ReparsePointDetected")) ? V2Error : V1Error;
+		if (OutError.IsEmpty()) OutError = V2Error;
+		return false;
+	}
 }
 
 struct FRouteArtifactWorkspaceManager::FImpl
@@ -453,6 +602,9 @@ struct FRouteArtifactWorkspaceManager::FImpl
 	FString RegistryKey;
 	TUniquePtr<FSystemWideCriticalSection> SystemWriterGuard;
 	FRouteArtifactExpectedInputs ExpectedInputs;
+	FRouteArtifactExpectedInputsV2 ExpectedInputsV2;
+	FRouteArtifactWorkspaceSourceGate ExpectedSourceGateV2;
+	bool bActiveV2 = false;
 	int32 ExpectedRouteSlotCount = 0;
 	ERouteArtifactCurrentStatus CurrentStatus = ERouteArtifactCurrentStatus::None;
 	ERouteArtifactGenerationStatus GenerationStatus = ERouteArtifactGenerationStatus::None;
@@ -518,6 +670,9 @@ struct FRouteArtifactWorkspaceManager::FImpl
 		ArtifactSetID.Reset();
 		ActiveRoot.Reset();
 		ExpectedInputs = FRouteArtifactExpectedInputs{};
+		ExpectedInputsV2 = FRouteArtifactExpectedInputsV2{};
+		ExpectedSourceGateV2 = FRouteArtifactWorkspaceSourceGate{};
+		bActiveV2 = false;
 		ExpectedRouteSlotCount = 0;
 		bCurrentSwapInProgress = false;
 		ReleaseWriter();
@@ -545,6 +700,20 @@ struct FRouteArtifactWorkspaceManager::FImpl
 	}
 
 	void CacheCurrentManifestReadModel(const FRouteArtifactManifest& Manifest)
+	{
+		CurrentSourceIdentity = Manifest.SourceIdentity;
+		CurrentRouteRecords = Manifest.Routes;
+		CurrentRouteRecordIndexBySlot.Reset();
+		CurrentRouteRecordIndexBySlot.Reserve(CurrentRouteRecords.Num());
+		for (int32 Index = 0; Index < CurrentRouteRecords.Num(); ++Index)
+		{
+			CurrentRouteRecordIndexBySlot.Add(
+				CurrentRouteRecords[Index].RouteSlotIndex, Index);
+		}
+		bHasCurrentManifestReadCache = true;
+	}
+
+	void CacheCurrentManifestReadModel(const FRouteArtifactManifestV2& Manifest)
 	{
 		CurrentSourceIdentity = Manifest.SourceIdentity;
 		CurrentRouteRecords = Manifest.Routes;
@@ -695,7 +864,8 @@ FRouteArtifactWorkspaceManager::GetLastRecoveryResult() const
 const FRouteArtifactSourceIdentity*
 FRouteArtifactWorkspaceManager::GetCurrentSourceIdentity() const
 {
-	return Impl->CurrentStatus == ERouteArtifactCurrentStatus::Ready
+	return (Impl->CurrentStatus == ERouteArtifactCurrentStatus::Ready
+		|| Impl->CurrentStatus == ERouteArtifactCurrentStatus::LegacyUnsupported)
 		&& Impl->bHasCurrentManifestReadCache
 		? &Impl->CurrentSourceIdentity
 		: nullptr;
@@ -706,7 +876,8 @@ bool FRouteArtifactWorkspaceManager::FindCurrentRouteRecord(
 	FRouteArtifactRecord& OutRecord) const
 {
 	OutRecord = FRouteArtifactRecord{};
-	if (Impl->CurrentStatus != ERouteArtifactCurrentStatus::Ready
+	if ((Impl->CurrentStatus != ERouteArtifactCurrentStatus::Ready
+		&& Impl->CurrentStatus != ERouteArtifactCurrentStatus::LegacyUnsupported)
 		|| !Impl->bHasCurrentManifestReadCache)
 	{
 		return false;
@@ -802,11 +973,11 @@ bool FRouteArtifactWorkspaceManager::RecoverWorkspace(
 			TEXT("Staging safety validation failed."), false);
 	}
 
-	FRouteArtifactManifest CurrentManifest;
+	EValidatedArtifactSchema CurrentSchema = EValidatedArtifactSchema::None;
 	FString CurrentError;
 	const bool bCurrentExists = Files.DirectoryExists(*Current);
 	const bool bCurrentValid = bCurrentExists
-		&& ValidateCurrentDirectory(Current, CurrentManifest, CurrentError);
+		&& ValidateCurrentDirectoryAnySchema(Current, CurrentSchema, CurrentError);
 	if (bCurrentExists && CurrentError.Contains(TEXT("ReparsePointDetected")))
 	{
 		Impl->CurrentStatus = ERouteArtifactCurrentStatus::Invalid;
@@ -819,9 +990,10 @@ bool FRouteArtifactWorkspaceManager::RecoverWorkspace(
 	TArray<FString> ValidPrevious;
 	for (const FString& Previous : Entries.Previous)
 	{
-		FRouteArtifactManifest PreviousManifest;
+		EValidatedArtifactSchema PreviousSchema = EValidatedArtifactSchema::None;
 		FString PreviousError;
-		if (ValidateCurrentDirectory(Previous, PreviousManifest, PreviousError))
+		if (ValidateCurrentDirectoryAnySchema(
+			Previous, PreviousSchema, PreviousError))
 		{
 			ValidPrevious.Add(Previous);
 		}
@@ -850,9 +1022,15 @@ bool FRouteArtifactWorkspaceManager::RecoverWorkspace(
 	};
 	auto ReloadCurrent = [&]()
 	{
-		FRouteArtifactManifest Reloaded;
-		FString ReloadError;
-		return LoadAndValidateCurrentArtifact(Reloaded, ReloadError);
+		FRouteArtifactManifestV2 ReloadedV2;
+		FString ReloadErrorV2;
+		if (LoadAndValidateCurrentArtifact(ReloadedV2, ReloadErrorV2))
+		{
+			return true;
+		}
+		FRouteArtifactManifest ReloadedV1;
+		FString ReloadErrorV1;
+		return LoadAndValidateCurrentArtifact(ReloadedV1, ReloadErrorV1);
 	};
 	auto CompleteWithCleanupState = [&](const bool bRecoveredPrevious)
 	{
@@ -1071,6 +1249,86 @@ bool FRouteArtifactWorkspaceManager::BeginGeneration(
 	Impl->ArtifactSetID = ArtifactSetID;
 	Impl->ExpectedInputs.BuildIdentity = BuildIdentity;
 	Impl->ExpectedInputs.SourceIdentity = Gate.ActiveSourceIdentity;
+	Impl->bActiveV2 = false;
+	Impl->ExpectedRouteSlotCount = Gate.RouteSlotCount;
+	Impl->GenerationStatus = ERouteArtifactGenerationStatus::Generating;
+	OutHandle.AttemptID = AttemptID;
+	OutHandle.ArtifactSetID = ArtifactSetID;
+	OutHandle.StagingRoot = AttemptRoot;
+	return true;
+}
+
+bool FRouteArtifactWorkspaceManager::BeginGeneration(
+	const FRouteArtifactBuildIdentityV2& BuildIdentity,
+	const FRouteArtifactWorkspaceSourceGate& Gate,
+	FRouteArtifactGenerationHandle& OutHandle,
+	FString& OutError)
+{
+	OutHandle = FRouteArtifactGenerationHandle{};
+	OutError.Reset();
+	if (HasActiveGeneration())
+	{
+		OutError = TEXT("GenerationAlreadyActive: this manager already owns an attempt.");
+		return false;
+	}
+	if (Impl->LastRecoveryResult.Status == ERouteArtifactRecoveryStatus::RecoveryRequired
+		|| Impl->LastRecoveryResult.Status == ERouteArtifactRecoveryStatus::Unrecoverable
+		|| Impl->LastRecoveryResult.Status == ERouteArtifactRecoveryStatus::Busy)
+	{
+		OutError = TEXT("WorkspaceRecoveryRequired: recover the Workspace before generation.");
+		return false;
+	}
+	if (!ValidateSourceGateV2(BuildIdentity, Gate, OutError))
+	{
+		return false;
+	}
+
+	Impl->GenerationStatus = ERouteArtifactGenerationStatus::Creating;
+	FString Root;
+	FString ArtifactSetID;
+	if (!ResolveWorkspaceRoot(Root, OutError)
+		|| !RouteArtifactIdentityV2::ComputeArtifactSetID(
+			BuildIdentity, ArtifactSetID, OutError))
+	{
+		Impl->GenerationStatus = ERouteArtifactGenerationStatus::Failed;
+		return false;
+	}
+	if (!Impl->AcquireWriter(Root, OutError))
+	{
+		Impl->GenerationStatus = ERouteArtifactGenerationStatus::Failed;
+		OutError = TEXT("GenerationAlreadyActive: Workspace root writer is active.");
+		return false;
+	}
+
+	IFileManager& Files = IFileManager::Get();
+	const FString Staging = StagingPath(Root);
+	const FString AttemptID = FGuid::NewGuid().ToString(EGuidFormats::Digits).ToLower();
+	const FString AttemptRoot = FPaths::Combine(Staging, AttemptID);
+	if (!Files.MakeDirectory(*Root, true)
+		|| !Files.MakeDirectory(*Staging, true)
+		|| !Files.MakeDirectory(*AttemptRoot, true)
+		|| !RouteArtifactFilesystemSafety::ValidatePathNoReparse(
+			Root, Root, true, true, OutError)
+		|| !RouteArtifactFilesystemSafety::ValidatePathNoReparse(
+			Root, Staging, true, true, OutError)
+		|| !RouteArtifactFilesystemSafety::ValidatePathNoReparse(
+			Root, AttemptRoot, true, true, OutError))
+	{
+		Impl->ActiveRoot = Root;
+		Impl->AttemptID = AttemptID;
+		Impl->AttemptRoot = AttemptRoot;
+		Impl->ArtifactSetID = ArtifactSetID;
+		return Impl->FailAndCleanup(TEXT("WorkspaceDirectoryCreationFailed."), OutError);
+	}
+
+	Impl->ActiveRoot = Root;
+	Impl->AttemptID = AttemptID;
+	Impl->AttemptRoot = AttemptRoot;
+	Impl->ArtifactSetID = ArtifactSetID;
+	Impl->ExpectedInputsV2.BuildIdentity = BuildIdentity;
+	Impl->ExpectedInputsV2.SourceIdentity = Gate.ActiveSourceIdentity;
+	Impl->ExpectedSourceGateV2 = Gate;
+	Impl->bActiveV2 = true;
 	Impl->ExpectedRouteSlotCount = Gate.RouteSlotCount;
 	Impl->GenerationStatus = ERouteArtifactGenerationStatus::Generating;
 	OutHandle.AttemptID = AttemptID;
@@ -1125,6 +1383,14 @@ bool FRouteArtifactWorkspaceManager::ResolveSafeStagingRoutePath(
 bool FRouteArtifactWorkspaceManager::FinalizeGeneration(
 	const FRouteArtifactManifest& Manifest,
 	const FRouteArtifactWorkspaceAuthorityGate& CurrentGate,
+	FString& OutError)
+{
+	return FinalizeGenerationInternal(Manifest, CurrentGate, false, OutError, nullptr);
+}
+
+bool FRouteArtifactWorkspaceManager::FinalizeGeneration(
+	const FRouteArtifactManifestV2& Manifest,
+	const FRouteArtifactWorkspaceSourceGate& CurrentGate,
 	FString& OutError)
 {
 	return FinalizeGenerationInternal(Manifest, CurrentGate, false, OutError, nullptr);
@@ -1229,6 +1495,121 @@ bool FRouteArtifactWorkspaceManager::FinalizeGeneratedRoutes(
 	}
 	const double DigestStartSeconds = FPlatformTime::Seconds();
 	if (!RouteArtifactManifest::ComputeArtifactSetDigest(
+		InOutManifest, InOutManifest.ArtifactSetDigest, OutError))
+	{
+		const FString Reason = OutError;
+		return Impl->FailAndCleanup(Reason, OutError);
+	}
+	if (OutMetrics)
+	{
+		OutMetrics->ManifestConstructionSerializationSeconds =
+			FPlatformTime::Seconds() - DigestStartSeconds;
+	}
+	return FinalizeGenerationInternal(
+		InOutManifest, CurrentGate, true, OutError, OutMetrics);
+}
+
+bool FRouteArtifactWorkspaceManager::FinalizeGeneratedRoutes(
+	FRouteArtifactManifestV2& InOutManifest,
+	const FRouteArtifactWorkspaceSourceGate& CurrentGate,
+	const FRouteWaypointSourceValidationContext& SourceValidationContext,
+	FString& OutError,
+	FRouteArtifactFinalizeMetrics* const OutMetrics,
+	const TFunction<bool()>& IsCancelled)
+{
+	OutError.Reset();
+	if (OutMetrics)
+	{
+		*OutMetrics = FRouteArtifactFinalizeMetrics{};
+	}
+	if (!HasActiveGeneration()
+		|| !Impl->bActiveV2
+		|| Impl->GenerationStatus != ERouteArtifactGenerationStatus::Generating)
+	{
+		OutError = TEXT("GenerationNotActive: no writable v2 attempt can be finalized.");
+		return false;
+	}
+	if (!ValidateSourceGateV2(Impl->ExpectedInputsV2.BuildIdentity, CurrentGate, OutError)
+		|| !SameSourceGateV2(CurrentGate, Impl->ExpectedSourceGateV2)
+		|| !SourceValidationContext.IsValid()
+		|| !SameSource(
+			SourceValidationContext.SourceIdentity,
+			Impl->ExpectedInputsV2.SourceIdentity)
+		|| SourceValidationContext.RouteDatasetGeneration
+			!= Impl->ExpectedSourceGateV2.RouteDatasetGeneration
+		|| SourceValidationContext.RouteCount != Impl->ExpectedRouteSlotCount
+		|| SourceValidationContext.FrameCount != InOutManifest.FrameCount
+		|| SourceValidationContext.GeneratorContext.GeneratorInputDigest
+			!= InOutManifest.GeneratorInputDigest)
+	{
+		const FString Reason = OutError.IsEmpty()
+			? TEXT("FinalizeRouteSourceGateChanged.") : OutError;
+		return Impl->FailAndCleanup(Reason, OutError);
+	}
+	if (InOutManifest.ArtifactSetID != Impl->ArtifactSetID
+		|| InOutManifest.RouteSlotCount != Impl->ExpectedRouteSlotCount
+		|| !InOutManifest.Routes.IsEmpty()
+		|| InOutManifest.ArtifactSetDigest.IsValid())
+	{
+		return Impl->FailAndCleanup(
+			TEXT("GeneratedRouteManifestV2DraftInvalid."), OutError);
+	}
+
+#if WITH_DEV_AUTOMATION_TESTS
+	Impl->TestFinalizeRouteValidationReadCount = 0;
+#endif
+	InOutManifest.Routes.Reserve(Impl->ExpectedRouteSlotCount);
+	const double ValidationStartSeconds = FPlatformTime::Seconds();
+	for (int32 RouteSlotIndex = 0;
+		RouteSlotIndex < Impl->ExpectedRouteSlotCount; ++RouteSlotIndex)
+	{
+		if (IsCancelled && IsCancelled())
+		{
+			return Impl->FailAndCleanup(
+				TEXT("GeneratedRouteValidationCancelled."), OutError);
+		}
+		FRouteArtifactRecord& Record = InOutManifest.Routes.AddDefaulted_GetRef();
+		Record.RouteSlotIndex = RouteSlotIndex;
+		FString RoutePath;
+		if (!RouteArtifactWorkspacePaths::BuildRouteRelativePath(
+				RouteSlotIndex, Record.RelativePath, OutError)
+			|| !RouteArtifactWorkspacePaths::ResolvePathUnderRoot(
+				Impl->AttemptRoot, Record.RelativePath, RoutePath, OutError)
+			|| !RouteArtifactFilesystemSafety::ValidatePathNoReparse(
+				Impl->AttemptRoot, RoutePath, true, false, OutError))
+		{
+			const FString Reason = OutError.IsEmpty()
+				? TEXT("GeneratedRouteAuthoritativeHashFailed.") : OutError;
+			return Impl->FailAndCleanup(Reason, OutError);
+		}
+		FRouteWaypointValidationResult Validation;
+		if (!RouteWaypointValidator::ValidateAndHashFileStreaming(
+				RoutePath,
+				RouteSlotIndex,
+				InOutManifest.FrameCount,
+				ERouteWaypointValidationLevel::SourceBound,
+				&SourceValidationContext,
+				Validation,
+				IsCancelled))
+		{
+			const FString Reason = Validation.Diagnostic.IsEmpty()
+				? TEXT("GeneratedRouteSourceBoundValidationFailed.")
+				: Validation.Diagnostic;
+			return Impl->FailAndCleanup(Reason, OutError);
+		}
+		Record.RouteArtifactDigest = Validation.FileDigest;
+		Record.FileByteSize = Validation.FileByteSize;
+#if WITH_DEV_AUTOMATION_TESTS
+		++Impl->TestFinalizeRouteValidationReadCount;
+#endif
+	}
+	if (OutMetrics)
+	{
+		OutMetrics->AuthoritativeRouteValidationSeconds =
+			FPlatformTime::Seconds() - ValidationStartSeconds;
+	}
+	const double DigestStartSeconds = FPlatformTime::Seconds();
+	if (!RouteArtifactManifestV2::ComputeArtifactSetDigest(
 		InOutManifest, InOutManifest.ArtifactSetDigest, OutError))
 	{
 		const FString Reason = OutError;
@@ -1382,7 +1763,7 @@ bool FRouteArtifactWorkspaceManager::FinalizeGenerationInternal(
 
 	FRouteArtifactManifest PromotedManifest;
 	FString PromotedError;
-	if (!ValidateCurrentDirectory(
+	if (!ValidateCurrentDirectoryV1(
 		Current, PromotedManifest, PromotedError,
 		!bRouteFilesAlreadyAuthoritativelyHashed))
 	{
@@ -1407,6 +1788,8 @@ bool FRouteArtifactWorkspaceManager::FinalizeGenerationInternal(
 	}
 
 	Impl->CurrentStatus = ERouteArtifactCurrentStatus::Ready;
+	Impl->CurrentInfo = FRouteArtifactCurrentInfo{};
+	Impl->CurrentInfo.ArtifactSchemaVersion = PromotedManifest.ArtifactSchemaVersion;
 	Impl->CurrentInfo.ArtifactSetID = PromotedManifest.ArtifactSetID;
 	Impl->CurrentInfo.ArtifactSetDigest = PromotedManifest.ArtifactSetDigest;
 	Impl->CurrentInfo.AssignmentBinding = PromotedManifest.AssignmentBinding;
@@ -1414,6 +1797,191 @@ bool FRouteArtifactWorkspaceManager::FinalizeGenerationInternal(
 		PromotedManifest.SourceIdentity.SourceDatasetDigest;
 	Impl->CurrentInfo.RouteSlotCount = PromotedManifest.RouteSlotCount;
 	Impl->CurrentInfo.MatchedCount = PromotedManifest.MatchedCount;
+	Impl->CurrentInfo.CurrentRoot = Current;
+	Impl->CurrentInfo.CreatedAtUtc = PromotedManifest.CreatedAtUtc;
+	Impl->CacheCurrentManifestReadModel(PromotedManifest);
+	Impl->ClearActive(false);
+	if (OutMetrics)
+	{
+		OutMetrics->ReadyPromotionSeconds =
+			FPlatformTime::Seconds() - PromotionStartSeconds;
+	}
+	return true;
+}
+
+bool FRouteArtifactWorkspaceManager::FinalizeGenerationInternal(
+	const FRouteArtifactManifestV2& Manifest,
+	const FRouteArtifactWorkspaceSourceGate& CurrentGate,
+	const bool bRouteFilesAlreadyAuthoritativelyHashed,
+	FString& OutError,
+	FRouteArtifactFinalizeMetrics* const OutMetrics)
+{
+	OutError.Reset();
+	if (!HasActiveGeneration()
+		|| !Impl->bActiveV2
+		|| Impl->GenerationStatus != ERouteArtifactGenerationStatus::Generating)
+	{
+		OutError = TEXT("GenerationNotActive: no writable v2 attempt can be finalized.");
+		return false;
+	}
+	Impl->GenerationStatus = ERouteArtifactGenerationStatus::Validating;
+	if (!ValidateSourceGateV2(Impl->ExpectedInputsV2.BuildIdentity, CurrentGate, OutError)
+		|| !SameSourceGateV2(CurrentGate, Impl->ExpectedSourceGateV2))
+	{
+		const FString Reason = OutError.IsEmpty()
+			? TEXT("FinalizeRouteSourceGateChanged.") : OutError;
+		return Impl->FailAndCleanup(Reason, OutError);
+	}
+	if (Manifest.ArtifactSetID != Impl->ArtifactSetID
+		|| Manifest.RouteSlotCount != Impl->ExpectedRouteSlotCount
+		|| !RouteArtifactManifestV2::ValidateManifestStructure(Manifest, OutError)
+		|| !RouteArtifactManifestV2::ValidateManifestAgainstExpectedInputs(
+			Manifest, Impl->ExpectedInputsV2, OutError)
+		|| (bRouteFilesAlreadyAuthoritativelyHashed
+			? !ValidateArtifactFilePresenceSafe(Impl->AttemptRoot, Manifest, OutError)
+			: !ValidateArtifactFilesSafe(Impl->AttemptRoot, Manifest, OutError)))
+	{
+		const FString Reason = OutError.IsEmpty()
+			? TEXT("FinalizeManifestV2OrRouteValidationFailed.") : OutError;
+		return Impl->FailAndCleanup(Reason, OutError);
+	}
+
+	const double ManifestStartSeconds = FPlatformTime::Seconds();
+	TArray<uint8> ManifestBytes;
+	if (!RouteArtifactManifestV2::SerializeCanonicalManifest(
+		Manifest, ManifestBytes, OutError)
+		|| !WriteByTemporaryRename(
+			Impl->AttemptRoot, TEXT("manifest.tmp"),
+			RouteArtifactManifest::ManifestFilename, ManifestBytes, OutError))
+	{
+		const FString Reason = OutError;
+		return Impl->FailAndCleanup(Reason, OutError);
+	}
+	TArray<uint8> PersistedManifestBytes;
+	FRouteArtifactManifestV2 PersistedManifest;
+	if (!LoadBytes(FPaths::Combine(Impl->AttemptRoot,
+			RouteArtifactManifest::ManifestFilename), PersistedManifestBytes, OutError)
+		|| !RouteArtifactManifestV2::ParseCanonicalManifest(
+			PersistedManifestBytes, PersistedManifest, OutError)
+		|| !RouteArtifactManifestV2::ValidateManifestAgainstExpectedInputs(
+			PersistedManifest, Impl->ExpectedInputsV2, OutError)
+		|| (bRouteFilesAlreadyAuthoritativelyHashed
+			? !ValidateArtifactFilePresenceSafe(
+				Impl->AttemptRoot, PersistedManifest, OutError)
+			: !ValidateArtifactFilesSafe(
+				Impl->AttemptRoot, PersistedManifest, OutError)))
+	{
+		const FString Reason = OutError;
+		return Impl->FailAndCleanup(Reason, OutError);
+	}
+	if (OutMetrics)
+	{
+		OutMetrics->ManifestConstructionSerializationSeconds +=
+			FPlatformTime::Seconds() - ManifestStartSeconds;
+	}
+
+	const double PromotionStartSeconds = FPlatformTime::Seconds();
+	TArray<uint8> ReadyBytes;
+	if (!SerializeReadyMarker(
+		Manifest.ArtifactSetID, Manifest.ArtifactSetDigest, ReadyBytes, OutError)
+		|| !WriteByTemporaryRename(
+			Impl->AttemptRoot, TEXT("READY.tmp"), TEXT("READY"), ReadyBytes, OutError))
+	{
+		const FString Reason = OutError;
+		return Impl->FailAndCleanup(Reason, OutError);
+	}
+
+	dronegcs::route_artifact::ArtifactReadLease PromotionGate;
+	bool bRecoveredAbandonedUploadLease = false;
+	std::string PromotionGateError;
+	const dronegcs::route_artifact::ArtifactReadLeaseAcquireResult GateResult =
+		PromotionGate.TryAcquire(
+			std::wstring(*Impl->ActiveRoot),
+			bRecoveredAbandonedUploadLease,
+			PromotionGateError);
+	if (GateResult !=
+		dronegcs::route_artifact::ArtifactReadLeaseAcquireResult::Acquired)
+	{
+		Impl->GenerationStatus = ERouteArtifactGenerationStatus::Generating;
+		OutError = GateResult ==
+			dronegcs::route_artifact::ArtifactReadLeaseAcquireResult::Busy
+			? TEXT("ArtifactCurrentLeaseBusy: an Upload Job is reading Current.")
+			: FString::Printf(
+				TEXT("ArtifactCurrentLeaseError: %s"),
+				UTF8_TO_TCHAR(PromotionGateError.c_str()));
+		return false;
+	}
+	if (bRecoveredAbandonedUploadLease)
+	{
+		UE_LOG(LogRouteArtifactWorkspace, Display,
+			TEXT("Recovered abandoned Artifact Current lease before v2 promotion."));
+	}
+
+	Impl->GenerationStatus = ERouteArtifactGenerationStatus::Finalizing;
+	Impl->bCurrentSwapInProgress = true;
+	IFileManager& Files = IFileManager::Get();
+	const FString Current = CurrentPath(Impl->ActiveRoot);
+	const FString Previous = FPaths::Combine(
+		StagingPath(Impl->ActiveRoot), TEXT(".previous-") + Impl->AttemptID);
+	const bool bHadCurrent = Files.DirectoryExists(*Current);
+	if (bHadCurrent && !MoveDirectory(Previous, Current))
+	{
+		return Impl->FailAndCleanup(TEXT("CurrentToPreviousMoveFailed."), OutError);
+	}
+
+#if WITH_DEV_AUTOMATION_TESTS
+	const bool bPromotionMoved = !Impl->bTestFailAttemptPromotion
+		&& MoveDirectory(Current, Impl->AttemptRoot);
+#else
+	const bool bPromotionMoved = MoveDirectory(Current, Impl->AttemptRoot);
+#endif
+	if (!bPromotionMoved)
+	{
+		const bool bRolledBack = !bHadCurrent || MoveDirectory(Current, Previous);
+		if (!bRolledBack)
+		{
+			Impl->ClearActive(true);
+			Impl->CurrentStatus = ERouteArtifactCurrentStatus::Invalid;
+			OutError = TEXT("AttemptPromotionAndRollbackFailed: recovery is required.");
+			return false;
+		}
+		return Impl->FailAndCleanup(
+			TEXT("AttemptPromotionFailed; previous Current restored."), OutError);
+	}
+
+	FRouteArtifactManifestV2 PromotedManifest;
+	FString PromotedError;
+	if (!ValidateCurrentDirectoryV2(
+		Current, PromotedManifest, PromotedError,
+		!bRouteFilesAlreadyAuthoritativelyHashed))
+	{
+		const bool bMovedBadCurrentBack = MoveDirectory(Impl->AttemptRoot, Current);
+		const bool bRolledBack = !bHadCurrent || MoveDirectory(Current, Previous);
+		if (!bMovedBadCurrentBack || !bRolledBack)
+		{
+			Impl->ClearActive(true);
+			Impl->CurrentStatus = ERouteArtifactCurrentStatus::Invalid;
+			OutError = TEXT("PromotedCurrentValidationAndRollbackFailed: recovery is required.");
+			return false;
+		}
+		return Impl->FailAndCleanup(PromotedError, OutError);
+	}
+
+	if (bHadCurrent && !DeleteTree(Previous))
+	{
+		UE_LOG(LogRouteArtifactWorkspace, Warning,
+			TEXT("Artifact v2 replacement succeeded but previous cleanup requires recovery. Attempt=%s"),
+			*Impl->AttemptID);
+	}
+
+	Impl->CurrentStatus = ERouteArtifactCurrentStatus::Ready;
+	Impl->CurrentInfo = FRouteArtifactCurrentInfo{};
+	Impl->CurrentInfo.ArtifactSchemaVersion = PromotedManifest.ArtifactSchemaVersion;
+	Impl->CurrentInfo.ArtifactSetID = PromotedManifest.ArtifactSetID;
+	Impl->CurrentInfo.ArtifactSetDigest = PromotedManifest.ArtifactSetDigest;
+	Impl->CurrentInfo.SourceDatasetDigest =
+		PromotedManifest.SourceIdentity.SourceDatasetDigest;
+	Impl->CurrentInfo.RouteSlotCount = PromotedManifest.RouteSlotCount;
 	Impl->CurrentInfo.CurrentRoot = Current;
 	Impl->CurrentInfo.CreatedAtUtc = PromotedManifest.CreatedAtUtc;
 	Impl->CacheCurrentManifestReadModel(PromotedManifest);
@@ -1472,13 +2040,15 @@ bool FRouteArtifactWorkspaceManager::LoadAndValidateCurrentArtifact(
 		OutError = TEXT("Current Artifact is not present.");
 		return false;
 	}
-	if (!ValidateCurrentDirectory(Current, OutManifest, OutError))
+	if (!ValidateCurrentDirectoryV1(Current, OutManifest, OutError))
 	{
 		Impl->CurrentStatus = ERouteArtifactCurrentStatus::Invalid;
 		Impl->CurrentInfo = FRouteArtifactCurrentInfo{};
 		return false;
 	}
-	Impl->CurrentStatus = ERouteArtifactCurrentStatus::Ready;
+	Impl->CurrentStatus = ERouteArtifactCurrentStatus::LegacyUnsupported;
+	Impl->CurrentInfo = FRouteArtifactCurrentInfo{};
+	Impl->CurrentInfo.ArtifactSchemaVersion = OutManifest.ArtifactSchemaVersion;
 	Impl->CurrentInfo.ArtifactSetID = OutManifest.ArtifactSetID;
 	Impl->CurrentInfo.ArtifactSetDigest = OutManifest.ArtifactSetDigest;
 	Impl->CurrentInfo.AssignmentBinding = OutManifest.AssignmentBinding;
@@ -1488,6 +2058,54 @@ bool FRouteArtifactWorkspaceManager::LoadAndValidateCurrentArtifact(
 	Impl->CurrentInfo.CurrentRoot = Current;
 	Impl->CurrentInfo.CreatedAtUtc = OutManifest.CreatedAtUtc;
 	Impl->CacheCurrentManifestReadModel(OutManifest);
+	OutError.Reset();
+	return true;
+}
+
+bool FRouteArtifactWorkspaceManager::LoadAndValidateCurrentArtifact(
+	FRouteArtifactManifestV2& OutManifest,
+	FString& OutError)
+{
+	OutManifest = FRouteArtifactManifestV2{};
+	FString Root;
+	if (!ResolveWorkspaceRoot(Root, OutError))
+	{
+		Impl->CurrentStatus = ERouteArtifactCurrentStatus::Invalid;
+		return false;
+	}
+	const FString Current = CurrentPath(Root);
+	const bool bRootExists = IFileManager::Get().DirectoryExists(*Root);
+	if (!RouteArtifactFilesystemSafety::ValidatePathNoReparse(
+		Root, Root, bRootExists, true, OutError))
+	{
+		Impl->CurrentStatus = ERouteArtifactCurrentStatus::Invalid;
+		Impl->CurrentInfo = FRouteArtifactCurrentInfo{};
+		return false;
+	}
+	if (!IFileManager::Get().DirectoryExists(*Current))
+	{
+		Impl->CurrentStatus = ERouteArtifactCurrentStatus::None;
+		Impl->CurrentInfo = FRouteArtifactCurrentInfo{};
+		OutError = TEXT("Current Artifact is not present.");
+		return false;
+	}
+	if (!ValidateCurrentDirectoryV2(Current, OutManifest, OutError))
+	{
+		Impl->CurrentStatus = ERouteArtifactCurrentStatus::Invalid;
+		Impl->CurrentInfo = FRouteArtifactCurrentInfo{};
+		return false;
+	}
+	Impl->CurrentStatus = ERouteArtifactCurrentStatus::Ready;
+	Impl->CurrentInfo = FRouteArtifactCurrentInfo{};
+	Impl->CurrentInfo.ArtifactSchemaVersion = OutManifest.ArtifactSchemaVersion;
+	Impl->CurrentInfo.ArtifactSetID = OutManifest.ArtifactSetID;
+	Impl->CurrentInfo.ArtifactSetDigest = OutManifest.ArtifactSetDigest;
+	Impl->CurrentInfo.SourceDatasetDigest = OutManifest.SourceIdentity.SourceDatasetDigest;
+	Impl->CurrentInfo.RouteSlotCount = OutManifest.RouteSlotCount;
+	Impl->CurrentInfo.CurrentRoot = Current;
+	Impl->CurrentInfo.CreatedAtUtc = OutManifest.CreatedAtUtc;
+	Impl->CacheCurrentManifestReadModel(OutManifest);
+	OutError.Reset();
 	return true;
 }
 
@@ -1567,6 +2185,16 @@ int64 FRouteArtifactWorkspaceManager::GetTestFinalizeRouteValidationReadCount() 
 
 bool FRouteArtifactWorkspaceManager::ValidateCurrentEntryAllowlistForTest(
 	const FRouteArtifactManifest& Manifest,
+	const TArray<FString>& RelativeFiles,
+	const TArray<FString>& RelativeDirectories,
+	FString& OutError)
+{
+	return ValidateCurrentEntryAllowlist(
+		Manifest, RelativeFiles, RelativeDirectories, OutError);
+}
+
+bool FRouteArtifactWorkspaceManager::ValidateCurrentEntryAllowlistForTest(
+	const FRouteArtifactManifestV2& Manifest,
 	const TArray<FString>& RelativeFiles,
 	const TArray<FString>& RelativeDirectories,
 	FString& OutError)

@@ -4,6 +4,7 @@
 #include "Engine/GameInstance.h"
 #include "RouteAssignmentSubsystem.h"
 #include "RoutePreviewSubsystem.h"
+#include "RouteWaypointGenerator.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRouteArtifactWorkspaceSubsystem, Log, All);
 
@@ -71,6 +72,17 @@ bool URouteArtifactWorkspaceSubsystem::BeginGeneration(
 		&& Manager->BeginGeneration(BuildIdentity, Gate, OutHandle, OutError);
 }
 
+bool URouteArtifactWorkspaceSubsystem::BeginGeneration(
+	const FRouteArtifactBuildIdentityV2& BuildIdentity,
+	const FRouteArtifactWorkspaceSourceGate& CapturedSourceGate,
+	FRouteArtifactGenerationHandle& OutHandle,
+	FString& OutError)
+{
+	check(IsInGameThread());
+	return Manager && Manager->BeginGeneration(
+		BuildIdentity, CapturedSourceGate, OutHandle, OutError);
+}
+
 bool URouteArtifactWorkspaceSubsystem::ResolveSafeStagingRoutePath(
 	const int32 RouteSlotIndex,
 	FString& OutPath,
@@ -88,6 +100,24 @@ bool URouteArtifactWorkspaceSubsystem::FinalizeGeneration(
 	if (!Manager || !CaptureAuthorityGate(Gate, OutError))
 	{
 		// A failed recapture is itself a Finalize gate failure. Abort releases ownership.
+		if (Manager && Manager->HasActiveGeneration())
+		{
+			FString AbortError;
+			Manager->AbortGeneration(AbortError);
+		}
+		return false;
+	}
+	return Manager->FinalizeGeneration(Manifest, Gate, OutError);
+}
+
+bool URouteArtifactWorkspaceSubsystem::FinalizeGeneration(
+	const FRouteArtifactManifestV2& Manifest,
+	FString& OutError)
+{
+	check(IsInGameThread());
+	FRouteArtifactWorkspaceSourceGate Gate;
+	if (!Manager || !CaptureSourceGate(Gate, OutError))
+	{
 		if (Manager && Manager->HasActiveGeneration())
 		{
 			FString AbortError;
@@ -118,6 +148,26 @@ bool URouteArtifactWorkspaceSubsystem::FinalizeGeneratedRoutes(
 		InOutManifest, Gate, SourceValidationContext, OutError);
 }
 
+bool URouteArtifactWorkspaceSubsystem::FinalizeGeneratedRoutes(
+	FRouteArtifactManifestV2& InOutManifest,
+	const FRouteWaypointSourceValidationContext& SourceValidationContext,
+	FString& OutError)
+{
+	check(IsInGameThread());
+	FRouteArtifactWorkspaceSourceGate Gate;
+	if (!Manager || !CaptureSourceGate(Gate, OutError))
+	{
+		if (Manager && Manager->HasActiveGeneration())
+		{
+			FString AbortError;
+			Manager->AbortGeneration(AbortError);
+		}
+		return false;
+	}
+	return Manager->FinalizeGeneratedRoutes(
+		InOutManifest, Gate, SourceValidationContext, OutError);
+}
+
 bool URouteArtifactWorkspaceSubsystem::AbortGeneration(FString& OutError)
 {
 	check(IsInGameThread());
@@ -126,6 +176,13 @@ bool URouteArtifactWorkspaceSubsystem::AbortGeneration(FString& OutError)
 
 bool URouteArtifactWorkspaceSubsystem::LoadAndValidateCurrentArtifact(
 	FRouteArtifactManifest& OutManifest,
+	FString& OutError)
+{
+	return Manager && Manager->LoadAndValidateCurrentArtifact(OutManifest, OutError);
+}
+
+bool URouteArtifactWorkspaceSubsystem::LoadAndValidateCurrentArtifact(
+	FRouteArtifactManifestV2& OutManifest,
 	FString& OutError)
 {
 	return Manager && Manager->LoadAndValidateCurrentArtifact(OutManifest, OutError);
@@ -221,5 +278,54 @@ bool URouteArtifactWorkspaceSubsystem::CaptureAuthorityGate(
 	OutGate.bSourceExists = RoutePreview->IsRouteLoaded();
 	OutGate.ActiveSourceIdentity = RoutePreview->GetActiveSourceIdentity();
 	OutGate.RouteSlotCount = RoutePreview->GetDroneCount();
+	return true;
+}
+
+bool URouteArtifactWorkspaceSubsystem::CaptureSourceGate(
+	FRouteArtifactWorkspaceSourceGate& OutGate,
+	FString& OutError) const
+{
+	check(IsInGameThread());
+	OutGate = FRouteArtifactWorkspaceSourceGate{};
+	UGameInstance* GameInstance = GetGameInstance();
+	URoutePreviewSubsystem* RoutePreview = GameInstance
+		? GameInstance->GetSubsystem<URoutePreviewSubsystem>() : nullptr;
+	if (!RoutePreview)
+	{
+		OutError = TEXT("Route source gate subsystem is unavailable.");
+		return false;
+	}
+	const TSharedPtr<const FRoutePreviewData, ESPMode::ThreadSafe> RouteData =
+		RoutePreview->CaptureRouteDataSnapshot();
+	if (!RouteData.IsValid() || !RouteData->IsLoaded() || !RouteData->bShowOriginSet)
+	{
+		OutError = TEXT("A loaded Route dataset with Show Origin is required.");
+		return false;
+	}
+	FRouteWaypointGeneratorContext GeneratorContext;
+	FRouteWaypointGeneratorError GeneratorError;
+	if (!RouteWaypointGenerator::BuildContext(
+		RouteData->ShowOriginLatitude,
+		RouteData->ShowOriginLongitude,
+		GeneratorContext,
+		GeneratorError))
+	{
+		OutError = GeneratorError.Diagnostic;
+		return false;
+	}
+	OutGate.bSourceExists = true;
+	OutGate.ActiveSourceIdentity = RouteData->SourceIdentity;
+	OutGate.RouteDatasetGeneration = RoutePreview->GetRouteDatasetGeneration();
+	OutGate.FrameCount = RouteData->FrameCount;
+	OutGate.RouteSlotCount = RouteData->DroneCount;
+	OutGate.bHasRange = RouteData->OptionalRangeStart != INDEX_NONE
+		&& RouteData->OptionalRangeEnd != INDEX_NONE;
+	OutGate.RangeStart = OutGate.bHasRange ? RouteData->OptionalRangeStart : 0;
+	OutGate.RangeEnd = OutGate.bHasRange ? RouteData->OptionalRangeEnd : 0;
+	OutGate.ShowOriginLatitudeE7 = GeneratorContext.NormalizedShowOriginLatitudeE7;
+	OutGate.ShowOriginLongitudeE7 = GeneratorContext.NormalizedShowOriginLongitudeE7;
+	OutGate.WaypointGeneratorVersion = GeneratorContext.WaypointGeneratorVersion;
+	OutGate.GeneratorInputDigest = GeneratorContext.GeneratorInputDigest;
+	OutError.Reset();
 	return true;
 }

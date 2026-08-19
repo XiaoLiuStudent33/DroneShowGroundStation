@@ -38,6 +38,48 @@ struct FGCSRouteUploadArtifactDisplay
 	bool bArtifactMismatch = false;
 };
 
+struct FGCSRouteWorkflowCommandGateInputs
+{
+	bool bHasPreparedRoute = false;
+	bool bOriginValid = false;
+	bool bRouteLoaded = false;
+	bool bShowOriginSet = false;
+	bool bWorkspaceReady = false;
+	bool bGenerationActive = false;
+	bool bCommandInFlight = false;
+};
+
+struct FGCSRouteWorkflowCommandGate
+{
+	bool bRouteBrowseEnabled = false;
+	bool bOutputBrowseEnabled = false;
+	bool bLoadPreviewEnabled = false;
+	bool bGenerateWaypointsEnabled = false;
+};
+
+enum class EGCSRouteWorkflowCommandErrorCategory : uint8
+{
+	None,
+	Dataset,
+	Preview,
+	Artifact
+};
+
+#if WITH_DEV_AUTOMATION_TESTS
+struct FGCSRouteWorkflowCommandTestHooks
+{
+	TFunction<bool(FString&)> OpenNpzDialog;
+	TFunction<bool(FString&)> OpenFolderDialog;
+	TFunction<bool(const FString&, FString&)> PrepareRoute;
+	TFunction<bool(FString&)> CommitRoute;
+	TFunction<bool(double, double, double, FString&)> SetOrigin;
+	TFunction<bool(bool, FString&)> SetOverlay;
+	TFunction<bool(const FString&, FString&)> SetWorkspaceRoot;
+	TFunction<bool(FString&, FString&)> ResolveWorkspaceRoot;
+	TFunction<bool(int32, FString&)> StartGeneration;
+};
+#endif
+
 /**
  * Presentation-only owner for the Route Workflow window.
  *
@@ -72,6 +114,16 @@ public:
 		const FString& CurrentArtifactDigest,
 		const FString& CurrentRoot,
 		const FString& CurrentSourceDataset);
+	static bool ParseOriginInputs(
+		const FString& LatitudeText,
+		const FString& LongitudeText,
+		const FString& AltitudeText,
+		double& OutLatitude,
+		double& OutLongitude,
+		double& OutAltitude,
+		FString& OutError);
+	static FGCSRouteWorkflowCommandGate ComputeCommandGate(
+		const FGCSRouteWorkflowCommandGateInputs& Inputs);
 
 #if WITH_DEV_AUTOMATION_TESTS
 	void InitializeForTest(UGameInstance* InGameInstance);
@@ -91,11 +143,37 @@ public:
 	const UGCSRouteUploadListItem* FindRouteItemForTest(int32 RouteSlotIndex) const;
 	static uint64 EstimateRouteItemModelBytes(int32 ItemCount);
 	void RefreshVisibleRouteRowsForTest() { RefreshVisibleRouteRows(); }
+	void SetCommandTestHooks(FGCSRouteWorkflowCommandTestHooks InHooks)
+	{
+		CommandTestHooks = MoveTemp(InHooks);
+	}
+	void SetCommandGateInputsForTest(const FGCSRouteWorkflowCommandGateInputs& Inputs)
+	{
+		CommandGateInputsForTest = Inputs;
+	}
+	void ClearCommandGateInputsForTest() { CommandGateInputsForTest.Reset(); }
+	void ClickRouteBrowseForTest() { HandleRouteBrowseClicked(); }
+	void ClickOutputBrowseForTest() { HandleOutputBrowseClicked(); }
+	void ClickLoadPreviewForTest() { HandleLoadPreviewClicked(); }
+	void ClickGenerateWaypointsForTest() { HandleGenerateWaypointsClicked(); }
+	void RefreshCommandControlsForTest() { UpdateCommandControlState(); }
+	void RefreshReadOnlyStateForTest() { RefreshReadOnlyState(); }
+	const FString& GetSelectedRoutePathForTest() const { return SelectedRouteImportFilePath; }
+	const FString& GetCommandErrorForTest() const { return CommandErrorMessage; }
+	double GetCommandErrorExpiryForTest() const { return CommandErrorExpiresAtSeconds; }
 #endif
 
 private:
 	UFUNCTION()
 	void HandleRouteWorkflowClicked();
+	UFUNCTION()
+	void HandleRouteBrowseClicked();
+	UFUNCTION()
+	void HandleOutputBrowseClicked();
+	UFUNCTION()
+	void HandleLoadPreviewClicked();
+	UFUNCTION()
+	void HandleGenerateWaypointsClicked();
 
 	UUserWidget* CreateRouteWorkflowWidget(FString& OutError);
 	bool BindWorkflowWidgets(UUserWidget* WorkflowWidget, FString& OutError);
@@ -109,6 +187,13 @@ private:
 		FName PreferredInstanceName,
 		FName UniqueRequiredChildName) const;
 	void ApplyReadOnlyControlState();
+	void BindCommandControls();
+	void UnbindCommandControls();
+	FGCSRouteWorkflowCommandGateInputs GatherCommandGateInputs() const;
+	void UpdateCommandControlState();
+	void SetCommandError(EGCSRouteWorkflowCommandErrorCategory Category, const FString& Message);
+	void ClearCommandError(EGCSRouteWorkflowCommandErrorCategory Category);
+	void ApplyCommandErrorPresentation();
 	void RefreshReadOnlyState();
 	void RefreshArtifactIdentity();
 	void SyncRouteListModel();
@@ -145,6 +230,13 @@ private:
 	int64 RouteListRebuildCount = 0;
 	TSet<TWeakObjectPtr<UUserWidget>> ValidatedRouteRows;
 	bool bUploadArtifactMismatch = false;
+	FString SelectedRouteImportFilePath;
+	FString SelectedRouteSourceDigest;
+	FString CommandErrorMessage;
+	double CommandErrorExpiresAtSeconds = 0.0;
+	EGCSRouteWorkflowCommandErrorCategory CommandErrorCategory =
+		EGCSRouteWorkflowCommandErrorCategory::None;
+	bool bCommandInFlight = false;
 	FTSTicker::FDelegateHandle RefreshTickerHandle;
 	bool bBindingValid = false;
 
@@ -152,7 +244,10 @@ private:
 	TFunction<UUserWidget*()> WorkflowFactoryForTest;
 	bool bSkipRequiredWidgetBindingForTest = false;
 	int32 WorkflowCreationCount = 0;
+	FGCSRouteWorkflowCommandTestHooks CommandTestHooks;
+	TOptional<FGCSRouteWorkflowCommandGateInputs> CommandGateInputsForTest;
 #endif
 
 	static constexpr float RefreshIntervalSeconds = 0.2f;
+	static constexpr double CommandErrorLifetimeSeconds = 5.0;
 };

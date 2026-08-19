@@ -32,17 +32,28 @@ public:
 		const FRouteArtifactBuildIdentity& BuildIdentity,
 		FRouteArtifactGenerationHandle& OutHandle,
 		FString& OutError);
+	bool BeginGeneration(
+		const FRouteArtifactBuildIdentityV2& BuildIdentity,
+		const FRouteArtifactWorkspaceSourceGate& CapturedSourceGate,
+		FRouteArtifactGenerationHandle& OutHandle,
+		FString& OutError);
 	bool ResolveSafeStagingRoutePath(
 		int32 RouteSlotIndex,
 		FString& OutPath,
 		FString& OutError) const;
 	bool FinalizeGeneration(const FRouteArtifactManifest& Manifest, FString& OutError);
+	bool FinalizeGeneration(const FRouteArtifactManifestV2& Manifest, FString& OutError);
 	bool FinalizeGeneratedRoutes(
 		FRouteArtifactManifest& InOutManifest,
 		const FRouteWaypointSourceValidationContext& SourceValidationContext,
 		FString& OutError);
+	bool FinalizeGeneratedRoutes(
+		FRouteArtifactManifestV2& InOutManifest,
+		const FRouteWaypointSourceValidationContext& SourceValidationContext,
+		FString& OutError);
 	bool AbortGeneration(FString& OutError);
 	bool LoadAndValidateCurrentArtifact(FRouteArtifactManifest& OutManifest, FString& OutError);
+	bool LoadAndValidateCurrentArtifact(FRouteArtifactManifestV2& OutManifest, FString& OutError);
 
 	ERouteArtifactCurrentStatus GetCurrentStatus() const;
 	ERouteArtifactGenerationStatus GetGenerationStatus() const;
@@ -59,6 +70,9 @@ private:
 	FRouteArtifactWorkspaceManager* GetGenerationManager() const { return Manager.Get(); }
 	bool CaptureAuthorityGate(
 		FRouteArtifactWorkspaceAuthorityGate& OutGate,
+		FString& OutError) const;
+	bool CaptureSourceGate(
+		FRouteArtifactWorkspaceSourceGate& OutGate,
 		FString& OutError) const;
 
 	TUniquePtr<FRouteArtifactWorkspaceManager> Manager;

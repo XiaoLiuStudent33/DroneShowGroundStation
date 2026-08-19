@@ -128,6 +128,65 @@ namespace
 		return false;
 #endif
 	}
+
+	bool OpenRuntimeFolderDialog(FString& OutFolderPath)
+	{
+		OutFolderPath.Reset();
+#if PLATFORM_WINDOWS
+		const HRESULT InitializeResult = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+		const bool bUninitializeCom = SUCCEEDED(InitializeResult);
+		if (FAILED(InitializeResult) && InitializeResult != RPC_E_CHANGED_MODE)
+		{
+			return false;
+		}
+
+		IFileOpenDialog* Dialog = nullptr;
+		HRESULT Result = ::CoCreateInstance(
+			CLSID_FileOpenDialog,
+			nullptr,
+			CLSCTX_INPROC_SERVER,
+			IID_PPV_ARGS(&Dialog));
+		if (SUCCEEDED(Result) && Dialog)
+		{
+			FILEOPENDIALOGOPTIONS Options = {};
+			if (SUCCEEDED(Dialog->GetOptions(&Options)))
+			{
+				Dialog->SetOptions(Options | FOS_PICKFOLDERS | FOS_PATHMUSTEXIST
+					| FOS_FORCEFILESYSTEM);
+			}
+
+			const HWND ParentWindow = FSlateApplication::IsInitialized()
+				? static_cast<HWND>(const_cast<void*>(
+					FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr)))
+				: nullptr;
+			Result = Dialog->Show(ParentWindow);
+			if (SUCCEEDED(Result))
+			{
+				IShellItem* SelectedItem = nullptr;
+				if (SUCCEEDED(Dialog->GetResult(&SelectedItem)) && SelectedItem)
+				{
+					PWSTR SelectedPath = nullptr;
+					if (SUCCEEDED(SelectedItem->GetDisplayName(
+						SIGDN_FILESYSPATH, &SelectedPath)) && SelectedPath)
+					{
+						OutFolderPath = SelectedPath;
+						::CoTaskMemFree(SelectedPath);
+					}
+					SelectedItem->Release();
+				}
+			}
+			Dialog->Release();
+		}
+
+		if (bUninitializeCom)
+		{
+			::CoUninitialize();
+		}
+		return !OutFolderPath.IsEmpty();
+#else
+		return false;
+#endif
+	}
 }
 
 class FGCSMarqueeInputProcessor final : public IInputProcessor

@@ -238,4 +238,205 @@ bool FGCSRouteWorkflowRouteListScaleTest::RunTest(const FString& Parameters)
 	C->Shutdown(); GI->Shutdown(); return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowCommandOriginGateTest,
+	"DroneGCS.UI.RouteWorkflow.CommandOriginAndGate",
+	EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowCommandOriginGateTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	double Latitude=0.0,Longitude=0.0,Altitude=0.0;
+	FString Error;
+	TestTrue(TEXT("Valid origin"),UGCSRouteWorkflowCoordinator::ParseOriginInputs(
+		TEXT(" 30.500000 "),TEXT("120.25"),TEXT("12.75"),
+		Latitude,Longitude,Altitude,Error));
+	TestEqual(TEXT("Parsed latitude"),Latitude,30.5);
+	TestEqual(TEXT("Parsed longitude"),Longitude,120.25);
+	TestEqual(TEXT("Parsed altitude"),Altitude,12.75);
+	TestFalse(TEXT("Empty latitude rejected"),UGCSRouteWorkflowCoordinator::ParseOriginInputs(
+		TEXT(""),TEXT("120"),TEXT("10"),Latitude,Longitude,Altitude,Error));
+	TestFalse(TEXT("NaN rejected"),UGCSRouteWorkflowCoordinator::ParseOriginInputs(
+		TEXT("NaN"),TEXT("120"),TEXT("10"),Latitude,Longitude,Altitude,Error));
+	TestFalse(TEXT("Inf rejected"),UGCSRouteWorkflowCoordinator::ParseOriginInputs(
+		TEXT("30"),TEXT("Inf"),TEXT("10"),Latitude,Longitude,Altitude,Error));
+	TestFalse(TEXT("Partial parse rejected"),UGCSRouteWorkflowCoordinator::ParseOriginInputs(
+		TEXT("30x"),TEXT("120"),TEXT("10"),Latitude,Longitude,Altitude,Error));
+	TestFalse(TEXT("Latitude range rejected"),UGCSRouteWorkflowCoordinator::ParseOriginInputs(
+		TEXT("90.01"),TEXT("120"),TEXT("10"),Latitude,Longitude,Altitude,Error));
+	TestFalse(TEXT("Longitude range rejected"),UGCSRouteWorkflowCoordinator::ParseOriginInputs(
+		TEXT("30"),TEXT("180.01"),TEXT("10"),Latitude,Longitude,Altitude,Error));
+
+	FGCSRouteWorkflowCommandGateInputs Inputs;
+	FGCSRouteWorkflowCommandGate Gate=UGCSRouteWorkflowCoordinator::ComputeCommandGate(Inputs);
+	TestTrue(TEXT("No dataset allows Route Browse"),Gate.bRouteBrowseEnabled);
+	TestTrue(TEXT("No dataset allows Output Browse"),Gate.bOutputBrowseEnabled);
+	TestFalse(TEXT("No dataset blocks Load"),Gate.bLoadPreviewEnabled);
+	TestFalse(TEXT("No dataset blocks Generate"),Gate.bGenerateWaypointsEnabled);
+	Inputs.bHasPreparedRoute=true; Inputs.bOriginValid=true;
+	Gate=UGCSRouteWorkflowCoordinator::ComputeCommandGate(Inputs);
+	TestTrue(TEXT("Prepared valid origin allows Load"),Gate.bLoadPreviewEnabled);
+	TestFalse(TEXT("Prepared blocks Generate"),Gate.bGenerateWaypointsEnabled);
+	Inputs=FGCSRouteWorkflowCommandGateInputs{};
+	Inputs.bRouteLoaded=true; Inputs.bShowOriginSet=true; Inputs.bWorkspaceReady=true;
+	Gate=UGCSRouteWorkflowCoordinator::ComputeCommandGate(Inputs);
+	TestTrue(TEXT("Offline route prerequisites allow Generate"),Gate.bGenerateWaypointsEnabled);
+	Inputs.bGenerationActive=true;
+	Gate=UGCSRouteWorkflowCoordinator::ComputeCommandGate(Inputs);
+	TestFalse(TEXT("Generation active disables Route Browse"),Gate.bRouteBrowseEnabled);
+	TestFalse(TEXT("Generation active disables Output Browse"),Gate.bOutputBrowseEnabled);
+	TestFalse(TEXT("Generation active disables Load"),Gate.bLoadPreviewEnabled);
+	TestFalse(TEXT("Generation active disables Generate"),Gate.bGenerateWaypointsEnabled);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowCommandDispatchTest,
+	"DroneGCS.UI.RouteWorkflow.CommandDispatch",
+	EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowCommandDispatchTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UGameInstance* GI=NewObject<UGameInstance>(GEngine);
+	if(!TestNotNull(TEXT("GameInstance"),GI)) return false;
+	GI->InitializeStandalone(TEXT("GCSRouteWorkflowCommandDispatchTest"));
+	UGCSRouteWorkflowCoordinator* C=NewObject<UGCSRouteWorkflowCoordinator>(GI);
+	C->InitializeForTest(GI);
+	UClass* WorkflowClass=LoadClass<UUserWidget>(nullptr,TEXT("/Game/UI/WBP_GCS_RouteWorkflow.WBP_GCS_RouteWorkflow_C"));
+	if(!TestNotNull(TEXT("Workflow class"),WorkflowClass)) { GI->Shutdown(); return false; }
+	C->SetWorkflowFactoryForTest([GI,WorkflowClass](){return CreateWidget<UUserWidget>(GI,WorkflowClass);},false);
+	FString ShowError;
+	if(!TestTrue(TEXT("Workflow command widgets bind"),C->ShowRouteWorkflow(ShowError)))
+	{
+		AddError(ShowError); C->Shutdown(); GI->Shutdown(); return false;
+	}
+	UUserWidget* Workflow=C->GetWorkflowWidgetForTest();
+	UUserWidget* Convert=Workflow&&Workflow->WidgetTree
+		? Cast<UUserWidget>(Workflow->WidgetTree->FindWidget(TEXT("WBP_GCS_RouteConvert"))):nullptr;
+	if(!TestNotNull(TEXT("RouteConvert page"),Convert))
+	{
+		C->Shutdown(); GI->Shutdown(); return false;
+	}
+	UEditableTextBox* Latitude=Cast<UEditableTextBox>(Convert->WidgetTree->FindWidget(TEXT("EDT_OriginLatitude")));
+	UEditableTextBox* Longitude=Cast<UEditableTextBox>(Convert->WidgetTree->FindWidget(TEXT("EDT_OriginLongitude")));
+	UEditableTextBox* Altitude=Cast<UEditableTextBox>(Convert->WidgetTree->FindWidget(TEXT("EDT_OriginAltitude")));
+	TestNotNull(TEXT("Latitude input"),Latitude); TestNotNull(TEXT("Longitude input"),Longitude); TestNotNull(TEXT("Altitude input"),Altitude);
+
+	FGCSRouteWorkflowCommandGateInputs BrowseGate;
+	BrowseGate.bWorkspaceReady=true;
+	C->SetCommandGateInputsForTest(BrowseGate);
+	int32 DialogCalls=0,PrepareCalls=0;
+	FGCSRouteWorkflowCommandTestHooks Hooks;
+	Hooks.OpenNpzDialog=[&DialogCalls](FString&){++DialogCalls;return false;};
+	Hooks.PrepareRoute=[&PrepareCalls](const FString&,FString&){++PrepareCalls;return true;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	C->ClickRouteBrowseForTest();
+	TestEqual(TEXT("NPZ cancel opens once"),DialogCalls,1);
+	TestEqual(TEXT("NPZ cancel does not Prepare"),PrepareCalls,0);
+	TestTrue(TEXT("NPZ cancel keeps selection empty"),C->GetSelectedRoutePathForTest().IsEmpty());
+
+	Hooks={};
+	Hooks.OpenNpzDialog=[&DialogCalls,C](FString& Out){++DialogCalls;Out=TEXT("C:/fixtures/show-a.npz");C->ClickRouteBrowseForTest();return true;};
+	Hooks.PrepareRoute=[&PrepareCalls](const FString&,FString&){++PrepareCalls;return true;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	C->ClickRouteBrowseForTest();
+	TestEqual(TEXT("Reentrant dialog call suppressed"),DialogCalls,2);
+	TestEqual(TEXT("Valid NPZ Prepare called once"),PrepareCalls,1);
+	const FString SuccessfulSelection=C->GetSelectedRoutePathForTest();
+	TestTrue(TEXT("Successful NPZ path retained"),SuccessfulSelection.EndsWith(TEXT("show-a.npz")));
+
+	FString ActiveRouteIdentity=TEXT("active-before-failure");
+	Hooks={};
+	Hooks.OpenNpzDialog=[](FString& Out){Out=TEXT("C:/fixtures/broken.npz");return true;};
+	Hooks.PrepareRoute=[&PrepareCalls,&ActiveRouteIdentity](const FString&,FString& OutError){++PrepareCalls;OutError=TEXT("Synthetic prepare failure");return false;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	AddExpectedError(TEXT("Route Workflow command rejected: Synthetic prepare failure"),EAutomationExpectedErrorFlags::Contains,1);
+	C->ClickRouteBrowseForTest();
+	TestEqual(TEXT("Prepare failure preserves selected path"),C->GetSelectedRoutePathForTest(),SuccessfulSelection);
+	TestEqual(TEXT("Prepare failure preserves active route"),ActiveRouteIdentity,FString(TEXT("active-before-failure")));
+	TestTrue(TEXT("Command error has bounded expiry"),C->GetCommandErrorExpiryForTest()-FPlatformTime::Seconds()>0.0&&C->GetCommandErrorExpiryForTest()-FPlatformTime::Seconds()<=5.1);
+	C->RefreshReadOnlyStateForTest();
+	UTextBlock* DatasetState=Cast<UTextBlock>(Convert->WidgetTree->FindWidget(TEXT("TXT_StateDatasetValue")));
+	TestTrue(TEXT("5Hz refresh preserves transient command error"),DatasetState&&DatasetState->GetText().ToString().Contains(TEXT("Synthetic prepare failure")));
+
+	if(Latitude) Latitude->SetText(FText::FromString(TEXT("30.5")));
+	if(Longitude) Longitude->SetText(FText::FromString(TEXT("120.25")));
+	if(Altitude) Altitude->SetText(FText::FromString(TEXT("50")));
+	FGCSRouteWorkflowCommandGateInputs LoadGate;
+	LoadGate.bHasPreparedRoute=true; LoadGate.bOriginValid=true; LoadGate.bWorkspaceReady=true;
+	C->SetCommandGateInputsForTest(LoadGate);
+	TArray<FString> Sequence;
+	Hooks={};
+	Hooks.CommitRoute=[&Sequence](FString&){Sequence.Add(TEXT("Commit"));return true;};
+	Hooks.SetOrigin=[&Sequence](double Lat,double Lon,double Alt,FString&){Sequence.Add(FString::Printf(TEXT("Origin:%.2f:%.2f:%.2f"),Lat,Lon,Alt));return true;};
+	Hooks.SetOverlay=[&Sequence](bool bEnabled,FString&){Sequence.Add(bEnabled?TEXT("OverlayOn"):TEXT("OverlayOff"));return true;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	C->ClickLoadPreviewForTest();
+	TestEqual(TEXT("Load sequence count"),Sequence.Num(),3);
+	if(Sequence.Num()==3)
+	{
+		TestEqual(TEXT("Load first Commit"),Sequence[0],FString(TEXT("Commit")));
+		TestTrue(TEXT("Load second Origin"),Sequence[1].StartsWith(TEXT("Origin:")));
+		TestEqual(TEXT("Load third Overlay"),Sequence[2],FString(TEXT("OverlayOn")));
+	}
+
+	Sequence.Reset();
+	Hooks={};
+	Hooks.CommitRoute=[&Sequence](FString&){Sequence.Add(TEXT("Commit"));return true;};
+	Hooks.SetOrigin=[&Sequence](double,double,double,FString& OutError){Sequence.Add(TEXT("OriginFail"));OutError=TEXT("Synthetic origin failure");return false;};
+	Hooks.SetOverlay=[&Sequence](bool,FString&){Sequence.Add(TEXT("UnexpectedOverlay"));return true;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	AddExpectedError(TEXT("Route Workflow command rejected: Synthetic origin failure"),EAutomationExpectedErrorFlags::Contains,1);
+	C->ClickLoadPreviewForTest();
+	TestEqual(TEXT("Partial failure stops before Overlay"),Sequence.Num(),2);
+
+	C->SetCommandGateInputsForTest(BrowseGate);
+	int32 FolderCalls=0,SetRootCalls=0;
+	Hooks={};
+	Hooks.OpenFolderDialog=[&FolderCalls](FString&){++FolderCalls;return false;};
+	Hooks.SetWorkspaceRoot=[&SetRootCalls](const FString&,FString&){++SetRootCalls;return true;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	C->ClickOutputBrowseForTest();
+	TestEqual(TEXT("Folder cancel opens once"),FolderCalls,1);
+	TestEqual(TEXT("Folder cancel does not set root"),SetRootCalls,0);
+
+	FString ConfiguredRoot;
+	Hooks={};
+	Hooks.OpenFolderDialog=[&FolderCalls](FString& Out){++FolderCalls;Out=TEXT("C:/ArtifactsRoot");return true;};
+	Hooks.SetWorkspaceRoot=[&SetRootCalls,&ConfiguredRoot](const FString& Root,FString&){++SetRootCalls;ConfiguredRoot=Root;return true;};
+	Hooks.ResolveWorkspaceRoot=[](FString& Out,FString&){Out=TEXT("C:/ArtifactsRoot");return true;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	C->ClickOutputBrowseForTest();
+	TestEqual(TEXT("Workspace setter invoked once"),SetRootCalls,1);
+	TestEqual(TEXT("Workspace root retained by authority hook"),ConfiguredRoot,FString(TEXT("C:/ArtifactsRoot")));
+
+	Hooks={};
+	Hooks.OpenFolderDialog=[](FString& Out){Out=TEXT("C:/RejectedRoot");return true;};
+	Hooks.SetWorkspaceRoot=[&SetRootCalls](const FString&,FString& OutError){++SetRootCalls;OutError=TEXT("Synthetic workspace failure");return false;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	AddExpectedError(TEXT("Route Workflow command rejected: Synthetic workspace failure"),EAutomationExpectedErrorFlags::Contains,1);
+	C->ClickOutputBrowseForTest();
+	TestEqual(TEXT("Workspace failure preserves previous root"),ConfiguredRoot,FString(TEXT("C:/ArtifactsRoot")));
+
+	FGCSRouteWorkflowCommandGateInputs ReadyGate;
+	ReadyGate.bRouteLoaded=true; ReadyGate.bShowOriginSet=true;
+	ReadyGate.bWorkspaceReady=true;
+	C->SetCommandGateInputsForTest(ReadyGate);
+	int32 StartCalls=0;
+	Hooks={};
+	Hooks.StartGeneration=[&StartCalls,C](int32 Workers,FString&){++StartCalls;C->ClickGenerateWaypointsForTest();return Workers==0;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	C->ClickGenerateWaypointsForTest();
+	TestEqual(TEXT("StartGeneration(0) invoked once despite reentrancy"),StartCalls,1);
+
+	ReadyGate.bGenerationActive=true;
+	C->SetCommandGateInputsForTest(ReadyGate);
+	C->RefreshCommandControlsForTest();
+	for(const FName Name:{FName(TEXT("BTN_RouteBrowse")),FName(TEXT("BTN_OutputBrowse")),FName(TEXT("BTN_LoadPreview")),FName(TEXT("BTN_GenerateWaypoints"))})
+	{
+		UButton* Button=Cast<UButton>(Convert->WidgetTree->FindWidget(Name));
+		TestTrue(*FString::Printf(TEXT("%s disabled during generation"),*Name.ToString()),Button&&!Button->GetIsEnabled());
+	}
+	TestTrue(TEXT("Origin inputs disabled during generation"),Latitude&&!Latitude->GetIsEnabled()&&Longitude&&!Longitude->GetIsEnabled()&&Altitude&&!Altitude->GetIsEnabled());
+
+	C->Shutdown(); GI->Shutdown(); return true;
+}
+
 #endif

@@ -2,12 +2,14 @@
 
 #include "CoreMinimal.h"
 #include "RouteArtifactManifest.h"
+#include "RouteArtifactManifestV2.h"
 #include "RouteWaypointValidator.h"
 
 enum class ERouteArtifactCurrentStatus : uint8
 {
 	None,
 	Ready,
+	LegacyUnsupported,
 	Invalid
 };
 
@@ -69,6 +71,23 @@ struct DRONESHOWPLATFORM1_API FRouteArtifactWorkspaceAuthorityGate
 	int32 RouteSlotCount = 0;
 };
 
+/** Runtime-only active Route source observation for pure Route Artifact v2. */
+struct DRONESHOWPLATFORM1_API FRouteArtifactWorkspaceSourceGate
+{
+	bool bSourceExists = false;
+	FRouteArtifactSourceIdentity ActiveSourceIdentity;
+	int64 RouteDatasetGeneration = 0;
+	int32 FrameCount = 0;
+	int32 RouteSlotCount = 0;
+	bool bHasRange = false;
+	int32 RangeStart = 0;
+	int32 RangeEnd = 0;
+	int32 ShowOriginLatitudeE7 = 0;
+	int32 ShowOriginLongitudeE7 = 0;
+	FString WaypointGeneratorVersion;
+	FRouteArtifactDigest256 GeneratorInputDigest;
+};
+
 struct DRONESHOWPLATFORM1_API FRouteArtifactGenerationHandle
 {
 	FString AttemptID;
@@ -78,6 +97,7 @@ struct DRONESHOWPLATFORM1_API FRouteArtifactGenerationHandle
 
 struct DRONESHOWPLATFORM1_API FRouteArtifactCurrentInfo
 {
+	uint16 ArtifactSchemaVersion = 0;
 	FString ArtifactSetID;
 	FRouteArtifactDigest256 ArtifactSetDigest;
 	FRouteArtifactAssignmentBinding AssignmentBinding;
@@ -134,6 +154,11 @@ public:
 		const FRouteArtifactWorkspaceAuthorityGate& Gate,
 		FRouteArtifactGenerationHandle& OutHandle,
 		FString& OutError);
+	bool BeginGeneration(
+		const FRouteArtifactBuildIdentityV2& BuildIdentity,
+		const FRouteArtifactWorkspaceSourceGate& Gate,
+		FRouteArtifactGenerationHandle& OutHandle,
+		FString& OutError);
 
 	/** The only production route-output resolver: RouteSlotIndex to safe staging path. */
 	bool ResolveSafeStagingRoutePath(
@@ -144,6 +169,10 @@ public:
 	bool FinalizeGeneration(
 		const FRouteArtifactManifest& Manifest,
 		const FRouteArtifactWorkspaceAuthorityGate& CurrentGate,
+		FString& OutError);
+	bool FinalizeGeneration(
+		const FRouteArtifactManifestV2& Manifest,
+		const FRouteArtifactWorkspaceSourceGate& CurrentGate,
 		FString& OutError);
 
 	/**
@@ -158,12 +187,22 @@ public:
 		FString& OutError,
 		FRouteArtifactFinalizeMetrics* OutMetrics = nullptr,
 		const TFunction<bool()>& IsCancelled = TFunction<bool()>());
+	bool FinalizeGeneratedRoutes(
+		FRouteArtifactManifestV2& InOutManifest,
+		const FRouteArtifactWorkspaceSourceGate& CurrentGate,
+		const FRouteWaypointSourceValidationContext& SourceValidationContext,
+		FString& OutError,
+		FRouteArtifactFinalizeMetrics* OutMetrics = nullptr,
+		const TFunction<bool()>& IsCancelled = TFunction<bool()>());
 
 	/** Returns false with GenerationNotActive when repeated. */
 	bool AbortGeneration(FString& OutError);
 
 	bool LoadAndValidateCurrentArtifact(
 		FRouteArtifactManifest& OutManifest,
+		FString& OutError);
+	bool LoadAndValidateCurrentArtifact(
+		FRouteArtifactManifestV2& OutManifest,
 		FString& OutError);
 
 	/** Releases writer ownership; an undeleted attempt is handled by recovery. */
@@ -189,6 +228,11 @@ public:
 		const TArray<FString>& RelativeFiles,
 		const TArray<FString>& RelativeDirectories,
 		FString& OutError);
+	static bool ValidateCurrentEntryAllowlistForTest(
+		const FRouteArtifactManifestV2& Manifest,
+		const TArray<FString>& RelativeFiles,
+		const TArray<FString>& RelativeDirectories,
+		FString& OutError);
 	static bool TryAcquireCurrentPromotionGateForTest(
 		const FString& WorkspaceRoot,
 		bool& bOutRecoveredAbandonedOwner,
@@ -199,6 +243,12 @@ private:
 	bool FinalizeGenerationInternal(
 		const FRouteArtifactManifest& Manifest,
 		const FRouteArtifactWorkspaceAuthorityGate& CurrentGate,
+		bool bRouteFilesAlreadyAuthoritativelyHashed,
+		FString& OutError,
+		FRouteArtifactFinalizeMetrics* OutMetrics = nullptr);
+	bool FinalizeGenerationInternal(
+		const FRouteArtifactManifestV2& Manifest,
+		const FRouteArtifactWorkspaceSourceGate& CurrentGate,
 		bool bRouteFilesAlreadyAuthoritativelyHashed,
 		FString& OutError,
 		FRouteArtifactFinalizeMetrics* OutMetrics = nullptr);

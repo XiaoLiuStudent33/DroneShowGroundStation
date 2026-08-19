@@ -11,6 +11,7 @@
 #include "DSPGCSUploadJobSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "GameFramework/PlayerController.h"
+#include "HAL/PlatformTime.h"
 #include "Misc/Paths.h"
 #include "RouteArtifactWorkspaceSubsystem.h"
 #include "RouteAssignmentSubsystem.h"
@@ -61,6 +62,15 @@ namespace GCSRouteWorkflowPrivate
 		return Result;
 	}
 
+	bool WorkflowParseFiniteDouble(const FString& Text, double& OutValue)
+	{
+		const FString Trimmed = Text.TrimStartAndEnd();
+		return !Trimmed.IsEmpty()
+			&& Trimmed.IsNumeric()
+			&& LexTryParseString(OutValue, *Trimmed)
+			&& FMath::IsFinite(OutValue);
+	}
+
 	TArray<TPair<FName, UClass*>> Required(std::initializer_list<const TCHAR*> Names)
 	{
 		TArray<TPair<FName, UClass*>> Result;
@@ -96,7 +106,9 @@ namespace GCSRouteWorkflowPrivate
 	}
 	FString Current(const ERouteArtifactCurrentStatus V)
 	{
-		return V == ERouteArtifactCurrentStatus::Ready ? TEXT("Ready") : (V == ERouteArtifactCurrentStatus::Invalid ? TEXT("Invalid") : TEXT("None"));
+		return V == ERouteArtifactCurrentStatus::Ready ? TEXT("Ready")
+			: (V == ERouteArtifactCurrentStatus::LegacyUnsupported ? TEXT("Legacy v1")
+				: (V == ERouteArtifactCurrentStatus::Invalid ? TEXT("Invalid") : TEXT("None")));
 	}
 	FString Generation(const ERouteArtifactGenerationStatus V)
 	{
@@ -109,7 +121,9 @@ namespace GCSRouteWorkflowPrivate
 	FString Ready(const ERouteArtifactCurrentStatus C, const ERouteArtifactRecoveryStatus R)
 	{
 		if (R == ERouteArtifactRecoveryStatus::RecoveryRequired || R == ERouteArtifactRecoveryStatus::Unrecoverable) return TEXT("RECOVERY REQUIRED");
-		return C == ERouteArtifactCurrentStatus::Ready ? TEXT("READY") : (C == ERouteArtifactCurrentStatus::Invalid ? TEXT("INVALID") : TEXT("NOT READY"));
+		return C == ERouteArtifactCurrentStatus::Ready ? TEXT("READY")
+			: (C == ERouteArtifactCurrentStatus::LegacyUnsupported ? TEXT("LEGACY V1")
+				: (C == ERouteArtifactCurrentStatus::Invalid ? TEXT("INVALID") : TEXT("NOT READY")));
 	}
 	FString JobState(const dspgcs::UploadJobState V)
 	{
@@ -152,6 +166,7 @@ bool UGCSRouteWorkflowCoordinator::Initialize(UGameInstance* GI, UUserWidget* Ri
 void UGCSRouteWorkflowCoordinator::Shutdown()
 {
 	StopRefreshTicker();
+	UnbindCommandControls();
 	ClearRouteListModel();
 	if (UButton* Button = OpenWorkflowButtonRef.Get()) Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteWorkflowClicked);
 	if (RouteWorkflowWidget) RouteWorkflowWidget->RemoveFromParent();
@@ -161,9 +176,17 @@ void UGCSRouteWorkflowCoordinator::Shutdown()
 	OpenWorkflowButtonRef.Reset(); RightPanelWidgetRef.Reset(); GameInstanceRef.Reset();
 	bBindingValid = false;
 	bUploadArtifactMismatch = false;
+	SelectedRouteImportFilePath.Reset();
+	SelectedRouteSourceDigest.Reset();
+	CommandErrorMessage.Reset();
+	CommandErrorExpiresAtSeconds = 0.0;
+	CommandErrorCategory = EGCSRouteWorkflowCommandErrorCategory::None;
+	bCommandInFlight = false;
 #if WITH_DEV_AUTOMATION_TESTS
 	WorkflowFactoryForTest = {};
 	bSkipRequiredWidgetBindingForTest = false;
+	CommandTestHooks = {};
+	CommandGateInputsForTest.Reset();
 #endif
 }
 
@@ -270,6 +293,7 @@ bool UGCSRouteWorkflowCoordinator::BindWorkflowWidgets(UUserWidget* Workflow, FS
 	if (!Convert || !Upload) { OutError = TEXT("RouteConvert or RouteUpload nested page missing."); return false; }
 	if (!ResolveRequiredWidgets(Convert, Required({
 		TEXT("TXT_RouteFilePath"),TEXT("TXT_RouteCount"),TEXT("TXT_FrameCount"),TEXT("TXT_DatasetState"),
+		TEXT("BTN_RouteBrowse"),TEXT("BTN_OutputBrowse"),TEXT("BTN_LoadPreview"),TEXT("BTN_GenerateWaypoints"),
 		TEXT("EDT_OriginLatitude"),TEXT("EDT_OriginLongitude"),TEXT("EDT_OriginAltitude"),
 		TEXT("TXT_AssignmentState"),TEXT("TXT_AssignmentMode"),TEXT("TXT_ConsoleAccepted"),
 		TEXT("TXT_MatchedCount"),TEXT("TXT_VacantCount"),TEXT("TXT_SpareCount"),TEXT("TXT_OutputPath"),
@@ -286,7 +310,9 @@ bool UGCSRouteWorkflowCoordinator::BindWorkflowWidgets(UUserWidget* Workflow, FS
 		TEXT("BTN_ResumeUpload"),TEXT("BTN_CancelUpload"),TEXT("BTN_RetryFailed")}), UploadWidgets, OutError)) return false;
 	RouteConvertWidgetRef = Convert; RouteUploadWidgetRef = Upload;
 	ClearRouteListModel();
-	ApplyReadOnlyControlState(); bBindingValid = true; return true;
+	ApplyReadOnlyControlState();
+	BindCommandControls();
+	bBindingValid = true; return true;
 }
 
 void UGCSRouteWorkflowCoordinator::ApplyReadOnlyControlState()
@@ -296,10 +322,389 @@ void UGCSRouteWorkflowCoordinator::ApplyReadOnlyControlState()
 		if (UButton* Button = Get<UButton>(UploadWidgets, Name)) Button->SetIsEnabled(false);
 	if (UEditableTextBox* Box = Get<UEditableTextBox>(UploadWidgets, TEXT("EDT_MaxConcurrency"))) { Box->SetIsReadOnly(true); Box->SetIsEnabled(false); }
 	for (const FName Name : {FName(TEXT("EDT_OriginLatitude")),FName(TEXT("EDT_OriginLongitude")),FName(TEXT("EDT_OriginAltitude"))})
-		if (UEditableTextBox* Box = Get<UEditableTextBox>(ConvertWidgets, Name)) Box->SetIsReadOnly(true);
-	if (UUserWidget* Convert = RouteConvertWidgetRef.Get())
-		for (const FName Name : {FName(TEXT("BTN_RouteBrowse")),FName(TEXT("BTN_OutputBrowse")),FName(TEXT("BTN_LoadPreview")),FName(TEXT("BTN_GenerateWaypoints"))})
-			if (UButton* Button = Convert->WidgetTree ? Cast<UButton>(Convert->WidgetTree->FindWidget(Name)) : nullptr) Button->SetIsEnabled(false);
+		if (UEditableTextBox* Box = Get<UEditableTextBox>(ConvertWidgets, Name)) { Box->SetIsReadOnly(false); Box->SetIsEnabled(true); }
+}
+
+void UGCSRouteWorkflowCoordinator::BindCommandControls()
+{
+	using namespace GCSRouteWorkflowPrivate;
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_RouteBrowse")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteBrowseClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteBrowseClicked);
+	}
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_OutputBrowse")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleOutputBrowseClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleOutputBrowseClicked);
+	}
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_LoadPreview")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleLoadPreviewClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleLoadPreviewClicked);
+	}
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_GenerateWaypoints")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleGenerateWaypointsClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleGenerateWaypointsClicked);
+	}
+}
+
+void UGCSRouteWorkflowCoordinator::UnbindCommandControls()
+{
+	using namespace GCSRouteWorkflowPrivate;
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_RouteBrowse")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteBrowseClicked);
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_OutputBrowse")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleOutputBrowseClicked);
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_LoadPreview")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleLoadPreviewClicked);
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_GenerateWaypoints")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleGenerateWaypointsClicked);
+}
+
+void UGCSRouteWorkflowCoordinator::HandleRouteBrowseClicked()
+{
+	if (!IsInGameThread() || bCommandInFlight || !GameInstanceRef.IsValid()) return;
+	const FGCSRouteWorkflowCommandGate Gate = ComputeCommandGate(GatherCommandGateInputs());
+	if (!Gate.bRouteBrowseEnabled) return;
+
+	enum class EResult : uint8 { Cancelled, Succeeded, Failed };
+	EResult Result = EResult::Cancelled;
+	FString SelectedPath;
+	FString Error;
+	{
+		TGuardValue<bool> Guard(bCommandInFlight, true);
+#if WITH_DEV_AUTOMATION_TESTS
+		const bool bSelected = CommandTestHooks.OpenNpzDialog
+			? CommandTestHooks.OpenNpzDialog(SelectedPath)
+			: OpenRuntimeNpzFileDialog(SelectedPath);
+#else
+		const bool bSelected = OpenRuntimeNpzFileDialog(SelectedPath);
+#endif
+		if (bSelected)
+		{
+			if (!FPaths::GetExtension(SelectedPath).Equals(TEXT("npz"), ESearchCase::IgnoreCase))
+			{
+				Error = TEXT("Selected file must be a .npz archive.");
+				Result = EResult::Failed;
+			}
+			else
+			{
+				URoutePreviewSubsystem* Preview =
+					GameInstanceRef->GetSubsystem<URoutePreviewSubsystem>();
+#if WITH_DEV_AUTOMATION_TESTS
+				const bool bPrepared = CommandTestHooks.PrepareRoute
+					? CommandTestHooks.PrepareRoute(SelectedPath, Error)
+					: (Preview && Preview->PrepareRouteImport(SelectedPath, Error));
+#else
+				const bool bPrepared = Preview
+					&& Preview->PrepareRouteImport(SelectedPath, Error);
+#endif
+				if (bPrepared)
+				{
+					SelectedRouteImportFilePath = FPaths::ConvertRelativePathToFull(SelectedPath);
+					SelectedRouteSourceDigest = Preview && Preview->HasPreparedRoute()
+						? Preview->GetPreparedSourceIdentity().SourceDatasetDigest.ToLowerHex()
+						: FString();
+					Result = EResult::Succeeded;
+				}
+				else
+				{
+					if (Error.IsEmpty()) Error = TEXT("Route Preview authority rejected the NPZ import.");
+					Result = EResult::Failed;
+				}
+			}
+		}
+	}
+	if (Result == EResult::Succeeded)
+	{
+		ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Dataset);
+		RefreshReadOnlyState();
+	}
+	else if (Result == EResult::Failed)
+	{
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Dataset, Error);
+	}
+	UpdateCommandControlState();
+}
+
+void UGCSRouteWorkflowCoordinator::HandleOutputBrowseClicked()
+{
+	if (!IsInGameThread() || bCommandInFlight || !GameInstanceRef.IsValid()) return;
+	const FGCSRouteWorkflowCommandGate Gate = ComputeCommandGate(GatherCommandGateInputs());
+	if (!Gate.bOutputBrowseEnabled) return;
+
+	enum class EResult : uint8 { Cancelled, Succeeded, Failed };
+	EResult Result = EResult::Cancelled;
+	FString SelectedRoot;
+	FString ResolvedRoot;
+	FString Error;
+	{
+		TGuardValue<bool> Guard(bCommandInFlight, true);
+#if WITH_DEV_AUTOMATION_TESTS
+		const bool bSelected = CommandTestHooks.OpenFolderDialog
+			? CommandTestHooks.OpenFolderDialog(SelectedRoot)
+			: OpenRuntimeFolderDialog(SelectedRoot);
+#else
+		const bool bSelected = OpenRuntimeFolderDialog(SelectedRoot);
+#endif
+		if (bSelected)
+		{
+			URouteArtifactWorkspaceSubsystem* Workspace =
+				GameInstanceRef->GetSubsystem<URouteArtifactWorkspaceSubsystem>();
+#if WITH_DEV_AUTOMATION_TESTS
+			const bool bSet = CommandTestHooks.SetWorkspaceRoot
+				? CommandTestHooks.SetWorkspaceRoot(SelectedRoot, Error)
+				: (Workspace && Workspace->SetConfiguredWorkspaceRoot(SelectedRoot, Error));
+			const bool bResolved = bSet && (CommandTestHooks.ResolveWorkspaceRoot
+				? CommandTestHooks.ResolveWorkspaceRoot(ResolvedRoot, Error)
+				: (Workspace && Workspace->ResolveWorkspaceRoot(ResolvedRoot, Error)));
+#else
+			const bool bSet = Workspace
+				&& Workspace->SetConfiguredWorkspaceRoot(SelectedRoot, Error);
+			const bool bResolved = bSet && Workspace
+				&& Workspace->ResolveWorkspaceRoot(ResolvedRoot, Error);
+#endif
+			if (bResolved)
+			{
+				Result = EResult::Succeeded;
+			}
+			else
+			{
+				if (Error.IsEmpty()) Error = TEXT("Artifact Workspace rejected the selected root.");
+				Result = EResult::Failed;
+			}
+		}
+	}
+	if (Result == EResult::Succeeded)
+	{
+		ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Artifact);
+		GCSRouteWorkflowPrivate::SetText(ConvertWidgets, TEXT("TXT_OutputPath"), ResolvedRoot);
+		GCSRouteWorkflowPrivate::SetTooltip(ConvertWidgets, TEXT("TXT_OutputPath"), ResolvedRoot);
+		RefreshReadOnlyState();
+	}
+	else if (Result == EResult::Failed)
+	{
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Artifact, Error);
+	}
+	UpdateCommandControlState();
+}
+
+void UGCSRouteWorkflowCoordinator::HandleLoadPreviewClicked()
+{
+	if (!IsInGameThread() || bCommandInFlight || !GameInstanceRef.IsValid()) return;
+	URoutePreviewSubsystem* Preview = GameInstanceRef->GetSubsystem<URoutePreviewSubsystem>();
+	const FGCSRouteWorkflowCommandGateInputs Inputs = GatherCommandGateInputs();
+	if (Inputs.bGenerationActive || !Inputs.bHasPreparedRoute) return;
+
+	double Latitude = 0.0;
+	double Longitude = 0.0;
+	double Altitude = 0.0;
+	FString Error;
+	using namespace GCSRouteWorkflowPrivate;
+	const UEditableTextBox* LatitudeInput = Get<UEditableTextBox>(ConvertWidgets, TEXT("EDT_OriginLatitude"));
+	const UEditableTextBox* LongitudeInput = Get<UEditableTextBox>(ConvertWidgets, TEXT("EDT_OriginLongitude"));
+	const UEditableTextBox* AltitudeInput = Get<UEditableTextBox>(ConvertWidgets, TEXT("EDT_OriginAltitude"));
+	if (!ParseOriginInputs(
+		LatitudeInput ? LatitudeInput->GetText().ToString() : FString(),
+		LongitudeInput ? LongitudeInput->GetText().ToString() : FString(),
+		AltitudeInput ? AltitudeInput->GetText().ToString() : FString(),
+		Latitude, Longitude, Altitude, Error))
+	{
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview, Error);
+		UpdateCommandControlState();
+		return;
+	}
+
+	bool bSucceeded = false;
+	{
+		TGuardValue<bool> Guard(bCommandInFlight, true);
+#if WITH_DEV_AUTOMATION_TESTS
+		const bool bCommitted = CommandTestHooks.CommitRoute
+			? CommandTestHooks.CommitRoute(Error)
+			: (Preview && Preview->CommitPreparedRoute(Error));
+		const bool bOriginSet = bCommitted && (CommandTestHooks.SetOrigin
+			? CommandTestHooks.SetOrigin(Latitude, Longitude, Altitude, Error)
+			: (Preview && Preview->SetShowOrigin(Latitude, Longitude, Altitude, Error)));
+		bSucceeded = bOriginSet && (CommandTestHooks.SetOverlay
+			? CommandTestHooks.SetOverlay(true, Error)
+			: (Preview && Preview->SetRouteOverlayEnabled(true, Error)));
+#else
+		bSucceeded = Preview
+			&& Preview->CommitPreparedRoute(Error)
+			&& Preview->SetShowOrigin(Latitude, Longitude, Altitude, Error)
+			&& Preview->SetRouteOverlayEnabled(true, Error);
+#endif
+	}
+	if (bSucceeded)
+	{
+		ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview);
+		RefreshReadOnlyState();
+	}
+	else
+	{
+		if (Error.IsEmpty()) Error = TEXT("Route Preview authority rejected the command.");
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview, Error);
+	}
+	UpdateCommandControlState();
+}
+
+void UGCSRouteWorkflowCoordinator::HandleGenerateWaypointsClicked()
+{
+	if (!IsInGameThread() || bCommandInFlight || !GameInstanceRef.IsValid()) return;
+	const FGCSRouteWorkflowCommandGate Gate = ComputeCommandGate(GatherCommandGateInputs());
+	if (!Gate.bGenerateWaypointsEnabled) return;
+
+	URouteWaypointGenerationSubsystem* Generator =
+		GameInstanceRef->GetSubsystem<URouteWaypointGenerationSubsystem>();
+	FString Error;
+	bool bStarted = false;
+	{
+		TGuardValue<bool> Guard(bCommandInFlight, true);
+#if WITH_DEV_AUTOMATION_TESTS
+		bStarted = CommandTestHooks.StartGeneration
+			? CommandTestHooks.StartGeneration(0, Error)
+			: (Generator && Generator->StartGeneration(0, Error));
+#else
+		bStarted = Generator && Generator->StartGeneration(0, Error);
+#endif
+	}
+	if (bStarted)
+	{
+		ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Artifact);
+		RefreshReadOnlyState();
+	}
+	else
+	{
+		if (Error.IsEmpty()) Error = TEXT("Waypoint Generation authority rejected the command.");
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Artifact, Error);
+	}
+	UpdateCommandControlState();
+}
+
+FGCSRouteWorkflowCommandGateInputs UGCSRouteWorkflowCoordinator::GatherCommandGateInputs() const
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	if (CommandGateInputsForTest.IsSet()) return CommandGateInputsForTest.GetValue();
+#endif
+	FGCSRouteWorkflowCommandGateInputs Inputs;
+	Inputs.bCommandInFlight = bCommandInFlight;
+	if (!GameInstanceRef.IsValid()) return Inputs;
+	UGameInstance* GI = GameInstanceRef.Get();
+	const URoutePreviewSubsystem* Preview = GI->GetSubsystem<URoutePreviewSubsystem>();
+	const URouteArtifactWorkspaceSubsystem* Workspace =
+		GI->GetSubsystem<URouteArtifactWorkspaceSubsystem>();
+	const URouteWaypointGenerationSubsystem* Generator =
+		GI->GetSubsystem<URouteWaypointGenerationSubsystem>();
+
+	Inputs.bHasPreparedRoute = Preview && Preview->HasPreparedRoute();
+	Inputs.bRouteLoaded = Preview && Preview->IsRouteLoaded();
+	Inputs.bShowOriginSet = Inputs.bRouteLoaded && Preview->GetRouteData().bShowOriginSet;
+	Inputs.bGenerationActive = Generator && Generator->IsGenerationActive();
+	if (Workspace)
+	{
+		const ERouteArtifactRecoveryStatus RecoveryStatus =
+			Workspace->GetLastRecoveryResult().Status;
+		const ERouteArtifactGenerationStatus GenerationStatus =
+			Workspace->GetGenerationStatus();
+		Inputs.bWorkspaceReady = (GenerationStatus == ERouteArtifactGenerationStatus::None
+				|| GenerationStatus == ERouteArtifactGenerationStatus::Failed)
+			&& !Workspace->IsCurrentSwapInProgress()
+			&& (RecoveryStatus == ERouteArtifactRecoveryStatus::Stable
+				|| RecoveryStatus == ERouteArtifactRecoveryStatus::Recovered);
+	}
+
+	using namespace GCSRouteWorkflowPrivate;
+	const UEditableTextBox* Latitude = Get<UEditableTextBox>(
+		ConvertWidgets, TEXT("EDT_OriginLatitude"));
+	const UEditableTextBox* Longitude = Get<UEditableTextBox>(
+		ConvertWidgets, TEXT("EDT_OriginLongitude"));
+	const UEditableTextBox* Altitude = Get<UEditableTextBox>(
+		ConvertWidgets, TEXT("EDT_OriginAltitude"));
+	double ParsedLatitude = 0.0;
+	double ParsedLongitude = 0.0;
+	double ParsedAltitude = 0.0;
+	FString ParseError;
+	Inputs.bOriginValid = ParseOriginInputs(
+		Latitude ? Latitude->GetText().ToString() : FString(),
+		Longitude ? Longitude->GetText().ToString() : FString(),
+		Altitude ? Altitude->GetText().ToString() : FString(),
+		ParsedLatitude, ParsedLongitude, ParsedAltitude, ParseError);
+	return Inputs;
+}
+
+void UGCSRouteWorkflowCoordinator::UpdateCommandControlState()
+{
+	using namespace GCSRouteWorkflowPrivate;
+	const FGCSRouteWorkflowCommandGateInputs Inputs = GatherCommandGateInputs();
+	const FGCSRouteWorkflowCommandGate Gate = ComputeCommandGate(Inputs);
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_RouteBrowse")))
+		Button->SetIsEnabled(Gate.bRouteBrowseEnabled);
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_OutputBrowse")))
+		Button->SetIsEnabled(Gate.bOutputBrowseEnabled);
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_LoadPreview")))
+		Button->SetIsEnabled(Gate.bLoadPreviewEnabled);
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_GenerateWaypoints")))
+		Button->SetIsEnabled(Gate.bGenerateWaypointsEnabled);
+	for (const FName Name : {FName(TEXT("EDT_OriginLatitude")),
+		FName(TEXT("EDT_OriginLongitude")), FName(TEXT("EDT_OriginAltitude"))})
+	{
+		if (UEditableTextBox* Box = Get<UEditableTextBox>(ConvertWidgets, Name))
+		{
+			Box->SetIsReadOnly(Inputs.bGenerationActive || Inputs.bCommandInFlight);
+			Box->SetIsEnabled(!Inputs.bGenerationActive && !Inputs.bCommandInFlight);
+		}
+	}
+}
+
+void UGCSRouteWorkflowCoordinator::SetCommandError(
+	const EGCSRouteWorkflowCommandErrorCategory Category,
+	const FString& Message)
+{
+	CommandErrorCategory = Category;
+	CommandErrorMessage = Message.IsEmpty()
+		? TEXT("Command rejected.") : Message.Left(320);
+	CommandErrorExpiresAtSeconds = FPlatformTime::Seconds() + CommandErrorLifetimeSeconds;
+	UE_LOG(LogGCSRouteWorkflow, Warning, TEXT("Route Workflow command rejected: %s"),
+		*CommandErrorMessage);
+	ApplyCommandErrorPresentation();
+}
+
+void UGCSRouteWorkflowCoordinator::ClearCommandError(
+	const EGCSRouteWorkflowCommandErrorCategory Category)
+{
+	if (CommandErrorCategory != Category) return;
+	CommandErrorCategory = EGCSRouteWorkflowCommandErrorCategory::None;
+	CommandErrorMessage.Reset();
+	CommandErrorExpiresAtSeconds = 0.0;
+}
+
+void UGCSRouteWorkflowCoordinator::ApplyCommandErrorPresentation()
+{
+	if (CommandErrorCategory == EGCSRouteWorkflowCommandErrorCategory::None) return;
+	if (FPlatformTime::Seconds() >= CommandErrorExpiresAtSeconds)
+	{
+		CommandErrorCategory = EGCSRouteWorkflowCommandErrorCategory::None;
+		CommandErrorMessage.Reset();
+		CommandErrorExpiresAtSeconds = 0.0;
+		return;
+	}
+	using namespace GCSRouteWorkflowPrivate;
+	switch (CommandErrorCategory)
+	{
+	case EGCSRouteWorkflowCommandErrorCategory::Dataset:
+		SetText(ConvertWidgets, TEXT("TXT_StateDatasetValue"), CommandErrorMessage);
+		break;
+	case EGCSRouteWorkflowCommandErrorCategory::Preview:
+		SetText(ConvertWidgets, TEXT("TXT_StatePreviewValue"), CommandErrorMessage);
+		break;
+	case EGCSRouteWorkflowCommandErrorCategory::Artifact:
+		SetText(ConvertWidgets, TEXT("TXT_StateArtifactValue"), CommandErrorMessage);
+		break;
+	default:
+		break;
+	}
 }
 
 void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
@@ -310,15 +715,25 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	if (URoutePreviewSubsystem* Preview = GI->GetSubsystem<URoutePreviewSubsystem>())
 	{
 		const bool Loaded = Preview->IsRouteLoaded(), Prepared = Preview->HasPreparedRoute();
-		const FString Dataset = Loaded ? TEXT("Loaded") : (Prepared ? TEXT("Prepared") : TEXT("--"));
+		const FString Dataset = Prepared ? TEXT("Prepared") : (Loaded ? TEXT("Loaded") : TEXT("--"));
 		SetText(ConvertWidgets,TEXT("TXT_DatasetState"),Dataset); SetText(ConvertWidgets,TEXT("TXT_StateDatasetValue"),Dataset);
-		SetText(ConvertWidgets,TEXT("TXT_RouteCount"),FString::FromInt(Preview->GetDroneCount())); SetText(ConvertWidgets,TEXT("TXT_FrameCount"),FString::FromInt(Preview->GetFrameCount()));
-		const FRouteArtifactSourceIdentity* ID = Loaded ? &Preview->GetActiveSourceIdentity() : (Prepared ? &Preview->GetPreparedSourceIdentity() : nullptr);
-		SetText(ConvertWidgets,TEXT("TXT_RouteFilePath"),ID && !ID->SourceDisplayFileName.IsEmpty() ? ID->SourceDisplayFileName : TEXT("--"));
+		SetText(ConvertWidgets,TEXT("TXT_RouteCount"),FString::FromInt(Prepared ? Preview->GetPreparedDroneCount() : Preview->GetDroneCount())); SetText(ConvertWidgets,TEXT("TXT_FrameCount"),FString::FromInt(Prepared ? Preview->GetPreparedFrameCount() : Preview->GetFrameCount()));
+		const FRouteArtifactSourceIdentity* ID = Prepared ? &Preview->GetPreparedSourceIdentity() : (Loaded ? &Preview->GetActiveSourceIdentity() : nullptr);
+		const bool bSelectedPathMatches = ID && !SelectedRouteImportFilePath.IsEmpty()
+			&& !SelectedRouteSourceDigest.IsEmpty()
+			&& SelectedRouteSourceDigest == ID->SourceDatasetDigest.ToLowerHex();
+		const FString RoutePathText = bSelectedPathMatches
+			? SelectedRouteImportFilePath
+			: (ID && !ID->SourceDisplayFileName.IsEmpty() ? ID->SourceDisplayFileName : TEXT("--"));
+		SetText(ConvertWidgets,TEXT("TXT_RouteFilePath"),RoutePathText);
+		SetTooltip(ConvertWidgets,TEXT("TXT_RouteFilePath"),RoutePathText);
 		const FRoutePreviewData& Data = Preview->GetRouteData(); const bool Origin = Loaded && Data.bShowOriginSet;
-		SetEdit(ConvertWidgets,TEXT("EDT_OriginLatitude"),Origin ? FString::Printf(TEXT("%.8f"),Data.ShowOriginLatitude):TEXT("--"));
-		SetEdit(ConvertWidgets,TEXT("EDT_OriginLongitude"),Origin ? FString::Printf(TEXT("%.8f"),Data.ShowOriginLongitude):TEXT("--"));
-		SetEdit(ConvertWidgets,TEXT("EDT_OriginAltitude"),Origin ? FString::Printf(TEXT("%.3f"),Data.ShowOriginAltitude):TEXT("--"));
+		if (!Prepared && Origin)
+		{
+			SetEdit(ConvertWidgets,TEXT("EDT_OriginLatitude"),FString::Printf(TEXT("%.8f"),Data.ShowOriginLatitude));
+			SetEdit(ConvertWidgets,TEXT("EDT_OriginLongitude"),FString::Printf(TEXT("%.8f"),Data.ShowOriginLongitude));
+			SetEdit(ConvertWidgets,TEXT("EDT_OriginAltitude"),FString::Printf(TEXT("%.3f"),Data.ShowOriginAltitude));
+		}
 		FString PreviewText = Preview->IsPreviewModeActive() ? TEXT("Preview: ")+Playback(Preview->GetPlaybackState()) : (Preview->IsRouteOverlayVisible() ? TEXT("Live + Frame-0 Overlay") : (Preview->IsRouteOverlayEnabled() ? TEXT("Overlay Enabled") : TEXT("--")));
 		SetText(ConvertWidgets,TEXT("TXT_StatePreviewValue"),PreviewText);
 	}
@@ -333,9 +748,15 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	SetText(ConvertWidgets,TEXT("TXT_StateAssignmentValue"),FString::Printf(TEXT("%s / %s / %s"),*StateText,*Readiness(AReady),*SyncText));
 	URouteArtifactWorkspaceSubsystem* Workspace = GI->GetSubsystem<URouteArtifactWorkspaceSubsystem>(); ERouteArtifactCurrentStatus C=ERouteArtifactCurrentStatus::None; ERouteArtifactGenerationStatus G=ERouteArtifactGenerationStatus::None; ERouteArtifactRecoveryStatus R=ERouteArtifactRecoveryStatus::Stable; FRouteArtifactCurrentInfo Info; FString Root;
 	if (Workspace) { C=Workspace->GetCurrentStatus(); G=Workspace->GetGenerationStatus(); R=Workspace->GetLastRecoveryResult().Status; Info=Workspace->GetCurrentInfo(); FString Error; if(!Workspace->ResolveWorkspaceRoot(Root,Error)) Root.Reset(); }
-	SetText(ConvertWidgets,TEXT("TXT_OutputPath"),Root.IsEmpty()?TEXT("--"):Root); const FString ReadyText=Ready(C,R); SetText(ConvertWidgets,TEXT("TXT_ArtifactReadyValue"),ReadyText); SetText(UploadWidgets,TEXT("TXT_ArtifactReadyValue"),ReadyText);
+	SetText(ConvertWidgets,TEXT("TXT_OutputPath"),Root.IsEmpty()?TEXT("--"):Root); SetTooltip(ConvertWidgets,TEXT("TXT_OutputPath"),Root.IsEmpty()?TEXT("--"):Root); const FString ReadyText=Ready(C,R); SetText(ConvertWidgets,TEXT("TXT_ArtifactReadyValue"),ReadyText); SetText(UploadWidgets,TEXT("TXT_ArtifactReadyValue"),ReadyText);
 	SetText(ConvertWidgets,TEXT("TXT_ArtifactIdValue"),C==ERouteArtifactCurrentStatus::Ready&&!Info.ArtifactSetID.IsEmpty()?Info.ArtifactSetID:TEXT("--")); SetText(ConvertWidgets,TEXT("TXT_StateArtifactValue"),FString::Printf(TEXT("Current: %s / Generation: %s / Recovery: %s"),*Current(C),*Generation(G),*Recovery(R)));
 	FRouteWaypointBatchProgress GP; if(const URouteWaypointGenerationSubsystem* Generator=GI->GetSubsystem<URouteWaypointGenerationSubsystem>()) GP=Generator->GetProgress();
+	if (!GP.FirstFailureDiagnostic.IsEmpty()
+		&& (GP.GenerationState == ERouteWaypointBatchState::Failed
+			|| GP.GenerationState == ERouteWaypointBatchState::Cancelled))
+	{
+		SetText(ConvertWidgets,TEXT("TXT_StateArtifactValue"),GP.FirstFailureDiagnostic.Left(320));
+	}
 	const double GR=ComputeProgressRatio(FMath::Max(0,GP.CompletedRoutes),FMath::Max(0,GP.TotalRoutes)); if(UProgressBar* Bar=Get<UProgressBar>(ConvertWidgets,TEXT("PROGRESS_Convert"))) Bar->SetPercent(GR);
 	SetText(ConvertWidgets,TEXT("TXT_GeneratedCount"),FString::Printf(TEXT("%d / %d"),GP.CompletedRoutes,GP.TotalRoutes)); SetText(ConvertWidgets,TEXT("TXT_ValidatedCount"),C==ERouteArtifactCurrentStatus::Ready?FString::Printf(TEXT("%d / %d"),Info.RouteSlotCount,Info.RouteSlotCount):TEXT("--")); SetText(ConvertWidgets,TEXT("TXT_ConvertPercent"),FormatPercent(GR));
 	const bool HasElapsed=GP.GenerationState!=ERouteWaypointBatchState::Idle||GP.TotalRoutes>0||GP.ElapsedSeconds>0; SetText(ConvertWidgets,TEXT("TXT_ArtifactElapsedValue"),HasElapsed?FormatElapsedMilliseconds(FMath::Max(0.0,GP.ElapsedSeconds)*1000.0):TEXT("--"));
@@ -347,6 +768,8 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	RefreshArtifactIdentity();
 	SyncRouteListModel();
 	RefreshVisibleRouteRows();
+	UpdateCommandControlState();
+	ApplyCommandErrorPresentation();
 }
 
 void UGCSRouteWorkflowCoordinator::RefreshArtifactIdentity()
@@ -673,6 +1096,55 @@ FGCSRouteUploadArtifactDisplay UGCSRouteWorkflowCoordinator::ResolveArtifactDisp
 		Result.bArtifactMismatch = true;
 	}
 	return Result;
+}
+bool UGCSRouteWorkflowCoordinator::ParseOriginInputs(
+	const FString& LatitudeText,
+	const FString& LongitudeText,
+	const FString& AltitudeText,
+	double& OutLatitude,
+	double& OutLongitude,
+	double& OutAltitude,
+	FString& OutError)
+{
+	using namespace GCSRouteWorkflowPrivate;
+	OutLatitude = 0.0;
+	OutLongitude = 0.0;
+	OutAltitude = 0.0;
+	OutError.Reset();
+	if (!WorkflowParseFiniteDouble(LatitudeText, OutLatitude)
+		|| OutLatitude < -90.0 || OutLatitude > 90.0)
+	{
+		OutError = TEXT("Latitude must be a complete finite number in [-90,90].");
+		return false;
+	}
+	if (!WorkflowParseFiniteDouble(LongitudeText, OutLongitude)
+		|| OutLongitude < -180.0 || OutLongitude > 180.0)
+	{
+		OutError = TEXT("Longitude must be a complete finite number in [-180,180].");
+		return false;
+	}
+	if (!WorkflowParseFiniteDouble(AltitudeText, OutAltitude))
+	{
+		OutError = TEXT("Altitude must be a complete finite number.");
+		return false;
+	}
+	return true;
+}
+FGCSRouteWorkflowCommandGate UGCSRouteWorkflowCoordinator::ComputeCommandGate(
+	const FGCSRouteWorkflowCommandGateInputs& Inputs)
+{
+	FGCSRouteWorkflowCommandGate Gate;
+	const bool bMutationBlocked = Inputs.bGenerationActive || Inputs.bCommandInFlight;
+	Gate.bRouteBrowseEnabled = !bMutationBlocked;
+	Gate.bOutputBrowseEnabled = !bMutationBlocked;
+	Gate.bLoadPreviewEnabled = !bMutationBlocked
+		&& Inputs.bHasPreparedRoute && Inputs.bOriginValid;
+	Gate.bGenerateWaypointsEnabled = !bMutationBlocked
+		&& !Inputs.bHasPreparedRoute
+		&& Inputs.bRouteLoaded
+		&& Inputs.bShowOriginSet
+		&& Inputs.bWorkspaceReady;
+	return Gate;
 }
 
 #if WITH_DEV_AUTOMATION_TESTS

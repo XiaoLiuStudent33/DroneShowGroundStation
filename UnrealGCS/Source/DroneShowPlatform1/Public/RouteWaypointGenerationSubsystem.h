@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
-#include "RouteArtifactManifest.h"
+#include "RouteArtifactManifestV2.h"
 #include "RouteWaypointBatchGenerator.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 
@@ -11,7 +11,7 @@
 struct FRouteWaypointFinalizeAsyncResult
 {
 	bool bSuccess = false;
-	FRouteArtifactManifest Manifest;
+	FRouteArtifactManifestV2 Manifest;
 	FString Error;
 };
 
@@ -35,7 +35,7 @@ public:
 
 	bool IsGenerationActive() const;
 	FRouteWaypointBatchProgress GetProgress() const;
-	const FRouteArtifactManifest& GetLastGeneratedManifest() const
+	const FRouteArtifactManifestV2& GetLastGeneratedManifest() const
 	{
 		return LastGeneratedManifest;
 	}
@@ -45,15 +45,15 @@ private:
 	bool BuildStartInputs(
 		int32 WorkerCountOverride,
 		FRouteWaypointBatchRequest& OutRequest,
-		FRouteArtifactManifest& OutManifestDraft,
+		FRouteArtifactManifestV2& OutManifestDraft,
 		FString& OutError);
 	void StopCompletionTicker();
 
 	TUniquePtr<FRouteWaypointBatchGenerator> ActiveBatch;
 	FRouteWaypointBatchProgress LastProgress;
-	FRouteArtifactManifest PendingManifestDraft;
+	FRouteArtifactManifestV2 PendingManifestDraft;
 	FRouteWaypointSourceValidationContext PendingSourceValidationContext;
-	FRouteArtifactManifest LastGeneratedManifest;
+	FRouteArtifactManifestV2 LastGeneratedManifest;
 	FTSTicker::FDelegateHandle CompletionTickerHandle;
 	TFuture<FRouteWaypointFinalizeAsyncResult> FinalizeFuture;
 	bool bFinalizeStarted = false;

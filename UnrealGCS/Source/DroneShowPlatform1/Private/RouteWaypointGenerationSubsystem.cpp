@@ -1,10 +1,8 @@
 #include "RouteWaypointGenerationSubsystem.h"
 
 #include "Async/Async.h"
-#include "DSPGCSFrozenAssignmentSyncSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "RouteArtifactWorkspaceSubsystem.h"
-#include "RouteAssignmentSubsystem.h"
 #include "RoutePreviewSubsystem.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRouteWaypointGeneration, Log, All);
@@ -53,7 +51,7 @@ void URouteWaypointGenerationSubsystem::Deinitialize()
 		}
 	}
 	ActiveBatch.Reset();
-	PendingManifestDraft = FRouteArtifactManifest{};
+	PendingManifestDraft = FRouteArtifactManifestV2{};
 	PendingSourceValidationContext = FRouteWaypointSourceValidationContext{};
 	bFinalizeStarted = false;
 	Super::Deinitialize();
@@ -72,11 +70,11 @@ bool URouteWaypointGenerationSubsystem::StartGeneration(
 	}
 	ActiveBatch.Reset();
 	LastProgress = FRouteWaypointBatchProgress{};
-	LastGeneratedManifest = FRouteArtifactManifest{};
+	LastGeneratedManifest = FRouteArtifactManifestV2{};
 	bFinalizeStarted = false;
 
 	FRouteWaypointBatchRequest Request;
-	FRouteArtifactManifest Draft;
+	FRouteArtifactManifestV2 Draft;
 	if (!BuildStartInputs(WorkerCountOverride, Request, Draft, OutError))
 	{
 		return false;
@@ -146,10 +144,10 @@ bool URouteWaypointGenerationSubsystem::TickGeneration(const float DeltaSeconds)
 	if (WorkerProgress.GenerationState == ERouteWaypointBatchState::WorkersSucceeded
 		&& Workspace && !bFinalizeStarted)
 	{
-		FRouteArtifactWorkspaceAuthorityGate FinalizeGate;
+		FRouteArtifactWorkspaceSourceGate FinalizeGate;
 		FString GateError;
 		FRouteArtifactWorkspaceManager* Manager = Workspace->GetGenerationManager();
-		if (!Manager || !Workspace->CaptureAuthorityGate(FinalizeGate, GateError))
+		if (!Manager || !Workspace->CaptureSourceGate(FinalizeGate, GateError))
 		{
 			if (Manager && Manager->HasActiveGeneration())
 			{
@@ -162,7 +160,7 @@ bool URouteWaypointGenerationSubsystem::TickGeneration(const float DeltaSeconds)
 		else
 		{
 			ActiveBatch->MarkFinalizing();
-			FRouteArtifactManifest Draft = MoveTemp(PendingManifestDraft);
+			FRouteArtifactManifestV2 Draft = MoveTemp(PendingManifestDraft);
 			FRouteWaypointSourceValidationContext SourceValidationContext =
 				MoveTemp(PendingSourceValidationContext);
 			FRouteWaypointBatchGenerator* const Batch = ActiveBatch.Get();
@@ -205,7 +203,6 @@ bool URouteWaypointGenerationSubsystem::TickGeneration(const float DeltaSeconds)
 				const ERouteWaypointBatchErrorCode Code =
 					Result.Error.Contains(TEXT("Gate"))
 					|| Result.Error.Contains(TEXT("source"), ESearchCase::IgnoreCase)
-					|| Result.Error.Contains(TEXT("Assignment"), ESearchCase::IgnoreCase)
 					? ERouteWaypointBatchErrorCode::AuthorityChanged
 					: ERouteWaypointBatchErrorCode::FinalizeFailed;
 				ActiveBatch->MarkFailed(Code, Result.Error);
@@ -224,7 +221,7 @@ bool URouteWaypointGenerationSubsystem::TickGeneration(const float DeltaSeconds)
 
 	LastProgress = ActiveBatch->GetProgress();
 	ActiveBatch.Reset();
-	PendingManifestDraft = FRouteArtifactManifest{};
+	PendingManifestDraft = FRouteArtifactManifestV2{};
 	PendingSourceValidationContext = FRouteWaypointSourceValidationContext{};
 	bFinalizeStarted = false;
 	CompletionTickerHandle.Reset();
@@ -234,23 +231,19 @@ bool URouteWaypointGenerationSubsystem::TickGeneration(const float DeltaSeconds)
 bool URouteWaypointGenerationSubsystem::BuildStartInputs(
 	const int32 WorkerCountOverride,
 	FRouteWaypointBatchRequest& OutRequest,
-	FRouteArtifactManifest& OutManifestDraft,
+	FRouteArtifactManifestV2& OutManifestDraft,
 	FString& OutError)
 {
 	OutRequest = FRouteWaypointBatchRequest{};
-	OutManifestDraft = FRouteArtifactManifest{};
+	OutManifestDraft = FRouteArtifactManifestV2{};
 	UGameInstance* GameInstance = GetGameInstance();
 	URoutePreviewSubsystem* RoutePreview = GameInstance
 		? GameInstance->GetSubsystem<URoutePreviewSubsystem>() : nullptr;
-	URouteAssignmentSubsystem* Assignment = GameInstance
-		? GameInstance->GetSubsystem<URouteAssignmentSubsystem>() : nullptr;
-	UDSPGCSFrozenAssignmentSyncSubsystem* Sync = GameInstance
-		? GameInstance->GetSubsystem<UDSPGCSFrozenAssignmentSyncSubsystem>() : nullptr;
 	URouteArtifactWorkspaceSubsystem* Workspace = GameInstance
 		? GameInstance->GetSubsystem<URouteArtifactWorkspaceSubsystem>() : nullptr;
-	if (!RoutePreview || !Assignment || !Sync || !Workspace)
+	if (!RoutePreview || !Workspace)
 	{
-		OutError = TEXT("Route generation Authority subsystem is unavailable.");
+		OutError = TEXT("Route generation source or Workspace subsystem is unavailable.");
 		return false;
 	}
 
@@ -273,49 +266,34 @@ bool URouteWaypointGenerationSubsystem::BuildStartInputs(
 		return false;
 	}
 
-	FRouteAssignmentSnapshot Frozen;
-	const FDSPGCSFrozenAssignmentSyncStatus SyncStatus = Sync->GetSyncStatus();
-	if (!Assignment->GetFrozenSnapshot(Frozen)
-		|| SyncStatus.State != EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted
-		|| Frozen.SourceIdentity.RouteDatasetGeneration
-			!= RoutePreview->GetRouteDatasetGeneration()
-		|| Frozen.RouteSlotCount != RouteData->DroneCount
-		|| Frozen.SourceIdentity.FleetSessionID != SyncStatus.FleetSessionID
-		|| Frozen.AssignmentAuthoritySessionID
-			!= SyncStatus.AssignmentAuthoritySessionID
-		|| Frozen.AssignmentRevision != SyncStatus.AssignmentRevision)
-	{
-		OutError = TEXT("Frozen Assignment, ConsoleAccepted binding, or active Route source is stale.");
-		return false;
-	}
-	FRouteWaypointGeneratorContext FrozenOriginContext;
-	if (!RouteWaypointGenerator::BuildContext(
-			Frozen.SourceIdentity.Latitude,
-			Frozen.SourceIdentity.Longitude,
-			FrozenOriginContext,
-			GeneratorError)
-		|| FrozenOriginContext.GeneratorInputDigest
-			!= GeneratorContext.GeneratorInputDigest)
-	{
-		OutError = TEXT("Active Show Origin no longer matches the Frozen Assignment source.");
-		return false;
-	}
-
-	FRouteArtifactBuildIdentity BuildIdentity;
-	BuildIdentity.AssignmentBinding.FleetSessionID = Frozen.SourceIdentity.FleetSessionID;
-	BuildIdentity.AssignmentBinding.AssignmentAuthoritySessionID =
-		Frozen.AssignmentAuthoritySessionID;
-	BuildIdentity.AssignmentBinding.AssignmentRevision = Frozen.AssignmentRevision;
-	if (!FRouteArtifactDigest256::ParseLowerHex(
-			SyncStatus.CanonicalPayloadDigest,
-			BuildIdentity.AssignmentBinding.AssignmentDigest,
-			OutError))
-	{
-		return false;
-	}
+	FRouteArtifactBuildIdentityV2 BuildIdentity;
 	BuildIdentity.SourceDatasetDigest = RouteData->SourceIdentity.SourceDatasetDigest;
 	BuildIdentity.WaypointGeneratorVersion = GeneratorContext.WaypointGeneratorVersion;
 	BuildIdentity.GeneratorInputDigest = GeneratorContext.GeneratorInputDigest;
+	BuildIdentity.ShowOriginLatitudeE7 = GeneratorContext.NormalizedShowOriginLatitudeE7;
+	BuildIdentity.ShowOriginLongitudeE7 = GeneratorContext.NormalizedShowOriginLongitudeE7;
+	BuildIdentity.FrameCount = RouteData->FrameCount;
+	BuildIdentity.RouteSlotCount = RouteData->DroneCount;
+	BuildIdentity.bHasRange = RouteData->OptionalRangeStart != INDEX_NONE
+		&& RouteData->OptionalRangeEnd != INDEX_NONE;
+	BuildIdentity.RangeStart = BuildIdentity.bHasRange
+		? RouteData->OptionalRangeStart : 0;
+	BuildIdentity.RangeEnd = BuildIdentity.bHasRange
+		? RouteData->OptionalRangeEnd : 0;
+
+	FRouteArtifactWorkspaceSourceGate SourceGate;
+	SourceGate.bSourceExists = true;
+	SourceGate.ActiveSourceIdentity = RouteData->SourceIdentity;
+	SourceGate.RouteDatasetGeneration = RoutePreview->GetRouteDatasetGeneration();
+	SourceGate.FrameCount = BuildIdentity.FrameCount;
+	SourceGate.RouteSlotCount = BuildIdentity.RouteSlotCount;
+	SourceGate.bHasRange = BuildIdentity.bHasRange;
+	SourceGate.RangeStart = BuildIdentity.RangeStart;
+	SourceGate.RangeEnd = BuildIdentity.RangeEnd;
+	SourceGate.ShowOriginLatitudeE7 = BuildIdentity.ShowOriginLatitudeE7;
+	SourceGate.ShowOriginLongitudeE7 = BuildIdentity.ShowOriginLongitudeE7;
+	SourceGate.WaypointGeneratorVersion = BuildIdentity.WaypointGeneratorVersion;
+	SourceGate.GeneratorInputDigest = BuildIdentity.GeneratorInputDigest;
 
 	int64 FreeBytes = 0;
 	int64 RequiredWithMargin = 0;
@@ -328,14 +306,14 @@ bool URouteWaypointGenerationSubsystem::BuildStartInputs(
 	}
 
 	FRouteArtifactGenerationHandle Handle;
-	if (!Workspace->BeginGeneration(BuildIdentity, Handle, OutError))
+	if (!Workspace->BeginGeneration(BuildIdentity, SourceGate, Handle, OutError))
 	{
 		return false;
 	}
 
 	OutRequest.Snapshot.RouteData = RouteData;
 	OutRequest.Snapshot.SourceIdentity = RouteData->SourceIdentity;
-	OutRequest.Snapshot.RouteDatasetGeneration = RoutePreview->GetRouteDatasetGeneration();
+	OutRequest.Snapshot.RouteDatasetGeneration = SourceGate.RouteDatasetGeneration;
 	OutRequest.Snapshot.GeneratorContext = GeneratorContext;
 	OutRequest.Snapshot.WaypointGeneratorVersion = GeneratorContext.WaypointGeneratorVersion;
 	OutRequest.Snapshot.GeneratorInputDigest = GeneratorContext.GeneratorInputDigest;
@@ -348,34 +326,16 @@ bool URouteWaypointGenerationSubsystem::BuildStartInputs(
 
 	OutManifestDraft.ArtifactSetID = Handle.ArtifactSetID;
 	OutManifestDraft.CreatedAtUtc = UtcNowUnixMilliseconds();
-	OutManifestDraft.AssignmentBinding = BuildIdentity.AssignmentBinding;
-	OutManifestDraft.FleetRevisionAtCapture = Frozen.SourceIdentity.FleetRevisionAtCapture;
-	OutManifestDraft.RouteDatasetGeneration = Frozen.SourceIdentity.RouteDatasetGeneration;
-	OutManifestDraft.CompletionMode = Frozen.CompletionMode;
-	OutManifestDraft.FreezePolicy = Frozen.FreezePolicy;
-	OutManifestDraft.MatchedCount = Frozen.Summary.MatchedCount;
-	OutManifestDraft.SpareCount = Frozen.Summary.SpareCount;
-	OutManifestDraft.ExcludedCount = Frozen.Summary.ExcludedCount;
-	OutManifestDraft.VacantCount = Frozen.Summary.VacantRouteSlotCount;
 	OutManifestDraft.SourceIdentity = RouteData->SourceIdentity;
 	OutManifestDraft.FrameCount = RouteData->FrameCount;
 	OutManifestDraft.RouteSlotCount = RouteData->DroneCount;
-	OutManifestDraft.bHasRange = RouteData->OptionalRangeStart != INDEX_NONE
-		&& RouteData->OptionalRangeEnd != INDEX_NONE;
-	OutManifestDraft.RangeStart = OutManifestDraft.bHasRange
-		? RouteData->OptionalRangeStart : 0;
-	OutManifestDraft.RangeEnd = OutManifestDraft.bHasRange
-		? RouteData->OptionalRangeEnd : 0;
+	OutManifestDraft.bHasRange = BuildIdentity.bHasRange;
+	OutManifestDraft.RangeStart = BuildIdentity.RangeStart;
+	OutManifestDraft.RangeEnd = BuildIdentity.RangeEnd;
+	OutManifestDraft.ShowOriginLatitudeE7 = BuildIdentity.ShowOriginLatitudeE7;
+	OutManifestDraft.ShowOriginLongitudeE7 = BuildIdentity.ShowOriginLongitudeE7;
 	OutManifestDraft.WaypointGeneratorVersion = GeneratorContext.WaypointGeneratorVersion;
 	OutManifestDraft.GeneratorInputDigest = GeneratorContext.GeneratorInputDigest;
-	OutManifestDraft.MatchedMapping.Reserve(Frozen.MatchedEntries.Num());
-	for (const FRouteAssignmentEntry& Entry : Frozen.MatchedEntries)
-	{
-		FRouteArtifactMatchedMapping& Mapping =
-			OutManifestDraft.MatchedMapping.AddDefaulted_GetRef();
-		Mapping.DroneID = Entry.DroneID;
-		Mapping.RouteSlotIndex = Entry.RouteSlotIndex;
-	}
 	return true;
 }
 
