@@ -19,8 +19,12 @@ FrozenAssignmentTransactionAssembler::Begin(
     std::string validationError;
     if (!dspgcs::ValidateFrozenAssignmentBegin(begin, validationError))
     {
+        const auto errorCode =
+            validationError.find("Unsupported Frozen Assignment") != std::string::npos
+                ? dspgcs::FrozenAssignmentErrorCode::UnsupportedProtocolVersion
+                : dspgcs::FrozenAssignmentErrorCode::MalformedAssignment;
         return Failure(begin.transactionId,
-            dspgcs::FrozenAssignmentErrorCode::MalformedAssignment,
+            errorCode,
             std::move(validationError));
     }
     if (begin.identity.fleetSessionId != currentFleetSessionId)
@@ -416,12 +420,17 @@ bool FrozenAssignmentTransactionAssembler::BeginMetadataEqual(
 {
     return left.payloadSchemaVersion == right.payloadSchemaVersion &&
         left.transactionId == right.transactionId &&
+        left.sourceDatasetDigest == right.sourceDatasetDigest &&
+        left.normalizedShowOriginLatitudeE7 ==
+            right.normalizedShowOriginLatitudeE7 &&
+        left.normalizedShowOriginLongitudeE7 ==
+            right.normalizedShowOriginLongitudeE7 &&
+        left.routeSlotCount == right.routeSlotCount &&
         IdentityEqual(left.identity, right.identity) &&
         left.fleetRevisionAtCapture == right.fleetRevisionAtCapture &&
         left.routeDatasetGeneration == right.routeDatasetGeneration &&
         left.completionMode == right.completionMode &&
         left.freezePolicy == right.freezePolicy &&
-        left.routeSlotCount == right.routeSlotCount &&
         left.matchedCount == right.matchedCount &&
         left.spareCount == right.spareCount &&
         left.excludedCount == right.excludedCount &&
@@ -460,12 +469,17 @@ bool FrozenAssignmentTransactionAssembler::PayloadMatchesBegin(
     const dspgcs::FrozenAssignmentBeginDTO& begin)
 {
     return payload.payloadSchemaVersion == begin.payloadSchemaVersion &&
+        payload.sourceDatasetDigest == begin.sourceDatasetDigest &&
+        payload.normalizedShowOriginLatitudeE7 ==
+            begin.normalizedShowOriginLatitudeE7 &&
+        payload.normalizedShowOriginLongitudeE7 ==
+            begin.normalizedShowOriginLongitudeE7 &&
+        payload.routeSlotCount == begin.routeSlotCount &&
         IdentityEqual(payload.identity, begin.identity) &&
         payload.fleetRevisionAtCapture == begin.fleetRevisionAtCapture &&
         payload.routeDatasetGeneration == begin.routeDatasetGeneration &&
         payload.completionMode == begin.completionMode &&
         payload.freezePolicy == begin.freezePolicy &&
-        payload.routeSlotCount == begin.routeSlotCount &&
         payload.matchedCount == begin.matchedCount &&
         payload.spareCount == begin.spareCount &&
         payload.excludedCount == begin.excludedCount &&
@@ -479,6 +493,11 @@ FrozenAssignmentTransactionAssembler::MakeSnapshot(
     const dspgcs::FrozenAssignmentDigest& digest)
 {
     FrozenAssignmentAcceptedSnapshot snapshot;
+    snapshot.sourceDatasetDigest = payload.sourceDatasetDigest;
+    snapshot.normalizedShowOriginLatitudeE7 =
+        payload.normalizedShowOriginLatitudeE7;
+    snapshot.normalizedShowOriginLongitudeE7 =
+        payload.normalizedShowOriginLongitudeE7;
     snapshot.identity = std::move(payload.identity);
     snapshot.fleetRevisionAtCapture = payload.fleetRevisionAtCapture;
     snapshot.routeDatasetGeneration = payload.routeDatasetGeneration;

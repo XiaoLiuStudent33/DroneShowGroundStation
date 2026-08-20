@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "RouteArtifactTypes.h"
 #include "RouteAssignmentTypes.generated.h"
 
 UENUM(BlueprintType)
@@ -137,6 +138,15 @@ USTRUCT(BlueprintType)
 struct DRONESHOWPLATFORM1_API FRouteAssignmentSourceIdentity
 {
 	GENERATED_BODY()
+
+	/** Exact committed NPZ bytes consumed by Route Preview. */
+	FRouteArtifactDigest256 SourceDatasetDigest;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Route Assignment")
+	int32 NormalizedShowOriginLatitudeE7 = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Route Assignment")
+	int32 NormalizedShowOriginLongitudeE7 = 0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Route Assignment")
 	FString FleetSessionID;

@@ -10,9 +10,28 @@
 #include "RouteAssignmentContract.h"
 #include "RouteAssignmentPipeline.h"
 #include "RoutePreviewSubsystem.h"
+#include "RouteWaypointGenerator.h"
 
 namespace RouteAssignmentPrivate
 {
+bool IsValidStableSourceDigest(const FRouteArtifactDigest256& Digest)
+{
+	if (!Digest.IsValid())
+	{
+		return false;
+	}
+
+	for (int32 ByteIndex = 0; ByteIndex < Digest.Num(); ++ByteIndex)
+	{
+		if (Digest.GetData()[ByteIndex] != 0)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
 int32 CompareDroneIDs(const FString& Left, const FString& Right)
 {
 	const int32 IdentityOrder = Left.Compare(Right, ESearchCase::IgnoreCase);
@@ -237,6 +256,12 @@ bool URouteAssignmentSubsystem::CaptureSourceSnapshot(
 		OutError = TEXT("The active route data is not structurally loaded.");
 		return false;
 	}
+	if (!RouteAssignmentPrivate::IsValidStableSourceDigest(
+			RouteData.SourceIdentity.SourceDatasetDigest))
+	{
+		OutError = TEXT("The active route SourceDatasetDigest is invalid.");
+		return false;
+	}
 
 	if (!RouteData.bShowOriginSet)
 	{
@@ -268,6 +293,25 @@ bool URouteAssignmentSubsystem::CaptureSourceSnapshot(
 	LocalSnapshot.SourceIdentity.Latitude = RouteData.ShowOriginLatitude;
 	LocalSnapshot.SourceIdentity.Longitude = RouteData.ShowOriginLongitude;
 	LocalSnapshot.SourceIdentity.Altitude = RouteData.ShowOriginAltitude;
+	LocalSnapshot.SourceIdentity.SourceDatasetDigest =
+		RouteData.SourceIdentity.SourceDatasetDigest;
+	FRouteWaypointGeneratorContext GeneratorContext;
+	FRouteWaypointGeneratorError GeneratorError;
+	if (!RouteWaypointGenerator::BuildContext(
+			RouteData.ShowOriginLatitude,
+			RouteData.ShowOriginLongitude,
+			GeneratorContext,
+			GeneratorError))
+	{
+		OutError = FString::Printf(
+			TEXT("The active route ShowOrigin cannot be normalized by the Route Artifact E7 contract: %s"),
+			*GeneratorError.Diagnostic);
+		return false;
+	}
+	LocalSnapshot.SourceIdentity.NormalizedShowOriginLatitudeE7 =
+		GeneratorContext.NormalizedShowOriginLatitudeE7;
+	LocalSnapshot.SourceIdentity.NormalizedShowOriginLongitudeE7 =
+		GeneratorContext.NormalizedShowOriginLongitudeE7;
 	LocalSnapshot.SourceIdentity.CapturedAtUtc = FDateTime::UtcNow();
 
 	LocalSnapshot.RouteSlots.Reserve(RouteData.DroneCount);
@@ -528,6 +572,27 @@ bool URouteAssignmentSubsystem::ValidateCandidate(
 	if (Candidate.SourceIdentity.RouteDatasetGeneration <= 0)
 	{
 		OutError = TEXT("RouteDatasetGeneration must be greater than zero.");
+		return false;
+	}
+
+	if (!RouteAssignmentPrivate::IsValidStableSourceDigest(
+			Candidate.SourceIdentity.SourceDatasetDigest))
+	{
+		OutError = TEXT("SourceDatasetDigest must be a valid fixed SHA-256 value.");
+		return false;
+	}
+
+	if (Candidate.SourceIdentity.NormalizedShowOriginLatitudeE7 < -900000000
+		|| Candidate.SourceIdentity.NormalizedShowOriginLatitudeE7 > 900000000)
+	{
+		OutError = TEXT("NormalizedShowOriginLatitudeE7 must be in [-900000000, 900000000].");
+		return false;
+	}
+
+	if (Candidate.SourceIdentity.NormalizedShowOriginLongitudeE7 < -1800000000
+		|| Candidate.SourceIdentity.NormalizedShowOriginLongitudeE7 > 1800000000)
+	{
+		OutError = TEXT("NormalizedShowOriginLongitudeE7 must be in [-1800000000, 1800000000].");
 		return false;
 	}
 

@@ -16,6 +16,24 @@ DEFINE_LOG_CATEGORY_STATIC(LogDSPGCSFrozenAssignmentSync, Log, All);
 
 namespace
 {
+	bool IsValidStableSourceDigest(const FRouteArtifactDigest256& Digest)
+	{
+		if (!Digest.IsValid())
+		{
+			return false;
+		}
+
+		for (int32 ByteIndex = 0; ByteIndex < Digest.Num(); ++ByteIndex)
+		{
+			if (Digest.GetData()[ByteIndex] != 0)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	std::string ToUtf8(const FString& Value)
 	{
 		const FTCHARToUTF8 Converted(*Value);
@@ -91,6 +109,15 @@ namespace
 			Snapshot.SourceIdentity.RouteDatasetGeneration <= 0)
 		{
 			OutError = TEXT("Frozen assignment source revision is invalid.");
+			return false;
+		}
+		if (!IsValidStableSourceDigest(Snapshot.SourceIdentity.SourceDatasetDigest) ||
+			Snapshot.SourceIdentity.NormalizedShowOriginLatitudeE7 < -900000000 ||
+			Snapshot.SourceIdentity.NormalizedShowOriginLatitudeE7 > 900000000 ||
+			Snapshot.SourceIdentity.NormalizedShowOriginLongitudeE7 < -1800000000 ||
+			Snapshot.SourceIdentity.NormalizedShowOriginLongitudeE7 > 1800000000)
+		{
+			OutError = TEXT("Frozen assignment stable source identity is invalid.");
 			return false;
 		}
 		if (Snapshot.CandidateDroneCount < 0 || Snapshot.RouteSlotCount <= 0 ||
@@ -393,6 +420,15 @@ bool UDSPGCSFrozenAssignmentSyncSubsystem::BuildWireTransaction(
 		static_cast<std::uint32_t>(Snapshot.MatchedEntries.Num());
 
 	dspgcs::FrozenAssignmentPayloadDTO WirePayload;
+	FMemory::Memcpy(
+		WirePayload.sourceDatasetDigest.data(),
+		Snapshot.SourceIdentity.SourceDatasetDigest.GetData(),
+		FRouteArtifactDigest256::ByteCount);
+	WirePayload.normalizedShowOriginLatitudeE7 =
+		Snapshot.SourceIdentity.NormalizedShowOriginLatitudeE7;
+	WirePayload.normalizedShowOriginLongitudeE7 =
+		Snapshot.SourceIdentity.NormalizedShowOriginLongitudeE7;
+	WirePayload.routeSlotCount = static_cast<std::uint32_t>(Snapshot.RouteSlotCount);
 	WirePayload.identity = OutTransaction.Identity;
 	WirePayload.fleetRevisionAtCapture = static_cast<std::uint64_t>(
 		Snapshot.SourceIdentity.FleetRevisionAtCapture);
@@ -406,7 +442,6 @@ bool UDSPGCSFrozenAssignmentSyncSubsystem::BuildWireTransaction(
 		Snapshot.FreezePolicy == ERouteAssignmentFreezePolicy::RequireFull
 			? dspgcs::FrozenAssignmentFreezePolicy::RequireFull
 			: dspgcs::FrozenAssignmentFreezePolicy::AllowDegraded;
-	WirePayload.routeSlotCount = static_cast<std::uint32_t>(Snapshot.RouteSlotCount);
 	WirePayload.matchedCount = OutTransaction.MatchedCount;
 	WirePayload.spareCount = static_cast<std::uint32_t>(Snapshot.SpareDrones.Num());
 	WirePayload.excludedCount = static_cast<std::uint32_t>(Snapshot.ExcludedDrones.Num());
@@ -457,12 +492,17 @@ bool UDSPGCSFrozenAssignmentSyncSubsystem::BuildWireTransaction(
 
 	dspgcs::FrozenAssignmentBeginDTO Begin;
 	Begin.transactionId = ToUtf8(TransactionID);
+	Begin.sourceDatasetDigest = WirePayload.sourceDatasetDigest;
+	Begin.normalizedShowOriginLatitudeE7 =
+		WirePayload.normalizedShowOriginLatitudeE7;
+	Begin.normalizedShowOriginLongitudeE7 =
+		WirePayload.normalizedShowOriginLongitudeE7;
+	Begin.routeSlotCount = WirePayload.routeSlotCount;
 	Begin.identity = WirePayload.identity;
 	Begin.fleetRevisionAtCapture = WirePayload.fleetRevisionAtCapture;
 	Begin.routeDatasetGeneration = WirePayload.routeDatasetGeneration;
 	Begin.completionMode = WirePayload.completionMode;
 	Begin.freezePolicy = WirePayload.freezePolicy;
-	Begin.routeSlotCount = WirePayload.routeSlotCount;
 	Begin.matchedCount = WirePayload.matchedCount;
 	Begin.spareCount = WirePayload.spareCount;
 	Begin.excludedCount = WirePayload.excludedCount;

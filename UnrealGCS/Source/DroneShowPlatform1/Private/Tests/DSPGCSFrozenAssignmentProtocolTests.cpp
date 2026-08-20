@@ -13,6 +13,9 @@ bool FDSPGCSFrozenAssignmentSharedContractTest::RunTest(const FString& Parameter
 {
 	(void)Parameters;
 	dspgcs::FrozenAssignmentPayloadDTO Payload;
+	Payload.sourceDatasetDigest.fill(0x5a);
+	Payload.normalizedShowOriginLatitudeE7 = 301230000;
+	Payload.normalizedShowOriginLongitudeE7 = 1204560000;
 	Payload.identity.fleetSessionId = "UE-SHARED-COMPILE-FLEET";
 	Payload.identity.assignmentAuthoritySessionId =
 		"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";

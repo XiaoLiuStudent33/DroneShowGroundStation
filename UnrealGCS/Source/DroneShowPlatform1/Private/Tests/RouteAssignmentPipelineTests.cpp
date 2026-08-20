@@ -23,6 +23,16 @@ namespace
 	FRouteAssignmentSourceSnapshot MakeSnapshot()
 	{
 		FRouteAssignmentSourceSnapshot Snapshot;
+		uint8 SourceDigestBytes[FRouteArtifactDigest256::ByteCount];
+		FMemory::Memset(SourceDigestBytes, 0x5a, sizeof(SourceDigestBytes));
+		FString SourceDigestError;
+		check(FRouteArtifactDigest256::FromBytes(
+			SourceDigestBytes,
+			UE_ARRAY_COUNT(SourceDigestBytes),
+			Snapshot.SourceIdentity.SourceDatasetDigest,
+			SourceDigestError));
+		Snapshot.SourceIdentity.NormalizedShowOriginLatitudeE7 = 300000000;
+		Snapshot.SourceIdentity.NormalizedShowOriginLongitudeE7 = 1200000000;
 		Snapshot.SourceIdentity.FleetSessionID = TEXT("PIPELINE-SESSION");
 		Snapshot.SourceIdentity.FleetRevisionAtCapture = 9;
 		Snapshot.SourceIdentity.RouteDatasetGeneration = 4;
@@ -623,7 +633,29 @@ bool FIntegration01LiveSourceTest::RunTest(const FString& Parameters)
 		Working.SourceIdentity.FleetRevisionAtCapture, static_cast<int64>(21));
 	TestEqual(TEXT("Capture Route generation retained"),
 		Working.SourceIdentity.RouteDatasetGeneration, static_cast<int64>(1));
+	TestTrue(TEXT("Capture SourceDatasetDigest retained"),
+		Working.SourceIdentity.SourceDatasetDigest ==
+			Route->GetRouteData().SourceIdentity.SourceDatasetDigest);
+	TestEqual(TEXT("Capture normalized ShowOrigin latitude retained"),
+		Working.SourceIdentity.NormalizedShowOriginLatitudeE7, 300000000);
+	TestEqual(TEXT("Capture normalized ShowOrigin longitude retained"),
+		Working.SourceIdentity.NormalizedShowOriginLongitudeE7, 1200000000);
 	TestEqual(TEXT("One live match"), Working.Summary.MatchedCount, 1);
+	TestTrue(TEXT("Live Working freezes"),
+		Authority->Freeze(ERouteAssignmentFreezePolicy::RequireFull, Error));
+	FRouteAssignmentSnapshot Frozen;
+	TestTrue(TEXT("Live Frozen snapshot available"), Authority->GetFrozenSnapshot(Frozen));
+	TestTrue(TEXT("Freeze preserves SourceDatasetDigest"),
+		Frozen.SourceIdentity.SourceDatasetDigest ==
+			Working.SourceIdentity.SourceDatasetDigest);
+	TestEqual(TEXT("Freeze preserves normalized latitude"),
+		Frozen.SourceIdentity.NormalizedShowOriginLatitudeE7,
+		Working.SourceIdentity.NormalizedShowOriginLatitudeE7);
+	TestEqual(TEXT("Freeze preserves normalized longitude"),
+		Frozen.SourceIdentity.NormalizedShowOriginLongitudeE7,
+		Working.SourceIdentity.NormalizedShowOriginLongitudeE7);
+	TestEqual(TEXT("Freeze preserves route domain"),
+		Frozen.RouteSlotCount, Working.RouteSlotCount);
 
 	GameInstance->Shutdown();
 	IFileManager::Get().Delete(*RouteFile, false, true, true);

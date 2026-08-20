@@ -43,6 +43,7 @@
     <ClCompile Include="tests\ConsolePipelineTests.cpp" />
     <ClCompile Include="tests\CommandTests.cpp" />
     <ClCompile Include="tests\ConsoleArtifactConsumerTests.cpp" />
+    <ClCompile Include="tests\ConsoleArtifactConsumerV2Tests.cpp" />
     <ClCompile Include="tests\RouteArtifactV2ContractTests.cpp" />
     <ClCompile Include="tests\DSPUploadJobProtocolTests.cpp" />
     <ClCompile Include="tests\RouteMissionCodecTests.cpp" />
@@ -53,6 +54,7 @@
     <ClCompile Include="AppConfig.cpp" />
     <ClCompile Include="CommandManager.cpp" />
     <ClCompile Include="ConsoleArtifactConsumer.cpp" />
+    <ClCompile Include="ConsoleArtifactConsumerV2.cpp" />
     <ClCompile Include="ConsoleUploadJobAuthority.cpp" />
     <ClCompile Include="DSPGCSUploadJobReceiver.cpp" />
     <ClCompile Include="MavlinkDiscoveryService.cpp" />
@@ -82,6 +84,7 @@
   <ItemGroup>
     <ClInclude Include="AppConfig.h" />
     <ClInclude Include="ConsoleArtifactConsumer.h" />
+    <ClInclude Include="ConsoleArtifactConsumerV2.h" />
     <ClInclude Include="ConsoleUploadJobAuthority.h" />
     <ClInclude Include="DSPGCSUploadJobReceiver.h" />
     <ClInclude Include="DroneDiscovery.h" />

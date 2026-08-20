@@ -9,6 +9,7 @@
 #include "MavlinkReadOnlyIngress.h"
 #include "MavlinkUdpReceiver.h"
 #include "SafetyConfig.h"
+#include "RouteArtifactReadLease.h"
 
 #include <chrono>
 #include <algorithm>
@@ -34,6 +35,8 @@ int RunDSPFrozenAssignmentProtocolTests();
 int RunDSPFrozenAssignmentReceiverTests();
 int RunDSPFrozenAssignmentE2EServer(int argc, char** argv);
 int RunConsoleArtifactConsumerTests();
+int RunConsoleArtifactConsumerV2Tests();
+int RunConsoleArtifactConsumerV2Scale10K();
 int RunRouteArtifactV2ContractTests();
 int RunConsoleArtifactBenchmark(int argc, char** argv);
 int RunRouteMissionCodecTests();
@@ -122,6 +125,36 @@ snapshot_items_per_chunk=256
         Expect(
             config.artifactWorkspaceRoot == "C:\\DroneGCSArtifactWorkspace",
             "Artifact Workspace root was not loaded");
+
+        TemporaryConfigFile normalizedWorkspace("normalized-workspace", R"(
+safe_test_mode=true
+mavlink_network_enabled=false
+real_command_enabled=false
+heartbeat_timeout_ms=3000
+dspgcs_telemetry_enabled=false
+dspgcs_command_enabled=false
+artifact_workspace_root=C:\DroneGCSArtifactWorkspace\temporary\..\CurrentWorkspace
+)" );
+        AppConfig normalizedWorkspaceConfig;
+        error.clear();
+        Expect(
+            AppConfig::Load(
+                normalizedWorkspace.GetPath(), normalizedWorkspaceConfig, error),
+            "normalized Artifact Workspace config failed to load: " + error);
+        Expect(
+            normalizedWorkspaceConfig.artifactWorkspaceRoot ==
+                std::filesystem::u8path(
+                    "C:\\DroneGCSArtifactWorkspace\\temporary\\..\\CurrentWorkspace")
+                    .lexically_normal().u8string(),
+            "Artifact Workspace root retained noncanonical dot segments");
+        Expect(
+            dronegcs::route_artifact::ArtifactReadLease::BuildMutexName(
+                std::filesystem::u8path(
+                    normalizedWorkspaceConfig.artifactWorkspaceRoot).wstring()) ==
+            dronegcs::route_artifact::ArtifactReadLease::BuildMutexName(
+                std::filesystem::u8path(
+                    "C:\\DroneGCSArtifactWorkspace\\CurrentWorkspace").wstring()),
+            "ArtifactReadLease did not receive the canonical Workspace identity");
 
         TemporaryConfigFile fallback("fallback", R"(
 safe_test_mode=true
@@ -1413,6 +1446,14 @@ int main(const int argc, char** argv)
     {
         return RunRouteArtifactV2ContractTests();
     }
+    if (argc > 1 && std::string(argv[1]) == "--artifact-v2-consumer-tests")
+    {
+        return RunConsoleArtifactConsumerV2Tests();
+    }
+    if (argc > 1 && std::string(argv[1]) == "--artifact-v2-scale-10k")
+    {
+        return RunConsoleArtifactConsumerV2Scale10K();
+    }
     if (argc > 1 && std::string(argv[1]) == "--mission-tests")
     {
         return RunRouteMissionCodecTests();
@@ -1433,13 +1474,15 @@ int main(const int argc, char** argv)
     const int frozenAssignmentReceiverResult =
         RunDSPFrozenAssignmentReceiverTests();
     const int artifactConsumerResult = RunConsoleArtifactConsumerTests();
+    const int artifactConsumerV2Result = RunConsoleArtifactConsumerV2Tests();
     const int artifactV2ContractResult = RunRouteArtifactV2ContractTests();
     const int missionCodecResult = RunRouteMissionCodecTests();
     const int uploadJobResult = RunDSPUploadJobProtocolTests();
 
     if (pipelineResult == 0 && commandResult == 0 && dspCommandResult == 0 &&
         frozenAssignmentResult == 0 && frozenAssignmentReceiverResult == 0
-        && artifactConsumerResult == 0 && artifactV2ContractResult == 0
+        && artifactConsumerResult == 0 && artifactConsumerV2Result == 0
+        && artifactV2ContractResult == 0
         && missionCodecResult == 0
         && uploadJobResult == 0)
     {
@@ -1454,6 +1497,7 @@ int main(const int argc, char** argv)
         << " frozenAssignment=" << frozenAssignmentResult
         << " frozenAssignmentReceiver=" << frozenAssignmentReceiverResult
         << " artifactConsumer=" << artifactConsumerResult
+        << " artifactConsumerV2=" << artifactConsumerV2Result
         << " artifactV2Contract=" << artifactV2ContractResult
         << " missionCodec=" << missionCodecResult
         << " uploadJob=" << uploadJobResult

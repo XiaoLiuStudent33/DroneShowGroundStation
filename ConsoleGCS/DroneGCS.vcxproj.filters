@@ -27,6 +27,9 @@
     <ClCompile Include="AppConfig.cpp">
       <Filter>Core</Filter>
     </ClCompile>
+    <ClCompile Include="ConsoleArtifactConsumerV2.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
     <ClCompile Include="ConsoleGCSApplication.cpp">
       <Filter>Core</Filter>
     </ClCompile>
@@ -99,6 +102,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AppConfig.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="ConsoleArtifactConsumerV2.h">
       <Filter>Core</Filter>
     </ClInclude>
     <ClInclude Include="ConsoleGCSApplication.h">

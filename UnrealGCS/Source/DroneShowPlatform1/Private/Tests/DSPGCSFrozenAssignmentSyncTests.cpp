@@ -43,6 +43,16 @@ namespace
 		Snapshot.AssignmentAuthoritySessionID = TEXT("AUTHORITY-R2");
 		Snapshot.AssignmentRevision = 5;
 		Snapshot.SourceIdentity.FleetSessionID = TEXT("FLEET-R2");
+		uint8 SourceDigestBytes[FRouteArtifactDigest256::ByteCount];
+		FMemory::Memset(SourceDigestBytes, 0x5a, sizeof(SourceDigestBytes));
+		FString SourceDigestError;
+		check(FRouteArtifactDigest256::FromBytes(
+			SourceDigestBytes,
+			UE_ARRAY_COUNT(SourceDigestBytes),
+			Snapshot.SourceIdentity.SourceDatasetDigest,
+			SourceDigestError));
+		Snapshot.SourceIdentity.NormalizedShowOriginLatitudeE7 = 301230000;
+		Snapshot.SourceIdentity.NormalizedShowOriginLongitudeE7 = 1204560000;
 		Snapshot.SourceIdentity.FleetRevisionAtCapture = 17;
 		Snapshot.SourceIdentity.RouteDatasetGeneration = 9;
 		Snapshot.SourceIdentity.bShowOriginSet = true;
@@ -858,6 +868,15 @@ bool FDSPGCSFrozenAssignmentSyncTests::RunTest(const FString& Parameters)
 		static_cast<int32>(FullDecoded.Begin.vacantCount), 0);
 	TestEqual(TEXT("Canonical mapping count"),
 		static_cast<int32>(FullDecoded.Payload.mappings.size()), 4);
+	TestTrue(TEXT("SourceDatasetDigest projects to Begin"),
+		FullDecoded.Begin.sourceDatasetDigest ==
+			FullDecoded.Payload.sourceDatasetDigest);
+	TestEqual(TEXT("Normalized latitude projects to Begin"),
+		FullDecoded.Begin.normalizedShowOriginLatitudeE7,
+		FullDecoded.Payload.normalizedShowOriginLatitudeE7);
+	TestEqual(TEXT("Normalized longitude projects to Begin"),
+		FullDecoded.Begin.normalizedShowOriginLongitudeE7,
+		FullDecoded.Payload.normalizedShowOriginLongitudeE7);
 	for (int32 Index = 0; Index < 4; ++Index)
 	{
 		TestEqual(
@@ -884,7 +903,7 @@ bool FDSPGCSFrozenAssignmentSyncTests::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Non-wire changed transaction decodes"),
 		DecodeWireTransaction(
 			NonWireChangedTransaction, NonWireChangedDecoded, Error));
-	TestTrue(TEXT("HorizontalDistance, ShowOrigin and Geo are absent from canonical wire"),
+	TestTrue(TEXT("HorizontalDistance, raw ShowOrigin doubles and Geo are absent from canonical wire"),
 		FullDecoded.CanonicalBytes == NonWireChangedDecoded.CanonicalBytes);
 	TestTrue(TEXT("Non-wire fields do not alter digest"),
 		FullTransaction.Digest == NonWireChangedTransaction.Digest);
@@ -899,6 +918,87 @@ bool FDSPGCSFrozenAssignmentSyncTests::RunTest(const FString& Parameters)
 		FullDecoded.CanonicalBytes == FullRepeatDecoded.CanonicalBytes);
 	TestTrue(TEXT("Digest is deterministic"),
 		FullTransaction.Digest == FullRepeat.Digest);
+
+	FRouteAssignmentSnapshot DifferentDataset = Full;
+	uint8 DifferentDigestBytes[FRouteArtifactDigest256::ByteCount];
+	FMemory::Memset(DifferentDigestBytes, 0x6b, sizeof(DifferentDigestBytes));
+	FString DifferentDigestError;
+	TestTrue(TEXT("Different test source digest is constructed"),
+		FRouteArtifactDigest256::FromBytes(
+			DifferentDigestBytes,
+			UE_ARRAY_COUNT(DifferentDigestBytes),
+			DifferentDataset.SourceIdentity.SourceDatasetDigest,
+			DifferentDigestError));
+	FDSPGCSFrozenAssignmentWireTransaction DifferentDatasetTransaction;
+	TestTrue(TEXT("Different source dataset builds"),
+		Build(DifferentDataset, TEXT("wire-different-dataset"),
+			DifferentDatasetTransaction, Error));
+	TestTrue(TEXT("Different SourceDatasetDigest changes AssignmentDigest"),
+		DifferentDatasetTransaction.Digest != FullTransaction.Digest);
+
+	FRouteAssignmentSnapshot DifferentOrigin = Full;
+	++DifferentOrigin.SourceIdentity.NormalizedShowOriginLatitudeE7;
+	FDSPGCSFrozenAssignmentWireTransaction DifferentOriginTransaction;
+	TestTrue(TEXT("Different normalized origin builds"),
+		Build(DifferentOrigin, TEXT("wire-different-origin"),
+			DifferentOriginTransaction, Error));
+	TestTrue(TEXT("Different normalized origin changes AssignmentDigest"),
+		DifferentOriginTransaction.Digest != FullTransaction.Digest);
+
+	FRouteAssignmentSnapshot DifferentGeneration = Full;
+	++DifferentGeneration.SourceIdentity.RouteDatasetGeneration;
+	FDSPGCSFrozenAssignmentWireTransaction DifferentGenerationTransaction;
+	TestTrue(TEXT("Different runtime generation builds"),
+		Build(DifferentGeneration, TEXT("wire-different-generation"),
+			DifferentGenerationTransaction, Error));
+	TestTrue(TEXT("Runtime generation preserves stable source tuple"),
+		DifferentGeneration.SourceIdentity.SourceDatasetDigest ==
+			Full.SourceIdentity.SourceDatasetDigest &&
+		DifferentGeneration.SourceIdentity.NormalizedShowOriginLatitudeE7 ==
+			Full.SourceIdentity.NormalizedShowOriginLatitudeE7 &&
+		DifferentGeneration.SourceIdentity.NormalizedShowOriginLongitudeE7 ==
+			Full.SourceIdentity.NormalizedShowOriginLongitudeE7 &&
+		DifferentGeneration.RouteSlotCount == Full.RouteSlotCount);
+	TestTrue(TEXT("Runtime generation remains in overall AssignmentDigest"),
+		DifferentGenerationTransaction.Digest != FullTransaction.Digest);
+
+	for (int32 InvalidKind = 0; InvalidKind < 6; ++InvalidKind)
+	{
+		FRouteAssignmentSnapshot InvalidStableSource = Full;
+		switch (InvalidKind)
+		{
+		case 0:
+			InvalidStableSource.SourceIdentity.SourceDatasetDigest.Reset();
+			break;
+		case 1:
+		{
+			uint8 ZeroDigestBytes[FRouteArtifactDigest256::ByteCount]{};
+			FString ZeroDigestError;
+			check(FRouteArtifactDigest256::FromBytes(
+				ZeroDigestBytes,
+				UE_ARRAY_COUNT(ZeroDigestBytes),
+				InvalidStableSource.SourceIdentity.SourceDatasetDigest,
+				ZeroDigestError));
+			break;
+		}
+		case 2:
+			InvalidStableSource.SourceIdentity.NormalizedShowOriginLatitudeE7 = -900000001;
+			break;
+		case 3:
+			InvalidStableSource.SourceIdentity.NormalizedShowOriginLatitudeE7 = 900000001;
+			break;
+		case 4:
+			InvalidStableSource.SourceIdentity.NormalizedShowOriginLongitudeE7 = -1800000001;
+			break;
+		default:
+			InvalidStableSource.SourceIdentity.NormalizedShowOriginLongitudeE7 = 1800000001;
+			break;
+		}
+		FDSPGCSFrozenAssignmentWireTransaction IgnoredTransaction;
+		TestFalse(TEXT("Invalid stable source is rejected before wire encoding"),
+			Build(InvalidStableSource, TEXT("wire-invalid-stable-source"),
+				IgnoredTransaction, Error));
+	}
 
 	FRouteAssignmentSnapshot Reordered = Full;
 	Algo::Reverse(Reordered.MatchedEntries);

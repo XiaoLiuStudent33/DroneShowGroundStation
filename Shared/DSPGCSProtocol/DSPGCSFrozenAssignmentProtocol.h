@@ -34,7 +34,7 @@
 
 namespace dspgcs
 {
-    inline constexpr std::uint16_t FrozenAssignmentSchemaVersion = 1;
+    inline constexpr std::uint16_t FrozenAssignmentSchemaVersion = 2;
 
     // These values extend MessageType without changing the existing 1/2/3 wire values.
     // They remain constants until the legacy protocol header is normalized to UTF-8.
@@ -129,6 +129,10 @@ namespace dspgcs
     struct FrozenAssignmentPayloadDTO
     {
         std::uint16_t payloadSchemaVersion = FrozenAssignmentSchemaVersion;
+        FrozenAssignmentDigest sourceDatasetDigest{};
+        std::int32_t normalizedShowOriginLatitudeE7 = 0;
+        std::int32_t normalizedShowOriginLongitudeE7 = 0;
+        std::uint32_t routeSlotCount = 0;
         FrozenAssignmentIdentityDTO identity;
         std::uint64_t fleetRevisionAtCapture = 0;
         std::uint64_t routeDatasetGeneration = 0;
@@ -136,7 +140,6 @@ namespace dspgcs
             FrozenAssignmentCompletionMode::Full;
         FrozenAssignmentFreezePolicy freezePolicy =
             FrozenAssignmentFreezePolicy::RequireFull;
-        std::uint32_t routeSlotCount = 0;
         std::uint32_t matchedCount = 0;
         std::uint32_t spareCount = 0;
         std::uint32_t excludedCount = 0;
@@ -149,6 +152,10 @@ namespace dspgcs
     {
         std::uint16_t payloadSchemaVersion = FrozenAssignmentSchemaVersion;
         std::string transactionId;
+        FrozenAssignmentDigest sourceDatasetDigest{};
+        std::int32_t normalizedShowOriginLatitudeE7 = 0;
+        std::int32_t normalizedShowOriginLongitudeE7 = 0;
+        std::uint32_t routeSlotCount = 0;
         FrozenAssignmentIdentityDTO identity;
         std::uint64_t fleetRevisionAtCapture = 0;
         std::uint64_t routeDatasetGeneration = 0;
@@ -156,7 +163,6 @@ namespace dspgcs
             FrozenAssignmentCompletionMode::Full;
         FrozenAssignmentFreezePolicy freezePolicy =
             FrozenAssignmentFreezePolicy::RequireFull;
-        std::uint32_t routeSlotCount = 0;
         std::uint32_t matchedCount = 0;
         std::uint32_t spareCount = 0;
         std::uint32_t excludedCount = 0;
@@ -454,6 +460,25 @@ namespace dspgcs
                 Fail(error, "Unsupported Frozen Assignment payload schema version.");
         }
 
+        inline bool ValidateStableSource(
+            const FrozenAssignmentDigest& sourceDatasetDigest,
+            const std::int32_t latitudeE7,
+            const std::int32_t longitudeE7,
+            const std::uint32_t routeSlotCount,
+            std::string& error)
+        {
+            if (std::all_of(sourceDatasetDigest.begin(), sourceDatasetDigest.end(),
+                    [](const std::uint8_t value) { return value == 0; }))
+                return Fail(error, "SourceDatasetDigest must be a non-zero SHA-256 value.");
+            if (latitudeE7 < -900000000 || latitudeE7 > 900000000)
+                return Fail(error, "Normalized ShowOrigin latitude E7 is outside its domain.");
+            if (longitudeE7 < -1800000000 || longitudeE7 > 1800000000)
+                return Fail(error, "Normalized ShowOrigin longitude E7 is outside its domain.");
+            if (routeSlotCount == 0)
+                return Fail(error, "RouteSlotCount must be greater than zero.");
+            return true;
+        }
+
         inline bool ValidateTransactionId(const std::string& value, std::string& error)
         {
             if (value.empty() || value.size() > MaxStringBytes || !IsValidUtf8(value))
@@ -486,6 +511,12 @@ namespace dspgcs
         using namespace frozen_assignment_detail;
         error.clear();
         if (!ValidateVersion(payload.payloadSchemaVersion, error) ||
+            !ValidateStableSource(
+                payload.sourceDatasetDigest,
+                payload.normalizedShowOriginLatitudeE7,
+                payload.normalizedShowOriginLongitudeE7,
+                payload.routeSlotCount,
+                error) ||
             !ValidateIdentity(payload.identity, error) ||
             !ValidateAuditEnums(payload.completionMode, payload.freezePolicy, error))
             return false;
@@ -547,12 +578,15 @@ namespace dspgcs
 
         Writer writer;
         if (!writer.U16(payload.payloadSchemaVersion) ||
+            !writer.Digest(payload.sourceDatasetDigest) ||
+            !writer.I32(payload.normalizedShowOriginLatitudeE7) ||
+            !writer.I32(payload.normalizedShowOriginLongitudeE7) ||
+            !writer.U32(payload.routeSlotCount) ||
             !WriteIdentity(writer, payload.identity) ||
             !writer.U64(payload.fleetRevisionAtCapture) ||
             !writer.U64(payload.routeDatasetGeneration) ||
             !writer.U8(static_cast<std::uint8_t>(payload.completionMode)) ||
             !writer.U8(static_cast<std::uint8_t>(payload.freezePolicy)) ||
-            !writer.U32(payload.routeSlotCount) ||
             !writer.U32(payload.matchedCount) ||
             !writer.U32(payload.spareCount) ||
             !writer.U32(payload.excludedCount) ||
@@ -586,11 +620,15 @@ namespace dspgcs
         if (!reader.U16(output.payloadSchemaVersion))
             return Fail(error, "Canonical Frozen Assignment payload is truncated.");
         if (!ValidateVersion(output.payloadSchemaVersion, error)) return false;
-        if (!ReadIdentity(reader, output.identity) ||
+        if (!reader.Digest(output.sourceDatasetDigest) ||
+            !reader.I32(output.normalizedShowOriginLatitudeE7) ||
+            !reader.I32(output.normalizedShowOriginLongitudeE7) ||
+            !reader.U32(output.routeSlotCount) ||
+            !ReadIdentity(reader, output.identity) ||
             !reader.U64(output.fleetRevisionAtCapture) ||
             !reader.U64(output.routeDatasetGeneration) ||
             !reader.U8(completion) || !reader.U8(policy) ||
-            !reader.U32(output.routeSlotCount) || !reader.U32(output.matchedCount) ||
+            !reader.U32(output.matchedCount) ||
             !reader.U32(output.spareCount) || !reader.U32(output.excludedCount) ||
             !reader.U32(output.vacantCount) || !reader.I64(output.frozenAtUtcMs) ||
             !reader.U32(mappingCount))
@@ -697,6 +735,12 @@ namespace dspgcs
         error.clear();
         if (!ValidateVersion(value.payloadSchemaVersion, error) ||
             !ValidateTransactionId(value.transactionId, error) ||
+            !ValidateStableSource(
+                value.sourceDatasetDigest,
+                value.normalizedShowOriginLatitudeE7,
+                value.normalizedShowOriginLongitudeE7,
+                value.routeSlotCount,
+                error) ||
             !ValidateIdentity(value.identity, error) ||
             !ValidateAuditEnums(value.completionMode, value.freezePolicy, error)) return false;
         if (value.routeDatasetGeneration == 0)
@@ -730,12 +774,16 @@ namespace dspgcs
         if (!ValidateFrozenAssignmentBegin(value, error)) return false;
         Writer writer;
         if (!writer.U16(value.payloadSchemaVersion) || !writer.String(value.transactionId) ||
+            !writer.Digest(value.sourceDatasetDigest) ||
+            !writer.I32(value.normalizedShowOriginLatitudeE7) ||
+            !writer.I32(value.normalizedShowOriginLongitudeE7) ||
+            !writer.U32(value.routeSlotCount) ||
             !WriteIdentity(writer, value.identity) ||
             !writer.U64(value.fleetRevisionAtCapture) ||
             !writer.U64(value.routeDatasetGeneration) ||
             !writer.U8(static_cast<std::uint8_t>(value.completionMode)) ||
             !writer.U8(static_cast<std::uint8_t>(value.freezePolicy)) ||
-            !writer.U32(value.routeSlotCount) || !writer.U32(value.matchedCount) ||
+            !writer.U32(value.matchedCount) ||
             !writer.U32(value.spareCount) || !writer.U32(value.excludedCount) ||
             !writer.U32(value.vacantCount) || !writer.I64(value.frozenAtUtcMs) ||
             !writer.U64(value.totalPayloadBytes) || !writer.U32(value.chunkCount) ||
@@ -755,11 +803,16 @@ namespace dspgcs
         std::uint8_t completion = 0, policy = 0;
         if (!reader.U16(output.payloadSchemaVersion)) return Fail(error, "Begin payload is truncated.");
         if (!ValidateVersion(output.payloadSchemaVersion, error)) return false;
-        if (!reader.String(output.transactionId) || !ReadIdentity(reader, output.identity) ||
+        if (!reader.String(output.transactionId) ||
+            !reader.Digest(output.sourceDatasetDigest) ||
+            !reader.I32(output.normalizedShowOriginLatitudeE7) ||
+            !reader.I32(output.normalizedShowOriginLongitudeE7) ||
+            !reader.U32(output.routeSlotCount) ||
+            !ReadIdentity(reader, output.identity) ||
             !reader.U64(output.fleetRevisionAtCapture) ||
             !reader.U64(output.routeDatasetGeneration) ||
             !reader.U8(completion) || !reader.U8(policy) ||
-            !reader.U32(output.routeSlotCount) || !reader.U32(output.matchedCount) ||
+            !reader.U32(output.matchedCount) ||
             !reader.U32(output.spareCount) || !reader.U32(output.excludedCount) ||
             !reader.U32(output.vacantCount) || !reader.I64(output.frozenAtUtcMs) ||
             !reader.U64(output.totalPayloadBytes) || !reader.U32(output.chunkCount) ||

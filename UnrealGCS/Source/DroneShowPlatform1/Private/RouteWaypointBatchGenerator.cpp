@@ -19,7 +19,7 @@ namespace
 	constexpr int64 ManifestPerRouteEstimateBytes = 512;
 	constexpr int64 FilesystemOverheadPerRouteBytes = 4096;
 
-	bool SameSource(
+	bool SameBatchSource(
 		const FRouteArtifactSourceIdentity& Left,
 		const FRouteArtifactSourceIdentity& Right)
 	{
@@ -34,7 +34,7 @@ bool FRouteWaypointGenerationSnapshot::IsValid() const
 {
 	return RouteData.IsValid()
 		&& RouteData->IsLoaded()
-		&& SameSource(SourceIdentity, RouteData->SourceIdentity)
+		&& SameBatchSource(SourceIdentity, RouteData->SourceIdentity)
 		&& RouteDatasetGeneration > 0
 		&& GeneratorContext.IsValid()
 		&& WaypointGeneratorVersion == RouteWaypointGeneratorContract::WaypointGeneratorVersion

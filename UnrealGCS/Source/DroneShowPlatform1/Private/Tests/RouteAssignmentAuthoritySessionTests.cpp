@@ -11,6 +11,16 @@ namespace
 	FRouteAssignmentCandidate MakeAuthoritySessionCandidate()
 	{
 		FRouteAssignmentCandidate Candidate;
+		uint8 SourceDigestBytes[FRouteArtifactDigest256::ByteCount];
+		FMemory::Memset(SourceDigestBytes, 0x5a, sizeof(SourceDigestBytes));
+		FString SourceDigestError;
+		check(FRouteArtifactDigest256::FromBytes(
+			SourceDigestBytes,
+			UE_ARRAY_COUNT(SourceDigestBytes),
+			Candidate.SourceIdentity.SourceDatasetDigest,
+			SourceDigestError));
+		Candidate.SourceIdentity.NormalizedShowOriginLatitudeE7 = 300000000;
+		Candidate.SourceIdentity.NormalizedShowOriginLongitudeE7 = 1200000000;
 		Candidate.SourceIdentity.FleetSessionID = TEXT("AUTHORITY-SESSION-TEST-FLEET");
 		Candidate.SourceIdentity.FleetRevisionAtCapture = 7;
 		Candidate.SourceIdentity.RouteDatasetGeneration = 3;
@@ -75,6 +85,13 @@ bool FRouteAssignmentAuthoritySessionLifetimeTest::RunTest(const FString& Parame
 		FirstWorking.AssignmentAuthoritySessionID, FirstEpoch);
 	TestEqual(TEXT("First assignment revision"),
 		FirstWorking.AssignmentRevision, static_cast<int64>(1));
+	TestTrue(TEXT("Working preserves SourceDatasetDigest"),
+		FirstWorking.SourceIdentity.SourceDatasetDigest ==
+			MakeAuthoritySessionCandidate().SourceIdentity.SourceDatasetDigest);
+	TestEqual(TEXT("Working preserves normalized latitude"),
+		FirstWorking.SourceIdentity.NormalizedShowOriginLatitudeE7, 300000000);
+	TestEqual(TEXT("Working preserves normalized longitude"),
+		FirstWorking.SourceIdentity.NormalizedShowOriginLongitudeE7, 1200000000);
 
 	First->Reset();
 	TestEqual(TEXT("Reset preserves authority epoch"),
@@ -97,6 +114,52 @@ bool FRouteAssignmentAuthoritySessionLifetimeTest::RunTest(const FString& Parame
 		Frozen.AssignmentAuthoritySessionID, FirstEpoch);
 	TestEqual(TEXT("Freeze does not issue another revision"),
 		Frozen.AssignmentRevision, SecondWorking.AssignmentRevision);
+	TestTrue(TEXT("Freeze preserves stable source digest"),
+		Frozen.SourceIdentity.SourceDatasetDigest ==
+			SecondWorking.SourceIdentity.SourceDatasetDigest);
+	TestEqual(TEXT("Freeze preserves stable source latitude"),
+		Frozen.SourceIdentity.NormalizedShowOriginLatitudeE7,
+		SecondWorking.SourceIdentity.NormalizedShowOriginLatitudeE7);
+	TestEqual(TEXT("Freeze preserves stable source longitude"),
+		Frozen.SourceIdentity.NormalizedShowOriginLongitudeE7,
+		SecondWorking.SourceIdentity.NormalizedShowOriginLongitudeE7);
+
+	URouteAssignmentSubsystem* InvalidAuthority = Second;
+	for (int32 InvalidKind = 0; InvalidKind < 6; ++InvalidKind)
+	{
+		FRouteAssignmentCandidate Invalid = MakeAuthoritySessionCandidate();
+		switch (InvalidKind)
+		{
+		case 0:
+			Invalid.SourceIdentity.SourceDatasetDigest.Reset();
+			break;
+		case 1:
+		{
+			uint8 ZeroDigestBytes[FRouteArtifactDigest256::ByteCount]{};
+			FString ZeroDigestError;
+			check(FRouteArtifactDigest256::FromBytes(
+				ZeroDigestBytes,
+				UE_ARRAY_COUNT(ZeroDigestBytes),
+				Invalid.SourceIdentity.SourceDatasetDigest,
+				ZeroDigestError));
+			break;
+		}
+		case 2:
+			Invalid.SourceIdentity.NormalizedShowOriginLatitudeE7 = -900000001;
+			break;
+		case 3:
+			Invalid.SourceIdentity.NormalizedShowOriginLatitudeE7 = 900000001;
+			break;
+		case 4:
+			Invalid.SourceIdentity.NormalizedShowOriginLongitudeE7 = -1800000001;
+			break;
+		default:
+			Invalid.SourceIdentity.NormalizedShowOriginLongitudeE7 = 1800000001;
+			break;
+		}
+		TestFalse(TEXT("Authority rejects invalid stable source identity"),
+			InvalidAuthority->ReplaceWorkingAssignment(Invalid, Error));
+	}
 
 	FirstGameInstance->Shutdown();
 	SecondGameInstance->Shutdown();

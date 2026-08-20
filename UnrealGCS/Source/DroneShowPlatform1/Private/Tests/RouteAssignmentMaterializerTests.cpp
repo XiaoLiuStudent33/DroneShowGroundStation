@@ -9,6 +9,16 @@ namespace
 	FRouteAssignmentSourceSnapshot MakeSnapshot(const int32 RouteCount)
 	{
 		FRouteAssignmentSourceSnapshot Snapshot;
+		uint8 SourceDigestBytes[FRouteArtifactDigest256::ByteCount];
+		FMemory::Memset(SourceDigestBytes, 0x5a, sizeof(SourceDigestBytes));
+		FString SourceDigestError;
+		check(FRouteArtifactDigest256::FromBytes(
+			SourceDigestBytes,
+			UE_ARRAY_COUNT(SourceDigestBytes),
+			Snapshot.SourceIdentity.SourceDatasetDigest,
+			SourceDigestError));
+		Snapshot.SourceIdentity.NormalizedShowOriginLatitudeE7 = 300000000;
+		Snapshot.SourceIdentity.NormalizedShowOriginLongitudeE7 = 1200000000;
 		Snapshot.SourceIdentity.FleetSessionID = TEXT("MaterializerTestSession");
 		Snapshot.SourceIdentity.FleetRevisionAtCapture = 7;
 		Snapshot.SourceIdentity.RouteDatasetGeneration = 11;

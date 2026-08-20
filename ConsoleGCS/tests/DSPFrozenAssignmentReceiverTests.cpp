@@ -61,6 +61,9 @@ namespace
             dspgcs::FrozenAssignmentFreezePolicy::RequireFull)
     {
         dspgcs::FrozenAssignmentPayloadDTO payload;
+        payload.sourceDatasetDigest.fill(0x5a);
+        payload.normalizedShowOriginLatitudeE7 = 301230000;
+        payload.normalizedShowOriginLongitudeE7 = 1204560000;
         payload.identity.fleetSessionId = fleetSessionId;
         payload.identity.assignmentAuthoritySessionId = authoritySessionId;
         payload.identity.assignmentRevision = revision;
@@ -92,6 +95,10 @@ namespace
     {
         dspgcs::frozen_assignment_detail::Writer writer;
         Expect(writer.U16(payload.payloadSchemaVersion), "raw version encode");
+        Expect(writer.Digest(payload.sourceDatasetDigest), "raw source digest");
+        Expect(writer.I32(payload.normalizedShowOriginLatitudeE7), "raw origin latitude");
+        Expect(writer.I32(payload.normalizedShowOriginLongitudeE7), "raw origin longitude");
+        Expect(writer.U32(payload.routeSlotCount), "raw route count");
         Expect(dspgcs::frozen_assignment_detail::WriteIdentity(
             writer, payload.identity), "raw identity encode");
         Expect(writer.U64(payload.fleetRevisionAtCapture), "raw fleet revision");
@@ -100,7 +107,6 @@ namespace
             "raw completion");
         Expect(writer.U8(static_cast<std::uint8_t>(payload.freezePolicy)),
             "raw freeze policy");
-        Expect(writer.U32(payload.routeSlotCount), "raw route count");
         Expect(writer.U32(payload.matchedCount), "raw matched count");
         Expect(writer.U32(payload.spareCount), "raw spare count");
         Expect(writer.U32(payload.excludedCount), "raw excluded count");
@@ -155,6 +161,12 @@ namespace
             error), error);
 
         built.begin.transactionId = transactionId;
+        built.begin.sourceDatasetDigest = built.payload.sourceDatasetDigest;
+        built.begin.normalizedShowOriginLatitudeE7 =
+            built.payload.normalizedShowOriginLatitudeE7;
+        built.begin.normalizedShowOriginLongitudeE7 =
+            built.payload.normalizedShowOriginLongitudeE7;
+        built.begin.routeSlotCount = built.payload.routeSlotCount;
         built.begin.identity = built.payload.identity;
         built.begin.fleetRevisionAtCapture =
             built.payload.fleetRevisionAtCapture;
@@ -162,7 +174,6 @@ namespace
             built.payload.routeDatasetGeneration;
         built.begin.completionMode = built.payload.completionMode;
         built.begin.freezePolicy = built.payload.freezePolicy;
-        built.begin.routeSlotCount = built.payload.routeSlotCount;
         built.begin.matchedCount = built.payload.matchedCount;
         built.begin.spareCount = built.payload.spareCount;
         built.begin.excludedCount = built.payload.excludedCount;
@@ -323,6 +334,19 @@ namespace
         }
         {
             FrozenAssignmentTransactionAssembler assembler;
+            auto legacy = base.begin;
+            legacy.payloadSchemaVersion = 1;
+            const auto result = assembler.Begin(
+                legacy, "PRODUCTION-TEST", Clock::now());
+            Expect(!result.succeeded &&
+                result.errorCode ==
+                    dspgcs::FrozenAssignmentErrorCode::UnsupportedProtocolVersion &&
+                result.diagnostic.find("Unsupported Frozen Assignment") !=
+                    std::string::npos,
+                "legacy Frozen Begin schema v1 was not classified as unsupported");
+        }
+        {
+            FrozenAssignmentTransactionAssembler assembler;
             auto result = Assemble(assembler, base, manager, true);
             Expect(result.succeeded, "out-of-order chunks were rejected");
         }
@@ -428,6 +452,38 @@ namespace
                 result.errorCode ==
                     dspgcs::FrozenAssignmentErrorCode::MalformedAssignment,
                 "Commit identity mismatch was accepted");
+        }
+        {
+            for (int mismatch = 0; mismatch < 4; ++mismatch)
+            {
+                auto stableMismatch = base;
+                switch (mismatch)
+                {
+                case 0:
+                    stableMismatch.begin.sourceDatasetDigest[0] ^= 0xff;
+                    break;
+                case 1:
+                    ++stableMismatch.begin.normalizedShowOriginLatitudeE7;
+                    break;
+                case 2:
+                    ++stableMismatch.begin.normalizedShowOriginLongitudeE7;
+                    break;
+                default:
+                    ++stableMismatch.begin.routeSlotCount;
+                    ++stableMismatch.begin.vacantCount;
+                    stableMismatch.begin.completionMode =
+                        dspgcs::FrozenAssignmentCompletionMode::Degraded;
+                    stableMismatch.begin.freezePolicy =
+                        dspgcs::FrozenAssignmentFreezePolicy::AllowDegraded;
+                    break;
+                }
+                FrozenAssignmentTransactionAssembler assembler;
+                const auto result = Assemble(assembler, stableMismatch, manager);
+                Expect(!result.succeeded &&
+                    result.errorCode ==
+                        dspgcs::FrozenAssignmentErrorCode::MalformedAssignment,
+                    "Begin stable source mismatch was accepted");
+            }
         }
         {
             FrozenAssignmentTransactionAssembler assembler;
@@ -614,9 +670,8 @@ namespace
             invalidVacant, "PRODUCTION-TEST", Clock::now()).succeeded,
             "vacant count mismatch was accepted");
 
-        auto zero = MakePayload(0);
-        zero.routeSlotCount = 0;
-        zero.vacantCount = 0;
+        auto zero = MakePayload(0, 1, "PRODUCTION-TEST", "AUTH-ZERO", 1,
+            dspgcs::FrozenAssignmentFreezePolicy::AllowDegraded);
         const auto zeroTransaction = BuildTransaction(zero, "TX-ZERO");
         FrozenAssignmentTransactionAssembler zeroAssembler;
         Expect(!zeroAssembler.Begin(
@@ -963,6 +1018,15 @@ namespace
         Expect(!store.TryGetRouteSlotForDroneID(
             "PRODUCTION-TEST", "drone00000", slot),
             "store lookup was not case-sensitive");
+        const auto accepted = store.GetAcceptedSnapshot("PRODUCTION-TEST");
+        Expect(accepted &&
+            accepted->sourceDatasetDigest == transaction.payload.sourceDatasetDigest &&
+            accepted->normalizedShowOriginLatitudeE7 ==
+                transaction.payload.normalizedShowOriginLatitudeE7 &&
+            accepted->normalizedShowOriginLongitudeE7 ==
+                transaction.payload.normalizedShowOriginLongitudeE7 &&
+            accepted->routeSlotCount == transaction.payload.routeSlotCount,
+            "Console accepted store lost the stable source tuple");
     }
 
     struct ScaleResult

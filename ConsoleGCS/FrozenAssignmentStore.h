@@ -14,6 +14,9 @@
 
 struct FrozenAssignmentAcceptedSnapshot
 {
+    dspgcs::FrozenAssignmentDigest sourceDatasetDigest{};
+    std::int32_t normalizedShowOriginLatitudeE7 = 0;
+    std::int32_t normalizedShowOriginLongitudeE7 = 0;
     dspgcs::FrozenAssignmentIdentityDTO identity;
     std::uint64_t fleetRevisionAtCapture = 0;
     std::uint64_t routeDatasetGeneration = 0;

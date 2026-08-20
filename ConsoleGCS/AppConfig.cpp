@@ -364,7 +364,7 @@ bool AppConfig::Load(
             error = "artifact_workspace_root must be an absolute non-volume path";
             return false;
         }
-        config.artifactWorkspaceRoot = artifactWorkspaceRoot->second;
+        config.artifactWorkspaceRoot = root.u8string();
     }
 
     const auto telemetryInterval =

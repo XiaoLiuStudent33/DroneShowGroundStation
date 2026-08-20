@@ -27,6 +27,9 @@ namespace
         const bool reverseInput = false)
     {
         dspgcs::FrozenAssignmentPayloadDTO payload;
+        payload.sourceDatasetDigest.fill(0x5a);
+        payload.normalizedShowOriginLatitudeE7 = 301230000;
+        payload.normalizedShowOriginLongitudeE7 = 1204560000;
         payload.identity.fleetSessionId = "PRODUCTION-TEST";
         payload.identity.assignmentAuthoritySessionId =
             "11111111-2222-3333-4444-555555555555";
@@ -41,6 +44,15 @@ namespace
         payload.excludedCount = 2;
         payload.vacantCount = 0;
         payload.frozenAtUtcMs = 1786924800123;
+        if (mappingCount == 0)
+        {
+            payload.routeSlotCount = 1;
+            payload.vacantCount = 1;
+            payload.completionMode =
+                dspgcs::FrozenAssignmentCompletionMode::Degraded;
+            payload.freezePolicy =
+                dspgcs::FrozenAssignmentFreezePolicy::AllowDegraded;
+        }
         payload.mappings.reserve(mappingCount);
         for (std::size_t index = 0; index < mappingCount; ++index)
         {
@@ -161,6 +173,46 @@ namespace
             reversedBytes, secondDigest, error), "second SHA-256: " + error);
         Expect(firstDigest == secondDigest, "same canonical content changed SHA-256");
 
+        auto differentDataset = ordered;
+        differentDataset.sourceDatasetDigest[0] ^= 0xff;
+        std::vector<std::uint8_t> differentDatasetBytes;
+        dspgcs::FrozenAssignmentDigest differentDatasetDigest{};
+        Expect(dspgcs::SerializeCanonicalFrozenAssignmentPayload(
+            differentDataset, differentDatasetBytes, error) &&
+            dspgcs::ComputeFrozenAssignmentSha256(
+                differentDatasetBytes, differentDatasetDigest, error) &&
+            differentDatasetDigest != firstDigest,
+            "SourceDatasetDigest did not bind the Frozen digest");
+
+        auto differentOrigin = ordered;
+        ++differentOrigin.normalizedShowOriginLatitudeE7;
+        std::vector<std::uint8_t> differentOriginBytes;
+        dspgcs::FrozenAssignmentDigest differentOriginDigest{};
+        Expect(dspgcs::SerializeCanonicalFrozenAssignmentPayload(
+            differentOrigin, differentOriginBytes, error) &&
+            dspgcs::ComputeFrozenAssignmentSha256(
+                differentOriginBytes, differentOriginDigest, error) &&
+            differentOriginDigest != firstDigest,
+            "normalized ShowOrigin did not bind the Frozen digest");
+
+        auto differentGeneration = ordered;
+        ++differentGeneration.routeDatasetGeneration;
+        Expect(differentGeneration.sourceDatasetDigest == ordered.sourceDatasetDigest &&
+            differentGeneration.normalizedShowOriginLatitudeE7 ==
+                ordered.normalizedShowOriginLatitudeE7 &&
+            differentGeneration.normalizedShowOriginLongitudeE7 ==
+                ordered.normalizedShowOriginLongitudeE7 &&
+            differentGeneration.routeSlotCount == ordered.routeSlotCount,
+            "runtime generation changed the stable source tuple");
+        std::vector<std::uint8_t> differentGenerationBytes;
+        dspgcs::FrozenAssignmentDigest differentGenerationDigest{};
+        Expect(dspgcs::SerializeCanonicalFrozenAssignmentPayload(
+            differentGeneration, differentGenerationBytes, error) &&
+            dspgcs::ComputeFrozenAssignmentSha256(
+                differentGenerationBytes, differentGenerationDigest, error) &&
+            differentGenerationDigest != firstDigest,
+            "runtime generation no longer binds the overall Frozen digest");
+
         const std::vector<std::uint8_t> abc = { 'a', 'b', 'c' };
         dspgcs::FrozenAssignmentDigest abcDigest{};
         Expect(dspgcs::ComputeFrozenAssignmentSha256(abc, abcDigest, error),
@@ -194,6 +246,30 @@ namespace
         Expect(!dspgcs::ValidateFrozenAssignmentMappings(outOfRange, error),
             "out-of-range RouteSlotIndex was accepted");
 
+        auto route1200 = MakePayload(1);
+        route1200.routeSlotCount = 1200;
+        route1200.vacantCount = 1199;
+        route1200.completionMode = dspgcs::FrozenAssignmentCompletionMode::Degraded;
+        route1200.freezePolicy = dspgcs::FrozenAssignmentFreezePolicy::AllowDegraded;
+        route1200.mappings[0].routeSlotIndex = 1199;
+        Expect(dspgcs::ValidateFrozenAssignmentMappings(route1200, error),
+            "RouteSlot 1199 was rejected in a 1200-route domain");
+        route1200.routeSlotCount = 1000;
+        route1200.vacantCount = 999;
+        Expect(!dspgcs::ValidateFrozenAssignmentMappings(route1200, error),
+            "RouteSlot 1199 was accepted in a 1000-route domain");
+
+        for (auto invalid : {
+                 [] { auto value = MakePayload(1); value.sourceDatasetDigest.fill(0); return value; }(),
+                 [] { auto value = MakePayload(1); value.normalizedShowOriginLatitudeE7 = -900000001; return value; }(),
+                 [] { auto value = MakePayload(1); value.normalizedShowOriginLatitudeE7 = 900000001; return value; }(),
+                 [] { auto value = MakePayload(1); value.normalizedShowOriginLongitudeE7 = -1800000001; return value; }(),
+                 [] { auto value = MakePayload(1); value.normalizedShowOriginLongitudeE7 = 1800000001; return value; }() })
+        {
+            Expect(!dspgcs::ValidateFrozenAssignmentMappings(invalid, error),
+                "invalid stable source identity was accepted");
+        }
+
         std::vector<std::uint8_t> malformed = orderedBytes;
         malformed.resize(malformed.size() - 1);
         dspgcs::FrozenAssignmentPayloadDTO ignored;
@@ -201,9 +277,9 @@ namespace
             "truncated canonical payload was accepted");
         malformed = orderedBytes;
         malformed[0] = 0;
-        malformed[1] = 2;
+        malformed[1] = 1;
         Expect(!dspgcs::DecodeCanonicalFrozenAssignmentPayload(malformed, ignored, error),
-            "unknown canonical payload version was accepted");
+            "legacy Frozen payload schema v1 was accepted");
     }
 
     void VerifyMessageCodecs()
@@ -219,12 +295,17 @@ namespace
 
         dspgcs::FrozenAssignmentBeginDTO begin;
         begin.transactionId = "TX-BEGIN";
+        begin.sourceDatasetDigest = payload.sourceDatasetDigest;
+        begin.normalizedShowOriginLatitudeE7 =
+            payload.normalizedShowOriginLatitudeE7;
+        begin.normalizedShowOriginLongitudeE7 =
+            payload.normalizedShowOriginLongitudeE7;
+        begin.routeSlotCount = payload.routeSlotCount;
         begin.identity = payload.identity;
         begin.fleetRevisionAtCapture = payload.fleetRevisionAtCapture;
         begin.routeDatasetGeneration = payload.routeDatasetGeneration;
         begin.completionMode = payload.completionMode;
         begin.freezePolicy = payload.freezePolicy;
-        begin.routeSlotCount = payload.routeSlotCount;
         begin.matchedCount = payload.matchedCount;
         begin.spareCount = payload.spareCount;
         begin.excludedCount = payload.excludedCount;
@@ -240,10 +321,24 @@ namespace
         Expect(dspgcs::DecodeFrozenAssignmentBegin(bytes, decodedBegin, error),
             "Begin decode: " + error);
         Expect(decodedBegin.transactionId == begin.transactionId &&
+            decodedBegin.sourceDatasetDigest == begin.sourceDatasetDigest &&
+            decodedBegin.normalizedShowOriginLatitudeE7 ==
+                begin.normalizedShowOriginLatitudeE7 &&
+            decodedBegin.normalizedShowOriginLongitudeE7 ==
+                begin.normalizedShowOriginLongitudeE7 &&
+            decodedBegin.routeSlotCount == begin.routeSlotCount &&
             decodedBegin.identity.assignmentAuthoritySessionId ==
                 begin.identity.assignmentAuthoritySessionId &&
             decodedBegin.canonicalPayloadDigest == digest,
             "Begin round-trip changed fields");
+
+        auto legacyBeginBytes = bytes;
+        legacyBeginBytes[0] = 0;
+        legacyBeginBytes[1] = 1;
+        Expect(!dspgcs::DecodeFrozenAssignmentBegin(
+            legacyBeginBytes, decodedBegin, error) &&
+            error.find("Unsupported Frozen Assignment") != std::string::npos,
+            "legacy Frozen Begin schema v1 was not explicitly rejected");
 
         dspgcs::FrozenAssignmentChunkDTO chunk;
         chunk.transactionId = "TX-CHUNK";
