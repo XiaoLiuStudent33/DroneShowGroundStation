@@ -1,14 +1,15 @@
-/**
- * @brief ConsoleGCS µÄ½ø³Ì¼¶Æô¶¯ÓëÔËĞĞÄ£Ê½±àÅÅÈë¿Ú¡£
+ï»¿/**
+ * @brief ConsoleGCS çš„è¿›ç¨‹çº§å¯åŠ¨ä¸è¿è¡Œæ¨¡å¼ç¼–æ’å…¥å£ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * ÊäÈë£ºÃüÁîĞĞÅäÖÃÂ·¾¶Óë AppConfig£»Êä³ö£º¶à»ú MAVLink Éú²úÑ­»·¡£
- * µ÷ÓÃÁ´£ºmain -> ConsoleGCSApplication -> ÍøÂç¡¢Fleet¡¢Command¡¢DSP-GCS¡¢ConsoleUI¡£
- * ¹Ø¼üÔ¼Êø£ºÕâÀïÖ»×éºÏÏÖÓĞÄ£¿é£¬²»¸Ä±ä Endpoint Éí·İ¡¢Session ÉúÃüÖÜÆÚ»òĞ­ÒéÓïÒå¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è¾“å…¥ï¼šå‘½ä»¤è¡Œé…ç½®è·¯å¾„ä¸ AppConfigï¼›è¾“å‡ºï¼šå¤šæœº MAVLink ç”Ÿäº§å¾ªç¯ã€‚
+ * è°ƒç”¨é“¾ï¼šmain -> ConsoleGCSApplication -> ç½‘ç»œã€Fleetã€Commandã€DSP-GCSã€ConsoleUIã€‚
+ * å…³é”®çº¦æŸï¼šè¿™é‡Œåªç»„åˆç°æœ‰æ¨¡å—ï¼Œä¸æ”¹å˜ Endpoint èº«ä»½ã€Session ç”Ÿå‘½å‘¨æœŸæˆ–åè®®è¯­ä¹‰ã€‚
  */
 #pragma once
 
 struct AppConfig;
+struct MissionProfileProbeOptions;
 
 class ConsoleGCSApplication
 {
@@ -16,5 +17,7 @@ public:
     int Run(int argc, char* argv[]);
 
 private:
-    int RunProductionMavlink(const AppConfig& appConfig);
+    int RunProductionMavlink(
+        const AppConfig& appConfig,
+        const MissionProfileProbeOptions& probeOptions);
 };

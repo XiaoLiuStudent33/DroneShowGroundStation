@@ -63,6 +63,13 @@ public:
 
     std::string systemStatusName = "Unknown";
 
+    bool autopilotVersionValid = false;
+    std::uint64_t autopilotCapabilities = 0;
+    std::uint32_t flightSoftwareVersion = 0;
+    std::uint32_t boardVersion = 0;
+    std::uint16_t vendorId = 0;
+    std::uint16_t productId = 0;
+
 
 
     //--------------------------------------------------

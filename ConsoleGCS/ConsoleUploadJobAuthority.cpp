@@ -511,7 +511,7 @@ void ConsoleUploadJobAuthority::CompletePendingStart(
     std::size_t missionPayloadBytes = 0;
     dronegcs::route_mission::Error missionSizeError;
     if (result.snapshot->frameCount <= 0 ||
-        !dronegcs::route_mission::CheckedLegacyMissionFtpUploadPayloadSizeV1(
+        !dronegcs::route_mission::CheckedMissionPayloadSize(
             static_cast<std::uint32_t>(result.snapshot->frameCount),
             missionPayloadBytes,
             missionSizeError))
@@ -920,7 +920,8 @@ bool ConsoleUploadJobAuthority::TransitionJobForExecutor(
     const bool legal =
         (oldState == dspgcs::UploadJobState::Ready &&
             newState == dspgcs::UploadJobState::Running) ||
-        (oldState == dspgcs::UploadJobState::Running &&
+        ((oldState == dspgcs::UploadJobState::Running ||
+          oldState == dspgcs::UploadJobState::Paused) &&
             (newState == dspgcs::UploadJobState::Completed ||
              newState == dspgcs::UploadJobState::Failed));
     if (!legal)
@@ -962,6 +963,46 @@ ConsoleUploadJobAuthority::GetExecutionView(
     for (const Target& target : job.targets)
         view.targets.push_back(target.metadata);
     return view;
+}
+
+std::vector<std::string> ConsoleUploadJobAuthority::GetExecutableJobIds() const
+{
+    std::vector<std::string> result;
+    result.reserve(jobs_.size());
+    for (const auto& entry : jobs_)
+    {
+        if (!entry.second.artifactLease) continue;
+        const auto state = entry.second.snapshot.jobState;
+        if (state == dspgcs::UploadJobState::Ready ||
+            state == dspgcs::UploadJobState::Running ||
+            state == dspgcs::UploadJobState::Paused ||
+            state == dspgcs::UploadJobState::Cancelling)
+            result.push_back(entry.first);
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+std::optional<dspgcs::UploadJobSnapshotDTO>
+ConsoleUploadJobAuthority::GetExecutorSnapshot(
+    const std::string& uploadJobId) const
+{
+    const auto item = jobs_.find(uploadJobId);
+    if (item == jobs_.end()) return std::nullopt;
+    return item->second.snapshot;
+}
+
+std::vector<dspgcs::UploadRouteStateDTO>
+ConsoleUploadJobAuthority::GetExecutorRouteStates(
+    const std::string& uploadJobId) const
+{
+    std::vector<dspgcs::UploadRouteStateDTO> result;
+    const auto item = jobs_.find(uploadJobId);
+    if (item == jobs_.end()) return result;
+    result.reserve(item->second.targets.size());
+    for (const Target& target : item->second.targets)
+        result.push_back(target.state);
+    return result;
 }
 
 bool ConsoleUploadJobAuthority::IsCancellationRequested(
@@ -1016,6 +1057,33 @@ bool ConsoleUploadJobAuthority::FinalizeExecutorCancellation(
         !job->artifactLease)
     {
         error = "Executor cancellation finalization requires a leased Cancelling Job.";
+        return false;
+    }
+    FinalizeCancellation(*job);
+    error.clear();
+    return true;
+}
+
+bool ConsoleUploadJobAuthority::FinalizeExecutorShutdown(
+    const std::string& uploadJobId,
+    std::string& error)
+{
+    Job* job = FindJob(uploadJobId);
+    if (!job)
+    {
+        error = "Executor shutdown finalization requires an existing Job.";
+        return false;
+    }
+    if (job->snapshot.jobState == dspgcs::UploadJobState::Completed ||
+        job->snapshot.jobState == dspgcs::UploadJobState::Failed ||
+        job->snapshot.jobState == dspgcs::UploadJobState::Cancelled)
+    {
+        error.clear();
+        return true;
+    }
+    if (!job->artifactLease)
+    {
+        error = "Executor shutdown finalization requires a leased active Job.";
         return false;
     }
     FinalizeCancellation(*job);
@@ -1133,6 +1201,43 @@ bool ConsoleUploadJobAuthority::InstallSyntheticReadyJobForTest(
     job.artifactLease = std::move(lease);
     RecalculateAggregate(job);
     jobs_.emplace(uploadJobId, std::move(job));
+    error.clear();
+    return true;
+}
+
+bool ConsoleUploadJobAuthority::InstallSyntheticExecutionBindingForTest(
+    const std::string& uploadJobId,
+    std::shared_ptr<const AcceptedRouteArtifactV2> artifactSnapshot,
+    std::vector<UploadJobTargetMetadata> targets,
+    std::string& error)
+{
+    Job* job = FindJob(uploadJobId);
+    if (!job || !job->artifactLease || !artifactSnapshot ||
+        targets.size() != job->targets.size())
+    {
+        error = "Synthetic execution binding input is invalid.";
+        return false;
+    }
+    std::sort(targets.begin(), targets.end(),
+        [](const auto& left, const auto& right)
+        { return left.routeSlotIndex < right.routeSlotIndex; });
+    for (std::size_t index = 0; index < targets.size(); ++index)
+    {
+        if (targets[index].routeSlotIndex !=
+                job->targets[index].state.routeSlotIndex ||
+            targets[index].droneId != job->targets[index].state.droneId ||
+            targets[index].missionPayloadByteSize !=
+                job->targets[index].state.totalBytes)
+        {
+            error = "Synthetic execution target identity is inconsistent.";
+            return false;
+        }
+        job->targets[index].metadata = targets[index];
+    }
+    job->artifactSnapshot = std::move(artifactSnapshot);
+    job->frozenSnapshot =
+        std::make_shared<const FrozenAssignmentAcceptedSnapshot>();
+    job->currentDirectoryIdentity = job->artifactSnapshot->currentDirectoryIdentity;
     error.clear();
     return true;
 }

@@ -24,6 +24,8 @@
 #include "MavlinkDiscoveryService.h"
 #include "MavlinkReadOnlyIngress.h"
 #include "MavlinkUdpReceiver.h"
+#include "MissionProfileProbe.h"
+#include "RouteUploadManager.h"
 #include "SafetyConfig.h"
 #include "FrozenAssignmentStore.h"
 
@@ -128,8 +130,48 @@ namespace
 
 int ConsoleGCSApplication::Run(int argc, char* argv[])
 {
-    const std::string configPath =
-        argc > 1 ? argv[1] : "gcs-config.ini";
+    std::string configPath = "gcs-config.ini";
+    bool configPathSet = false;
+    MissionProfileProbeOptions probeOptions;
+    for (int index = 1; index < argc; ++index)
+    {
+        const std::string argument = argv[index] ? argv[index] : "";
+        if (argument == "--mission-profile-probe")
+        {
+            if (index + 1 >= argc || argv[index + 1] == nullptr ||
+                std::string(argv[index + 1]).empty())
+            {
+                std::cerr << "--mission-profile-probe requires one explicit DroneID.\n";
+                return -1;
+            }
+            probeOptions.enabled = true;
+            probeOptions.droneId = argv[++index];
+        }
+        else if (argument == "--allow-mission-write-probe")
+        {
+            probeOptions.allowWriteProbe = true;
+        }
+        else if (!argument.empty() && argument[0] == '-')
+        {
+            std::cerr << "Unknown command-line option.\n";
+            return -1;
+        }
+        else if (!configPathSet)
+        {
+            configPath = argument;
+            configPathSet = true;
+        }
+        else
+        {
+            std::cerr << "Only one configuration path is accepted.\n";
+            return -1;
+        }
+    }
+    if (probeOptions.allowWriteProbe && !probeOptions.enabled)
+    {
+        std::cerr << "--allow-mission-write-probe requires --mission-profile-probe <DroneID>.\n";
+        return -1;
+    }
 
     AppConfig appConfig;
     std::string configError;
@@ -170,6 +212,9 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
         std::string("REAL_COMMAND_ENABLED=") +
         (appConfig.realCommandEnabled ? "true" : "false"));
     ConsoleUI::AddLog(
+        std::string("ROUTE_UPLOAD_ENABLED=") +
+        (appConfig.routeUploadEnabled ? "true" : "false"));
+    ConsoleUI::AddLog(
         std::string("MODE: ") +
         (appConfig.realCommandEnabled
             ? "REAL MULTI VEHICLE TEST"
@@ -196,12 +241,20 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
         return -2;
     }
 
-    return RunProductionMavlink(appConfig);
+    return RunProductionMavlink(appConfig, probeOptions);
 }
 
 int ConsoleGCSApplication::RunProductionMavlink(
-    const AppConfig& appConfig)
+    const AppConfig& appConfig,
+    const MissionProfileProbeOptions& probeOptions)
 {
+    if (probeOptions.enabled && appConfig.realCommandEnabled)
+    {
+        std::cerr
+            << "MissionProfileProbe requires real_command_enabled=false so no "
+               "unrelated vehicle command can share the probe process.\n";
+        return -5;
+    }
     if (appConfig.realCommandEnabled &&
         !SafetyConfig::CanEnableRealCommands(
             appConfig.mavlinkNetworkEnabled,
@@ -259,6 +312,8 @@ int ConsoleGCSApplication::RunProductionMavlink(
         appConfig.artifactWorkspaceRoot,
         &artifactConsumer,
         &frozenAssignmentStore);
+    RouteUploadManager routeUploadManager(
+        uploadJobAuthority, droneManager, appConfig.routeUploadEnabled);
     DSPGCSUploadJobReceiver uploadJobReceiver;
     commandReceiver.SetRealCommandEnabled(appConfig.realCommandEnabled);
     DroneSessionConfig discoveredSessionDefaults;
@@ -271,6 +326,9 @@ int ConsoleGCSApplication::RunProductionMavlink(
         !appConfig.dspgcsCommandEnabled || !appConfig.realCommandEnabled;
     discoveredSessionDefaults.realCommandEnabled =
         appConfig.realCommandEnabled;
+    discoveredSessionDefaults.mavFtpServiceEnabled = probeOptions.enabled;
+    discoveredSessionDefaults.missionUploadServiceEnabled =
+        appConfig.routeUploadEnabled;
 
     MavlinkDiscoveryService discovery(
         droneManager,
@@ -347,6 +405,9 @@ int ConsoleGCSApplication::RunProductionMavlink(
 
     auto lastRefresh = std::chrono::steady_clock::now();
     auto lastTelemetryPublish = std::chrono::steady_clock::time_point{};
+    const auto probeDiscoveryDeadline = std::chrono::steady_clock::now() +
+        std::chrono::seconds(30);
+    std::unique_ptr<MissionProfileProbe> missionProfileProbe;
     while (true)
     {
         // Drain a full synchronized thousand-aircraft telemetry burst before
@@ -386,6 +447,46 @@ int ConsoleGCSApplication::RunProductionMavlink(
         const auto now = std::chrono::steady_clock::now();
         discovery.Update(now);
         droneManager.TickAll(now);
+
+        if (probeOptions.enabled && !missionProfileProbe)
+        {
+            DroneSession* requested = droneManager.FindDrone(probeOptions.droneId);
+            if (requested != nullptr && requested->GetFlightData().online)
+            {
+                std::string probeError;
+                missionProfileProbe = CreateMissionProfileProbe(
+                    droneManager, probeOptions, probeError);
+                if (!missionProfileProbe)
+                {
+                    std::cerr << "MissionProfileProbe rejected: " << probeError << '\n';
+                    return -5;
+                }
+                ConsoleUI::AddLog(
+                    "MissionProfileProbe started DroneID=" + probeOptions.droneId +
+                    (probeOptions.allowWriteProbe
+                        ? " WRITE OPT-IN ACTIVE"
+                        : " READ-ONLY"));
+                ConsoleUI::AddLog(
+                    missionProfileProbe->GetReport().OpenFileRequestSafeSummary());
+            }
+            else if (now >= probeDiscoveryDeadline)
+            {
+                std::cerr << "MissionProfileProbe failed: explicitly requested DroneID was not online before the bounded discovery deadline.\n";
+                return -5;
+            }
+        }
+        if (missionProfileProbe)
+        {
+            missionProfileProbe->Tick(now);
+            if (missionProfileProbe->IsComplete())
+            {
+                const MissionProfileProbeReport& report =
+                    missionProfileProbe->GetReport();
+                std::cout << report.ToMachineJson() << '\n'
+                    << report.ToHumanSummary() << '\n';
+                return report.succeeded ? 0 : -5;
+            }
+        }
 
         if (appConfig.dspgcsCommandEnabled)
         {
@@ -441,6 +542,7 @@ int ConsoleGCSApplication::RunProductionMavlink(
                 {
                     return telemetryProvider.SendUploadJobRouteStatePage(page);
                 });
+            routeUploadManager.Tick(now);
             for (const auto& delta : uploadJobAuthority.DrainRouteDeltas())
                 telemetryProvider.SendUploadJobRouteStateDelta(delta);
         }

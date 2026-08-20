@@ -1,9 +1,9 @@
-/**
- * @brief ±íÊ¾Ò»¸öÎÈ¶¨ Remote Endpoint µÄÒ£²â¡¢ÔÚÏß×´Ì¬ºÍÃüÁîÉúÃüÖÜÆÚ¡£
+ï»¿/**
+ * @brief è¡¨ç¤ºä¸€ä¸ªç¨³å®š Remote Endpoint çš„é¥æµ‹ã€åœ¨çº¿çŠ¶æ€å’Œå‘½ä»¤ç”Ÿå‘½å‘¨æœŸã€‚
  *
- * ·ÖÀà£ºProduction£»Ã¿¸ö Session Ê¹ÓÃ¹²Ïí MAVLink Endpoint Ïò×Ô¼ºµÄ Remote Endpoint ·¢ËÍ¡£
- * ÊäÈë£ºDiscovery/Ingress ÏûÏ¢ºÍÁìÓòÃüÁî£»Êä³ö£ºFlightData¡¢MAVLink ÃüÁî¡¢ACK/ÈÎÎñ½á¹û¡£
- * ¹Ø¼üÔ¼Êø£ºHeartbeat timeout Ö»×ªÎª Offline£¬²»Ïú»Ù Session¡¢DroneID »òÀúÊ·Ò£²â¡£
+ * åˆ†ç±»ï¼šProductionï¼›æ¯ä¸ª Session ä½¿ç”¨å…±äº« MAVLink Endpoint å‘è‡ªå·±çš„ Remote Endpoint å‘é€ã€‚
+ * è¾“å…¥ï¼šDiscovery/Ingress æ¶ˆæ¯å’Œé¢†åŸŸå‘½ä»¤ï¼›è¾“å‡ºï¼šFlightDataã€MAVLink å‘½ä»¤ã€ACK/ä»»åŠ¡ç»“æœã€‚
+ * å…³é”®çº¦æŸï¼šHeartbeat timeout åªè½¬ä¸º Offlineï¼Œä¸é”€æ¯ Sessionã€DroneID æˆ–å†å²é¥æµ‹ã€‚
  */
 #pragma once
 
@@ -15,11 +15,15 @@
 #include "FlightData.h"
 #include "HoverTest.h"
 #include "MavlinkParser.h"
+#include "MavFtpClient.h"
+#include "MissionUploadTransaction.h"
 #include "UdpClient.h"
 
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -45,6 +49,8 @@ struct DroneSessionConfig
     int heartbeatTimeoutMs = 3000;
     bool receiveOnly = false;
     bool realCommandEnabled = false;
+    bool mavFtpServiceEnabled = false;
+    bool missionUploadServiceEnabled = false;
     IMavlinkDatagramSender* sharedMavlinkEndpoint = nullptr;
     std::uint8_t discoveredSystemId = 0;
     std::uint8_t discoveredComponentId = 0;
@@ -70,7 +76,8 @@ struct DroneSessionCommandSubmission
 
 // Owns the complete runtime state and existing MAVLink control stack for one
 // aircraft. This is a ConsoleGCS domain object, not a UE display DTO.
-class DroneSession
+class DroneSession : public dronegcs::mavftp::IRequestTransport,
+                     public IMissionProtocolTransport
 {
 public:
     explicit DroneSession(DroneSessionConfig config);
@@ -98,6 +105,28 @@ public:
     bool ApplyDiscoveredCommandMessage(
         const mavlink_message_t& message,
         const DiscoveredDroneIdentity& identity);
+    bool ApplyDiscoveredFtpMessage(
+        const mavlink_message_t& message,
+        const DiscoveredDroneIdentity& identity);
+    bool ApplyDiscoveredMissionMessage(
+        const mavlink_message_t& message,
+        const DiscoveredDroneIdentity& identity);
+    bool SendMavFtpPayload(
+        const std::array<std::uint8_t, dronegcs::mavftp::PayloadBytes>& payload) override;
+    bool SendMissionRequestList();
+    bool SendMissionCount(std::uint16_t count, std::size_t& wireBytes) override;
+    bool SendMissionItemInt(
+        const dronegcs::route_mission::MissionItemIntV1& item,
+        std::size_t& wireBytes) override;
+    bool SendMissionRequestList(std::size_t& wireBytes) override;
+    bool SendMissionRequestInt(
+        std::uint16_t sequence,
+        std::size_t& wireBytes) override;
+    void SetMissionProtocolMessageSink(IMissionProtocolMessageSink* sink);
+    MissionProtocolPeerIdentity GetMissionProtocolPeerIdentity() const;
+    dronegcs::mavftp::Client* GetMavFtpClient();
+    const dronegcs::mavftp::Client* GetMavFtpClient() const;
+    std::optional<std::uint16_t> ConsumeMissionCount();
 
     const std::string& GetDroneId() const;
     std::uint8_t GetSysId() const;
@@ -131,4 +160,7 @@ private:
     bool requestSent = false;
     std::chrono::steady_clock::time_point lastGcsHeartbeat{};
     std::deque<CommandDispatchResult> completedCommandResults;
+    std::unique_ptr<dronegcs::mavftp::Client> mavFtpClient;
+    std::optional<std::uint16_t> receivedMissionCount;
+    IMissionProtocolMessageSink* missionProtocolSink = nullptr;
 };

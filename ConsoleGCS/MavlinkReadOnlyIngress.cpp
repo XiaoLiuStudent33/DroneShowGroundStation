@@ -1,9 +1,9 @@
-/**
- * @brief ÊµÏÖ Remote Endpoint ¸ôÀëµÄ MAVLink ½âÂëºÍ Session Â·ÓÉ¡£
+ï»¿/**
+ * @brief å®žçŽ° Remote Endpoint éš”ç¦»çš„ MAVLink è§£ç å’Œ Session è·¯ç”±ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * µ÷ÓÃÁ´£ºMavlinkUdpReceiver -> MavlinkReadOnlyIngress -> Discovery/DroneManager/DroneSession¡£
- * Ö»ÓÐÓÐÐ§·Ç GCS HEARTBEAT ¿ÉÒÔ´´½¨»òË¢ÐÂ Session£¬ÆäËûÏûÏ¢Ö»ÄÜ½øÈëÒÑÖª Endpoint¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è°ƒç”¨é“¾ï¼šMavlinkUdpReceiver -> MavlinkReadOnlyIngress -> Discovery/DroneManager/DroneSessionã€‚
+ * åªæœ‰æœ‰æ•ˆéž GCS HEARTBEAT å¯ä»¥åˆ›å»ºæˆ–åˆ·æ–° Sessionï¼Œå…¶ä»–æ¶ˆæ¯åªèƒ½è¿›å…¥å·²çŸ¥ Endpointã€‚
  */
 #include "MavlinkReadOnlyIngress.h"
 
@@ -80,6 +80,22 @@ MavlinkIngressStats MavlinkReadOnlyIngress::SubmitDatagram(
 
         DroneSession* session = droneManager.FindDroneByIdentity(identity);
         if (session != nullptr &&
+            decodedMessage.msgid == MAVLINK_MSG_ID_FILE_TRANSFER_PROTOCOL &&
+            session->ApplyDiscoveredFtpMessage(decodedMessage, identity))
+        {
+            ++stats.ftpMessagesApplied;
+        }
+        else if (session != nullptr &&
+            (decodedMessage.msgid == MAVLINK_MSG_ID_MISSION_REQUEST_INT ||
+             decodedMessage.msgid == MAVLINK_MSG_ID_MISSION_REQUEST ||
+             decodedMessage.msgid == MAVLINK_MSG_ID_MISSION_ACK ||
+             decodedMessage.msgid == MAVLINK_MSG_ID_MISSION_COUNT ||
+             decodedMessage.msgid == MAVLINK_MSG_ID_MISSION_ITEM_INT) &&
+            session->ApplyDiscoveredMissionMessage(decodedMessage, identity))
+        {
+            ++stats.missionMessagesApplied;
+        }
+        else if (session != nullptr &&
             decodedMessage.msgid == MAVLINK_MSG_ID_COMMAND_ACK &&
             session->ApplyDiscoveredCommandMessage(decodedMessage, identity))
         {

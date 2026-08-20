@@ -25,6 +25,8 @@ struct AppConfig
     bool safeTestMode = true;
     bool mavlinkNetworkEnabled = false;
     bool realCommandEnabled = false;
+    /** Independent destructive-data gate for standard Mission upload. */
+    bool routeUploadEnabled = false;
     std::string mavlinkBindIP = AppConfigDefaults::MavlinkBindIP;
     int mavlinkBindPort = 0;
     bool dspgcsTelemetryEnabled = false;

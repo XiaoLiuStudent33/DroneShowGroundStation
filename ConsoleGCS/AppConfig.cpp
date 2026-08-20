@@ -288,6 +288,16 @@ bool AppConfig::Load(
         return false;
     }
 
+    if (!ParseBoolean(
+        values,
+        "route_upload_enabled",
+        false,
+        config.routeUploadEnabled,
+        error))
+    {
+        return false;
+    }
+
     const auto bindIP = values.find("mavlink_bind_ip");
     if (bindIP != values.end())
     {
@@ -337,6 +347,13 @@ bool AppConfig::Load(
     {
         error =
             "real_command_enabled=true requires mavlink_network_enabled=true";
+        return false;
+    }
+
+    if (config.routeUploadEnabled && !config.mavlinkNetworkEnabled)
+    {
+        error =
+            "route_upload_enabled=true requires mavlink_network_enabled=true";
         return false;
     }
 

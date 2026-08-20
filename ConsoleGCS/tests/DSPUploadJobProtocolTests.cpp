@@ -711,8 +711,8 @@ namespace
     void VerifyMissionPayloadByteAuthority()
     {
         for (const auto item : std::array<std::pair<std::int32_t, std::uint64_t>, 2>{
-            std::pair<std::int32_t, std::uint64_t>{1, 48},
-            std::pair<std::int32_t, std::uint64_t>{9000, 342010}})
+            std::pair<std::int32_t, std::uint64_t>{1, 38},
+            std::pair<std::int32_t, std::uint64_t>{9000, 342000}})
         {
             auto fixture = MakeArtifact(
                 "payload-" + std::to_string(item.first), 1, item.first);
@@ -736,7 +736,7 @@ namespace
                 view->targets.front().missionPayloadByteSize == item.second &&
                 view->targets.front().fileByteSize !=
                     static_cast<std::int64_t>(item.second),
-                "UploadJob TotalBytes did not use authoritative Mission payload bytes");
+                "UploadJob TotalBytes did not use logical Mission item payload bytes");
         }
     }
 

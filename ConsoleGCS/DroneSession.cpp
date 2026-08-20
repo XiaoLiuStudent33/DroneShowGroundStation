@@ -1,9 +1,9 @@
-/**
- * @brief  µœ÷µ•∏ˆ Endpoint Session µƒ Online/Offline°¢“£≤‚”¶”√∫Õ√¸¡Óµ˜∂»°£
+Ôªø/**
+ * @brief ÂÆûÁé∞Âçï‰∏™ Endpoint Session ÁöÑ Online/Offline„ÄÅÈÅ•ÊµãÂ∫îÁî®ÂíåÂëΩ‰ª§Ë∞ÉÂ∫¶„ÄÇ
  *
- * ∑÷¿‡£∫Production°£
- * µ˜”√¡¥£∫DroneManager/Ingress -> DroneSession -> DataManager/CommandDispatcher/MavlinkCommand°£
- * œ‡Õ¨ Endpoint µƒ–¬ HEARTBEAT ±ÿ–Îª÷∏¥‘≠ Session£ªΩ” ’Õ≥“ª”… MavlinkUdpReceiver/Ingress ¬∑”…°£
+ * ÂàÜÁ±ªÔºöProduction„ÄÇ
+ * Ë∞ÉÁî®ÈìæÔºöDroneManager/Ingress -> DroneSession -> DataManager/CommandDispatcher/MavlinkCommand„ÄÇ
+ * Áõ∏Âêå Endpoint ÁöÑÊñ∞ HEARTBEAT ÂøÖÈ°ªÊÅ¢Â§çÂéü SessionÔºõÊé•Êî∂Áªü‰∏ÄÁî± MavlinkUdpReceiver/Ingress Ë∑ØÁî±„ÄÇ
  */
 #include "DroneSession.h"
 
@@ -69,8 +69,8 @@ bool DroneSession::Start()
 
     SetState(DroneSessionState::Initializing);
 
-    if (!config.receiveOnly &&
-        config.realCommandEnabled &&
+    if ((config.realCommandEnabled || config.mavFtpServiceEnabled ||
+         config.missionUploadServiceEnabled) &&
         (config.sharedMavlinkEndpoint == nullptr ||
          !udp.AttachSharedEndpoint(
              *config.sharedMavlinkEndpoint,
@@ -86,11 +86,23 @@ bool DroneSession::Start()
     requestSent = false;
     lastGcsHeartbeat = std::chrono::steady_clock::now();
     started = true;
+    if (config.mavFtpServiceEnabled)
+    {
+        dronegcs::mavftp::PeerIdentity peer;
+        peer.droneId = config.droneId;
+        peer.remoteIp = config.remoteIp;
+        peer.remotePort = static_cast<std::uint16_t>(config.remotePort);
+        peer.systemId = config.discoveredSystemId;
+        peer.componentId = config.discoveredComponentId;
+        mavFtpClient = std::make_unique<dronegcs::mavftp::Client>(*this, peer);
+    }
     SetState(DroneSessionState::WaitingForHeartbeat);
 
     ConsoleUI::AddLog(
         SessionPrefix(config.droneId) +
-        (config.receiveOnly
+        (config.mavFtpServiceEnabled && !config.realCommandEnabled
+            ? "endpoint-bound MAVFTP probe service enabled"
+            : config.receiveOnly
             ? "receive-only MAVLink session started"
             : !config.realCommandEnabled
             ? "MAVLink command transport disabled"
@@ -108,6 +120,10 @@ void DroneSession::Stop()
     }
 
     flightControl.StopHoverMission();
+    if (mavFtpClient) mavFtpClient->Shutdown();
+    mavFtpClient.reset();
+    receivedMissionCount.reset();
+    missionProtocolSink = nullptr;
     udp.Close();
     started = false;
     requestSent = false;
@@ -131,6 +147,8 @@ void DroneSession::Tick(
     }
 
     RefreshHeartbeatStatus(now);
+
+    if (mavFtpClient) mavFtpClient->Tick(now);
 
     ProcessDispatchResults(now);
 
@@ -170,10 +188,12 @@ void DroneSession::RefreshHeartbeatStatus(
         }
         else
         {
-            // Offline ÷ª «‘⁄œﬂ◊¥Ã¨±‰ªØ£∫Session°¢DroneID°¢SessionOrder ∫Õ◊Ó∫Û“£≤‚
-            // ∂ººÃ–¯±£¡Ù°£requestSent ÷ÿ÷√∫Û£¨‘≠ Endpoint ª÷∏¥ ±ø…÷ÿ–¬«Î«Û ˝æ›¡˜°£
+            // Offline Âè™ÊòØÂú®Á∫øÁä∂ÊÄÅÂèòÂåñÔºöSession„ÄÅDroneID„ÄÅSessionOrder ÂíåÊúÄÂêéÈÅ•Êµã
+            // ÈÉΩÁªßÁª≠‰øùÁïô„ÄÇrequestSent ÈáçÁΩÆÂêéÔºåÂéü Endpoint ÊÅ¢Â§çÊó∂ÂèØÈáçÊñ∞ËØ∑Ê±ÇÊï∞ÊçÆÊµÅ„ÄÇ
             SetState(DroneSessionState::HeartbeatTimeout);
             requestSent = false;
+            if (mavFtpClient && mavFtpClient->IsBusy())
+                mavFtpClient->Cancel();
         }
     }
 }
@@ -408,9 +428,19 @@ bool DroneSession::RefreshDiscoveredPresence(
     config.discoveredComponentId = identity.componentId;
     config.remoteIp = identity.sourceIp;
     config.remotePort = identity.sourcePort;
+    if (mavFtpClient && !mavFtpClient->IsBusy())
+    {
+        dronegcs::mavftp::PeerIdentity peer;
+        peer.droneId = config.droneId;
+        peer.remoteIp = config.remoteIp;
+        peer.remotePort = static_cast<std::uint16_t>(config.remotePort);
+        peer.systemId = config.discoveredSystemId;
+        peer.componentId = config.discoveredComponentId;
+        (void)mavFtpClient->RebindPeer(peer);
+    }
 
-    // œ‡Õ¨ Endpoint µƒ HEARTBEAT ª÷∏¥‘≠ Session£ªSYSID/COMPID ø…“‘À¢–¬Œ™
-    // µ±«∞–≠“È¬∑”…‘™ ˝æ›£¨µ´≤ªª·…˙≥…–¬µƒ Fleet …Ì∑›°£
+    // Áõ∏Âêå Endpoint ÁöÑ HEARTBEAT ÊÅ¢Â§çÂéü SessionÔºõSYSID/COMPID ÂèØ‰ª•Âà∑Êñ∞‰∏∫
+    // ÂΩìÂâçÂçèËÆÆË∑ØÁî±ÂÖÉÊï∞ÊçÆÔºå‰ΩÜ‰∏ç‰ºöÁîüÊàêÊñ∞ÁöÑ Fleet Ë∫´‰ªΩ„ÄÇ
     workingData.systemID = identity.systemId;
     workingData.componentID = identity.componentId;
     workingData.online = true;
@@ -482,6 +512,7 @@ bool DroneSession::ApplyDiscoveredTelemetry(
     case MAVLINK_MSG_ID_GLOBAL_POSITION_INT:
     case MAVLINK_MSG_ID_GPS_RAW_INT:
     case MAVLINK_MSG_ID_SYS_STATUS:
+    case MAVLINK_MSG_ID_AUTOPILOT_VERSION:
         parser.Parse(message, workingData);
         dataManager.Update(workingData);
         return true;
@@ -507,6 +538,227 @@ bool DroneSession::ApplyDiscoveredCommandMessage(
     dataManager.Update(workingData);
     dispatcher.HandleAck(message);
     return true;
+}
+
+bool DroneSession::ApplyDiscoveredFtpMessage(
+    const mavlink_message_t& message,
+    const DiscoveredDroneIdentity& identity)
+{
+    if (!mavFtpClient || message.msgid != MAVLINK_MSG_ID_FILE_TRANSFER_PROTOCOL ||
+        message.sysid != config.discoveredSystemId ||
+        message.compid != config.discoveredComponentId ||
+        identity.systemId != config.discoveredSystemId ||
+        identity.componentId != config.discoveredComponentId ||
+        identity.sourceIp != config.remoteIp ||
+        identity.sourcePort != config.remotePort)
+    {
+        return false;
+    }
+
+    mavlink_file_transfer_protocol_t ftp{};
+    mavlink_msg_file_transfer_protocol_decode(&message, &ftp);
+    if (ftp.target_system != 255 ||
+        ftp.target_component != MAV_COMP_ID_MISSIONPLANNER)
+    {
+        return false;
+    }
+    dronegcs::mavftp::PeerIdentity source;
+    source.droneId = config.droneId;
+    source.remoteIp = identity.sourceIp;
+    source.remotePort = identity.sourcePort;
+    source.systemId = identity.systemId;
+    source.componentId = identity.componentId;
+    return mavFtpClient->HandleResponse(
+        source, ftp.payload, sizeof(ftp.payload));
+}
+
+bool DroneSession::ApplyDiscoveredMissionMessage(
+    const mavlink_message_t& message,
+    const DiscoveredDroneIdentity& identity)
+{
+    const bool supportedMessage =
+        message.msgid == MAVLINK_MSG_ID_MISSION_REQUEST_INT ||
+        message.msgid == MAVLINK_MSG_ID_MISSION_REQUEST ||
+        message.msgid == MAVLINK_MSG_ID_MISSION_ACK ||
+        message.msgid == MAVLINK_MSG_ID_MISSION_COUNT ||
+        message.msgid == MAVLINK_MSG_ID_MISSION_ITEM_INT;
+    if (!supportedMessage ||
+        message.sysid != config.discoveredSystemId ||
+        message.compid != config.discoveredComponentId ||
+        identity.systemId != config.discoveredSystemId ||
+        identity.componentId != config.discoveredComponentId ||
+        identity.sourceIp != config.remoteIp ||
+        identity.sourcePort != config.remotePort)
+    {
+        return false;
+    }
+    bool consumed = false;
+    if (message.msgid == MAVLINK_MSG_ID_MISSION_COUNT && mavFtpClient)
+    {
+        mavlink_mission_count_t count{};
+        mavlink_msg_mission_count_decode(&message, &count);
+        if (count.target_system == 255 &&
+            count.target_component == MAV_COMP_ID_MISSIONPLANNER &&
+            count.mission_type == MAV_MISSION_TYPE_MISSION)
+        {
+            receivedMissionCount = count.count;
+            consumed = true;
+        }
+    }
+    if (missionProtocolSink && config.missionUploadServiceEnabled)
+    {
+        consumed = missionProtocolSink->HandleMissionMessage(
+            message, GetMissionProtocolPeerIdentity(),
+            std::chrono::steady_clock::now()) || consumed;
+    }
+    return consumed;
+}
+
+bool DroneSession::SendMavFtpPayload(
+    const std::array<std::uint8_t, dronegcs::mavftp::PayloadBytes>& payload)
+{
+    if (!started || !config.mavFtpServiceEnabled ||
+        !dataManager.GetFlightData().online)
+    {
+        return false;
+    }
+    mavlink_message_t message{};
+    std::uint8_t buffer[MAVLINK_MAX_PACKET_LEN]{};
+    mavlink_msg_file_transfer_protocol_pack(
+        255, MAV_COMP_ID_MISSIONPLANNER, &message,
+        0, config.discoveredSystemId, config.discoveredComponentId,
+        payload.data());
+    const std::uint16_t length = mavlink_msg_to_send_buffer(buffer, &message);
+    return udp.Send(buffer, length);
+}
+
+bool DroneSession::SendMissionRequestList()
+{
+    if (!started || !config.mavFtpServiceEnabled ||
+        !dataManager.GetFlightData().online)
+    {
+        return false;
+    }
+    receivedMissionCount.reset();
+    mavlink_message_t message{};
+    std::uint8_t buffer[MAVLINK_MAX_PACKET_LEN]{};
+    mavlink_msg_mission_request_list_pack(
+        255, MAV_COMP_ID_MISSIONPLANNER, &message,
+        config.discoveredSystemId, config.discoveredComponentId,
+        MAV_MISSION_TYPE_MISSION);
+    const std::uint16_t length = mavlink_msg_to_send_buffer(buffer, &message);
+    return udp.Send(buffer, length);
+}
+
+namespace
+{
+    bool SendMissionWire(UdpClient& udp, mavlink_message_t& message,
+        std::size_t& wireBytes)
+    {
+        std::uint8_t buffer[MAVLINK_MAX_PACKET_LEN]{};
+        const std::uint16_t length = mavlink_msg_to_send_buffer(buffer, &message);
+        wireBytes = length;
+        return udp.Send(buffer, length);
+    }
+}
+
+bool DroneSession::SendMissionCount(
+    const std::uint16_t count,
+    std::size_t& wireBytes)
+{
+    wireBytes = 0;
+    if (!started || !config.missionUploadServiceEnabled ||
+        !dataManager.GetFlightData().online || count == 0)
+        return false;
+    mavlink_message_t message{};
+    mavlink_msg_mission_count_pack(
+        255, MAV_COMP_ID_MISSIONPLANNER, &message,
+        config.discoveredSystemId, config.discoveredComponentId,
+        count, MAV_MISSION_TYPE_MISSION, 0);
+    return SendMissionWire(udp, message, wireBytes);
+}
+
+bool DroneSession::SendMissionItemInt(
+    const dronegcs::route_mission::MissionItemIntV1& item,
+    std::size_t& wireBytes)
+{
+    wireBytes = 0;
+    if (!started || !config.missionUploadServiceEnabled ||
+        !dataManager.GetFlightData().online ||
+        item.MissionType != MAV_MISSION_TYPE_MISSION)
+        return false;
+    mavlink_message_t message{};
+    mavlink_msg_mission_item_int_pack(
+        255, MAV_COMP_ID_MISSIONPLANNER, &message,
+        config.discoveredSystemId, config.discoveredComponentId,
+        item.Sequence, item.Frame, item.Command, item.Current,
+        item.AutoContinue, item.Param1, item.Param2, item.Param3,
+        item.Param4, item.X, item.Y, item.Z, MAV_MISSION_TYPE_MISSION);
+    return SendMissionWire(udp, message, wireBytes);
+}
+
+bool DroneSession::SendMissionRequestList(std::size_t& wireBytes)
+{
+    wireBytes = 0;
+    if (!started || !config.missionUploadServiceEnabled ||
+        !dataManager.GetFlightData().online)
+        return false;
+    mavlink_message_t message{};
+    mavlink_msg_mission_request_list_pack(
+        255, MAV_COMP_ID_MISSIONPLANNER, &message,
+        config.discoveredSystemId, config.discoveredComponentId,
+        MAV_MISSION_TYPE_MISSION);
+    return SendMissionWire(udp, message, wireBytes);
+}
+
+bool DroneSession::SendMissionRequestInt(
+    const std::uint16_t sequence,
+    std::size_t& wireBytes)
+{
+    wireBytes = 0;
+    if (!started || !config.missionUploadServiceEnabled ||
+        !dataManager.GetFlightData().online)
+        return false;
+    mavlink_message_t message{};
+    mavlink_msg_mission_request_int_pack(
+        255, MAV_COMP_ID_MISSIONPLANNER, &message,
+        config.discoveredSystemId, config.discoveredComponentId,
+        sequence, MAV_MISSION_TYPE_MISSION);
+    return SendMissionWire(udp, message, wireBytes);
+}
+
+void DroneSession::SetMissionProtocolMessageSink(
+    IMissionProtocolMessageSink* const sink)
+{
+    missionProtocolSink = sink;
+}
+
+MissionProtocolPeerIdentity DroneSession::GetMissionProtocolPeerIdentity() const
+{
+    MissionProtocolPeerIdentity peer;
+    peer.droneId = config.droneId;
+    peer.remoteIp = config.remoteIp;
+    peer.remotePort = static_cast<std::uint16_t>(config.remotePort);
+    peer.systemId = config.discoveredSystemId;
+    peer.componentId = config.discoveredComponentId;
+    return peer;
+}
+
+dronegcs::mavftp::Client* DroneSession::GetMavFtpClient()
+{
+    return mavFtpClient.get();
+}
+
+const dronegcs::mavftp::Client* DroneSession::GetMavFtpClient() const
+{
+    return mavFtpClient.get();
+}
+
+std::optional<std::uint16_t> DroneSession::ConsumeMissionCount()
+{
+    const std::optional<std::uint16_t> result = receivedMissionCount;
+    receivedMissionCount.reset();
+    return result;
 }
 
 const std::string& DroneSession::GetDroneId() const

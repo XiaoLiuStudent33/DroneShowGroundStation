@@ -1,9 +1,9 @@
-/**
- * @brief ½«¹²Ïí UDP Datagram °´ Remote Endpoint ½âÂë²¢Â·ÓÉµ½ÕıÈ· DroneSession¡£
+ï»¿/**
+ * @brief å°†å…±äº« UDP Datagram æŒ‰ Remote Endpoint è§£ç å¹¶è·¯ç”±åˆ°æ­£ç¡® DroneSessionã€‚
  *
- * ·ÖÀà£ºProduction£»ReadOnly ±íÊ¾·¢ÏÖÈë¿Ú²»Ö÷¶¯´´Ôì¿ØÖÆÓïÒå£¬²¢·ÇÕû¸ö Session ½ûÖ¹ÃüÁî¡£
- * ÊäÈë£ºMavlinkUdpReceiver Datagram£»Êä³ö£ºDiscovery Ë¢ĞÂ¡¢Telemetry Ó¦ÓÃºÍ COMMAND_ACK Â·ÓÉ¡£
- * ¹Ø¼üÔ¼Êø£ºÃ¿¸ö Endpoint Î¬»¤¶ÀÁ¢ MAVLink parser state£¬±ÜÃâÇ§»ú×Ö½ÚÁ÷»¥ÏàÎÛÈ¾¡£
+ * åˆ†ç±»ï¼šProductionï¼›ReadOnly è¡¨ç¤ºå‘ç°å…¥å£ä¸ä¸»åŠ¨åˆ›é€ æ§åˆ¶è¯­ä¹‰ï¼Œå¹¶éæ•´ä¸ª Session ç¦æ­¢å‘½ä»¤ã€‚
+ * è¾“å…¥ï¼šMavlinkUdpReceiver Datagramï¼›è¾“å‡ºï¼šDiscovery åˆ·æ–°ã€Telemetry åº”ç”¨å’Œ COMMAND_ACK è·¯ç”±ã€‚
+ * å…³é”®çº¦æŸï¼šæ¯ä¸ª Endpoint ç»´æŠ¤ç‹¬ç«‹ MAVLink parser stateï¼Œé¿å…åƒæœºå­—èŠ‚æµäº’ç›¸æ±¡æŸ“ã€‚
  */
 #pragma once
 
@@ -20,6 +20,8 @@ struct MavlinkIngressStats
     std::size_t heartbeatsApplied = 0;
     std::size_t telemetryApplied = 0;
     std::size_t commandMessagesApplied = 0;
+    std::size_t ftpMessagesApplied = 0;
+    std::size_t missionMessagesApplied = 0;
     std::size_t identityConflicts = 0;
     std::size_t ignoredMessages = 0;
 };

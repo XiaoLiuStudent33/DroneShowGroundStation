@@ -46,6 +46,8 @@
     <ClCompile Include="tests\RouteArtifactV2ContractTests.cpp" />
     <ClCompile Include="tests\DSPUploadJobProtocolTests.cpp" />
     <ClCompile Include="tests\RouteMissionCodecTests.cpp" />
+    <ClCompile Include="tests\MavFtpProbeTests.cpp" />
+    <ClCompile Include="tests\MissionUploadTests.cpp" />
     <ClCompile Include="tests\DSPCommandTests.cpp" />
     <ClCompile Include="tests\DSPFrozenAssignmentProtocolTests.cpp" />
     <ClCompile Include="tests\DSPFrozenAssignmentReceiverTests.cpp" />
@@ -56,6 +58,8 @@
     <ClCompile Include="ConsoleUploadJobAuthority.cpp" />
     <ClCompile Include="DSPGCSUploadJobReceiver.cpp" />
     <ClCompile Include="MavlinkDiscoveryService.cpp" />
+    <ClCompile Include="MavFtpClient.cpp" />
+    <ClCompile Include="MavFtpProtocol.cpp" />
     <ClCompile Include="MavlinkReadOnlyIngress.cpp" />
     <ClCompile Include="MavlinkUdpReceiver.cpp" />
     <ClCompile Include="ConsoleDSPGCSLoopbackTransport.cpp" />
@@ -77,6 +81,10 @@
     <ClCompile Include="HoverTest.cpp" />
     <ClCompile Include="MavlinkCommand.cpp" />
     <ClCompile Include="MavlinkParser.cpp" />
+    <ClCompile Include="MissionProfileProbe.cpp" />
+    <ClCompile Include="MissionPreparationWorker.cpp" />
+    <ClCompile Include="MissionUploadTransaction.cpp" />
+    <ClCompile Include="RouteUploadManager.cpp" />
     <ClCompile Include="UdpClient.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -88,9 +96,15 @@
     <ClInclude Include="DroneManager.h" />
     <ClInclude Include="DroneSession.h" />
     <ClInclude Include="MavlinkDiscoveryService.h" />
+    <ClInclude Include="MavFtpClient.h" />
+    <ClInclude Include="MavFtpProtocol.h" />
     <ClInclude Include="MavlinkDatagramSender.h" />
     <ClInclude Include="MavlinkReadOnlyIngress.h" />
     <ClInclude Include="MavlinkUdpReceiver.h" />
+    <ClInclude Include="MissionProfileProbe.h" />
+    <ClInclude Include="MissionPreparationWorker.h" />
+    <ClInclude Include="MissionUploadTransaction.h" />
+    <ClInclude Include="RouteUploadManager.h" />
     <ClInclude Include="ConsoleDSPGCSLoopbackTransport.h" />
     <ClInclude Include="DSPGCSProductionTelemetryProvider.h" />
     <ClInclude Include="DSPGCSFrozenAssignmentReceiver.h" />

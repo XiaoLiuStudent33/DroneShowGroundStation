@@ -5,6 +5,7 @@ safe_test_mode=true
 # Production is the only runtime path. Review the bind endpoint, then set true.
 mavlink_network_enabled=false
 real_command_enabled=false
+route_upload_enabled=false
 mavlink_bind_ip=0.0.0.0
 # Example-only port. It is not used by the checked-in Production deployment.
 mavlink_bind_port=10005

@@ -40,6 +40,8 @@ int RunRouteArtifactV2ContractTests();
 int RunRouteMissionCodecTests();
 int RunRouteMissionBenchmarks(int argc, char** argv);
 int RunDSPUploadJobProtocolTests();
+int RunMavFtpProbeTests();
+int RunMissionUploadTests();
 
 namespace
 {
@@ -89,6 +91,7 @@ namespace
 safe_test_mode=true
 mavlink_network_enabled=true
 real_command_enabled=false
+route_upload_enabled=true
 mavlink_bind_ip=10.20.30.40
 mavlink_bind_port=14550
 heartbeat_timeout_ms=4500
@@ -114,6 +117,8 @@ snapshot_items_per_chunk=256
             config.mavlinkBindPort == 14550 &&
             config.heartbeatTimeoutMs == 4500,
             "MAVLink deployment values were not loaded");
+        Expect(config.routeUploadEnabled && !config.realCommandEnabled,
+            "Route upload gate was not independent from real command enablement");
         Expect(
             config.mavlinkReceiveBufferBytes == 8388608 &&
             config.maxPacketsPerDrain == 8192 &&
@@ -179,6 +184,24 @@ dspgcs_command_enabled=false
             fallbackConfig.snapshotItemsPerChunk ==
                 AppConfigDefaults::SnapshotItemsPerChunk,
             "missing performance keys did not preserve fallbacks");
+        Expect(!fallbackConfig.routeUploadEnabled,
+            "route_upload_enabled did not default fail-closed");
+
+        TemporaryConfigFile invalidRouteGate("invalid-route-gate", R"(
+safe_test_mode=true
+mavlink_network_enabled=false
+real_command_enabled=false
+route_upload_enabled=true
+heartbeat_timeout_ms=3000
+dspgcs_telemetry_enabled=true
+dspgcs_command_enabled=true
+)" );
+        AppConfig invalidRouteGateConfig;
+        error.clear();
+        Expect(!AppConfig::Load(invalidRouteGate.GetPath(),
+            invalidRouteGateConfig, error) &&
+            error.find("route_upload_enabled") != std::string::npos,
+            "Route upload gate did not require the MAVLink network");
 
         TemporaryConfigFile disabledNetwork("disabled-network", R"(
  safe_test_mode=true
@@ -1455,6 +1478,14 @@ int main(const int argc, char** argv)
     {
         return RunDSPUploadJobProtocolTests();
     }
+    if (argc > 1 && std::string(argv[1]) == "--mavftp-probe-tests")
+    {
+        return RunMavFtpProbeTests();
+    }
+    if (argc > 1 && std::string(argv[1]) == "--mission-upload-tests")
+    {
+        return RunMissionUploadTests();
+    }
 
     const int pipelineResult = RunConsolePipelineTests();
     const int commandResult = RunCommandTests();
@@ -1466,13 +1497,17 @@ int main(const int argc, char** argv)
     const int artifactV2ContractResult = RunRouteArtifactV2ContractTests();
     const int missionCodecResult = RunRouteMissionCodecTests();
     const int uploadJobResult = RunDSPUploadJobProtocolTests();
+    const int mavFtpProbeResult = RunMavFtpProbeTests();
+    const int missionUploadResult = RunMissionUploadTests();
 
     if (pipelineResult == 0 && commandResult == 0 && dspCommandResult == 0 &&
         frozenAssignmentResult == 0 && frozenAssignmentReceiverResult == 0
         && artifactConsumerV2Result == 0
         && artifactV2ContractResult == 0
         && missionCodecResult == 0
-        && uploadJobResult == 0)
+        && uploadJobResult == 0
+        && mavFtpProbeResult == 0
+        && missionUploadResult == 0)
     {
         std::cout << "ConsoleGCS regression suite passed\n";
         return 0;
@@ -1488,6 +1523,8 @@ int main(const int argc, char** argv)
         << " artifactV2Contract=" << artifactV2ContractResult
         << " missionCodec=" << missionCodecResult
         << " uploadJob=" << uploadJobResult
+        << " mavFtpProbe=" << mavFtpProbeResult
+        << " missionUpload=" << missionUploadResult
         << '\n';
     return 1;
 }

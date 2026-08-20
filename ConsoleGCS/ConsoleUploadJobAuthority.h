@@ -80,8 +80,16 @@ public:
         std::string& error);
     std::optional<UploadJobExecutionView> GetExecutionView(
         const std::string& uploadJobId) const;
+    std::vector<std::string> GetExecutableJobIds() const;
+    std::optional<dspgcs::UploadJobSnapshotDTO> GetExecutorSnapshot(
+        const std::string& uploadJobId) const;
+    std::vector<dspgcs::UploadRouteStateDTO> GetExecutorRouteStates(
+        const std::string& uploadJobId) const;
     bool IsCancellationRequested(const std::string& uploadJobId) const;
     bool FinalizeExecutorCancellation(
+        const std::string& uploadJobId,
+        std::string& error);
+    bool FinalizeExecutorShutdown(
         const std::string& uploadJobId,
         std::string& error);
     bool DestroyFailedJob(const std::string& uploadJobId);
@@ -101,6 +109,11 @@ public:
         std::uint32_t spareCount,
         std::uint32_t excludedCount,
         std::uint32_t maxConcurrentUploads,
+        std::string& error);
+    bool InstallSyntheticExecutionBindingForTest(
+        const std::string& uploadJobId,
+        std::shared_ptr<const AcceptedRouteArtifactV2> artifactSnapshot,
+        std::vector<UploadJobTargetMetadata> targets,
         std::string& error);
     std::size_t GetJobCount() const { return jobs_.size(); }
     std::size_t GetPendingStartCount() const { return pendingStarts_.size(); }

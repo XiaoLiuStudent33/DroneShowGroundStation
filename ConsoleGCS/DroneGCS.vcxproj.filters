@@ -99,6 +99,15 @@
     <ClCompile Include="MavlinkCommand.cpp">
       <Filter>Protocol</Filter>
     </ClCompile>
+    <ClCompile Include="MissionPreparationWorker.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="MissionUploadTransaction.cpp">
+      <Filter>Protocol</Filter>
+    </ClCompile>
+    <ClCompile Include="RouteUploadManager.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AppConfig.h">
@@ -178,6 +187,15 @@
     </ClInclude>
     <ClInclude Include="MavlinkDatagramSender.h">
       <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="MissionPreparationWorker.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="MissionUploadTransaction.h">
+      <Filter>Protocol</Filter>
+    </ClInclude>
+    <ClInclude Include="RouteUploadManager.h">
+      <Filter>Core</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

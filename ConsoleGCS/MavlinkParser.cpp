@@ -248,6 +248,19 @@ void MavlinkParser::Parse(
         break;
     }
 
+    case MAVLINK_MSG_ID_AUTOPILOT_VERSION:
+    {
+        mavlink_autopilot_version_t version{};
+        mavlink_msg_autopilot_version_decode(&msg, &version);
+        data.autopilotVersionValid = true;
+        data.autopilotCapabilities = version.capabilities;
+        data.flightSoftwareVersion = version.flight_sw_version;
+        data.boardVersion = version.board_version;
+        data.vendorId = version.vendor_id;
+        data.productId = version.product_id;
+        break;
+    }
+
     //--------------------------------------------------
     // MAVLink #77 COMMAND_ACK：控制命令结果确认。
     //--------------------------------------------------

@@ -154,6 +154,8 @@
     <ClCompile Include="DSPGCSTransportConfigLoader.cpp" />
     <ClCompile Include="DSPGCSTransportFactory.cpp" />
     <ClCompile Include="MavlinkDiscoveryService.cpp" />
+    <ClCompile Include="MavFtpClient.cpp" />
+    <ClCompile Include="MavFtpProtocol.cpp" />
     <ClCompile Include="MavlinkReadOnlyIngress.cpp" />
     <ClCompile Include="MavlinkUdpReceiver.cpp" />
     <ClCompile Include="FlightControl.cpp" />
@@ -164,6 +166,10 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="MavlinkCommand.cpp" />
     <ClCompile Include="MavlinkParser.cpp" />
+    <ClCompile Include="MissionProfileProbe.cpp" />
+    <ClCompile Include="MissionPreparationWorker.cpp" />
+    <ClCompile Include="MissionUploadTransaction.cpp" />
+    <ClCompile Include="RouteUploadManager.cpp" />
     <ClCompile Include="UdpClient.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -186,6 +192,8 @@
     <ClInclude Include="DSPGCSTransportConfigLoader.h" />
     <ClInclude Include="DroneDiscovery.h" />
     <ClInclude Include="MavlinkDiscoveryService.h" />
+    <ClInclude Include="MavFtpClient.h" />
+    <ClInclude Include="MavFtpProtocol.h" />
     <ClInclude Include="MavlinkDatagramSender.h" />
     <ClInclude Include="MavlinkReadOnlyIngress.h" />
     <ClInclude Include="MavlinkUdpReceiver.h" />
@@ -196,6 +204,10 @@
     <ClInclude Include="HoverTest.h" />
     <ClInclude Include="MavlinkCommand.h" />
     <ClInclude Include="MavlinkParser.h" />
+    <ClInclude Include="MissionProfileProbe.h" />
+    <ClInclude Include="MissionPreparationWorker.h" />
+    <ClInclude Include="MissionUploadTransaction.h" />
+    <ClInclude Include="RouteUploadManager.h" />
     <ClInclude Include="SafetyConfig.h" />
     <ClInclude Include="UdpClient.h" />
   </ItemGroup>

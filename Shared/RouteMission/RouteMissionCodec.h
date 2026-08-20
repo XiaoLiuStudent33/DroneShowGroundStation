@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <vector>
@@ -193,12 +194,49 @@ namespace dronegcs::route_mission
 			| (Significand & 0x007fffffU);
 	}
 
-	inline bool EncodeMissionItemRecordV1(
+	/**
+	 * Transport-neutral authoritative Mission item. Both the legacy FTP
+	 * container and the standard MAVLink Mission Protocol are projections of
+	 * this value, so their WPL field semantics cannot drift.
+	 */
+	struct MissionItemIntV1
+	{
+		float Param1 = 0.0f;
+		float Param2 = 0.0f;
+		float Param3 = 0.0f;
+		float Param4 = 0.0f;
+		std::int32_t X = 0;
+		std::int32_t Y = 0;
+		float Z = 0.0f;
+		std::uint16_t Sequence = 0;
+		std::uint16_t Command = 16;
+		std::uint8_t Frame = 3;
+		std::uint8_t Current = 0;
+		std::uint8_t AutoContinue = 1;
+		std::uint8_t MissionType = 0;
+	};
+
+	inline float Binary32FromBits(const std::uint32_t Bits)
+	{
+		float Result = 0.0f;
+		static_assert(sizeof(Result) == sizeof(Bits), "binary32 size mismatch");
+		std::memcpy(&Result, &Bits, sizeof(Result));
+		return Result;
+	}
+
+	inline std::uint32_t Binary32ToBits(const float Value)
+	{
+		std::uint32_t Result = 0;
+		std::memcpy(&Result, &Value, sizeof(Result));
+		return Result;
+	}
+
+	inline bool BuildMissionItemIntV1(
 		const wpl110::Row& Row,
-		std::array<Byte, MissionItemRecordBytesV1>& Out,
+		MissionItemIntV1& Out,
 		Error& OutError)
 	{
-		Out.fill(0);
+		Out = {};
 		if (Row.Sequence < 0 || Row.Sequence > 65535)
 			return Fail(OutError, ErrorCode::SequenceOutOfRange,
 				"Mission sequence exceeds uint16.", Row.Sequence);
@@ -209,21 +247,47 @@ namespace dronegcs::route_mission
 			return false;
 		}
 
-		WriteU32LittleEndian(Out.data() + 0, Rgb8ToBinary32Bits(Row.Red));
-		WriteU32LittleEndian(Out.data() + 4, Rgb8ToBinary32Bits(Row.Green));
-		WriteU32LittleEndian(Out.data() + 8, Rgb8ToBinary32Bits(Row.Blue));
-		WriteU32LittleEndian(Out.data() + 12, 0); // Param4 is positive zero.
-		WriteU32LittleEndian(Out.data() + 16, static_cast<std::uint32_t>(Row.LatitudeE7));
-		WriteU32LittleEndian(Out.data() + 20, static_cast<std::uint32_t>(Row.LongitudeE7));
-		WriteU32LittleEndian(Out.data() + 24, AltitudeBits);
-		WriteU16LittleEndian(Out.data() + 28, static_cast<std::uint16_t>(Row.Sequence));
-		WriteU16LittleEndian(Out.data() + 30, 16); // MAV_CMD_NAV_WAYPOINT compatibility v1.
+		Out.Param1 = Binary32FromBits(Rgb8ToBinary32Bits(Row.Red));
+		Out.Param2 = Binary32FromBits(Rgb8ToBinary32Bits(Row.Green));
+		Out.Param3 = Binary32FromBits(Rgb8ToBinary32Bits(Row.Blue));
+		Out.Param4 = 0.0f;
+		Out.X = Row.LatitudeE7;
+		Out.Y = Row.LongitudeE7;
+		Out.Z = Binary32FromBits(AltitudeBits);
+		Out.Sequence = static_cast<std::uint16_t>(Row.Sequence);
+		Out.Command = 16; // MAV_CMD_NAV_WAYPOINT compatibility v1.
+		Out.Frame = 3; // MAV_FRAME_GLOBAL_RELATIVE_ALT compatibility v1.
+		Out.Current = 0;
+		Out.AutoContinue = 1;
+		Out.MissionType = 0;
+		OutError = {};
+		return true;
+	}
+
+	inline bool EncodeMissionItemRecordV1(
+		const wpl110::Row& Row,
+		std::array<Byte, MissionItemRecordBytesV1>& Out,
+		Error& OutError)
+	{
+		Out.fill(0);
+		MissionItemIntV1 Item;
+		if (!BuildMissionItemIntV1(Row, Item, OutError)) return false;
+
+		WriteU32LittleEndian(Out.data() + 0, Binary32ToBits(Item.Param1));
+		WriteU32LittleEndian(Out.data() + 4, Binary32ToBits(Item.Param2));
+		WriteU32LittleEndian(Out.data() + 8, Binary32ToBits(Item.Param3));
+		WriteU32LittleEndian(Out.data() + 12, Binary32ToBits(Item.Param4));
+		WriteU32LittleEndian(Out.data() + 16, static_cast<std::uint32_t>(Item.X));
+		WriteU32LittleEndian(Out.data() + 20, static_cast<std::uint32_t>(Item.Y));
+		WriteU32LittleEndian(Out.data() + 24, Binary32ToBits(Item.Z));
+		WriteU16LittleEndian(Out.data() + 28, Item.Sequence);
+		WriteU16LittleEndian(Out.data() + 30, Item.Command);
 		Out[32] = 0; // target_system
 		Out[33] = 0; // target_component
-		Out[34] = 3; // MAV_FRAME_GLOBAL_RELATIVE_ALT compatibility v1.
-		Out[35] = 0; // current
-		Out[36] = 1; // autocontinue
-		Out[37] = 0; // mission_type
+		Out[34] = Item.Frame;
+		Out[35] = Item.Current;
+		Out[36] = Item.AutoContinue;
+		Out[37] = Item.MissionType;
 		OutError = {};
 		return true;
 	}
