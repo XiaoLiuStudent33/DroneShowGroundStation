@@ -190,6 +190,13 @@ bool URouteWaypointGenerationSubsystem::TickGeneration(const float DeltaSeconds)
 		{
 			LastGeneratedManifest = MoveTemp(Result.Manifest);
 			ActiveBatch->MarkSucceeded();
+			if (WorkerProgress.ClampedChannelCount > 0)
+			{
+				UE_LOG(LogRouteWaypointGeneration, Warning,
+					TEXT("RGB saturation applied: samples=%lld channels=%lld"),
+					WorkerProgress.ClampedSampleCount,
+					WorkerProgress.ClampedChannelCount);
+			}
 		}
 		else
 		{

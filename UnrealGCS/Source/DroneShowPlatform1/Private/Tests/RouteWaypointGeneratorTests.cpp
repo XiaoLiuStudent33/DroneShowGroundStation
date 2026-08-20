@@ -181,8 +181,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FRouteWaypointGeoAndContractTests::RunTest(const FString& Parameters)
 {
 	FRouteWaypointGeneratorContext Context = MakeContext(*this);
-	TestEqual(TEXT("Generator version is frozen v1"), Context.WaypointGeneratorVersion,
-		FString(TEXT("qgc-wpl110-wgs84-relative-rgb-v1")));
+	TestEqual(TEXT("Generator version is frozen saturate v2"), Context.WaypointGeneratorVersion,
+		FString(TEXT("qgc-wpl110-wgs84-relative-rgb-saturate-v2")));
 	TestEqual(TEXT("Normalized latitude E7"), Context.NormalizedShowOriginLatitudeE7, 319324710);
 	TestEqual(TEXT("Normalized longitude E7"), Context.NormalizedShowOriginLongitudeE7, 1186385310);
 	TestEqual(TEXT("Generator input digest v1"), Context.GeneratorInputDigest.ToLowerHex(),
@@ -298,6 +298,114 @@ bool FRouteWaypointGeoAndContractTests::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRouteWaypointRgbSaturationTests,
+	"DroneGCS.RouteWaypointGenerator.2DC1.RgbSaturationCompatibility",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRouteWaypointRgbSaturationTests::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	struct FCase
+	{
+		float Value;
+		uint8 Expected;
+		uint8 ExpectedClampedChannels;
+	};
+	const FCase Cases[] = {
+		{0.0f, 0, 0},
+		{0.5f, 127, 0},
+		{1.0f, 255, 0},
+		{1.05078125f, 255, 1},
+		{1.2f, 255, 1},
+		{1.966796875f, 255, 1},
+		{-0.1f, 0, 1},
+		{-1.1920928955078125e-7f, 0, 1}
+	};
+	for (const FCase& Case : Cases)
+	{
+		uint8 Red = 0;
+		uint8 Green = 0;
+		uint8 Blue = 0;
+		dronegcs::wpl110::RgbSaturationDiagnostics Diagnostics;
+		TestTrue(TEXT("Finite RGB quantizes"), dronegcs::wpl110::QuantizeRgb(
+			Case.Value, 0.5f, 1.0f, 1.0f, Red, Green, Blue, &Diagnostics));
+		TestEqual(TEXT("Saturated/truncated RGB8"), Red, Case.Expected);
+		TestEqual(TEXT("Unchanged 0.5 truncates to 127"), Green, static_cast<uint8>(127));
+		TestEqual(TEXT("Unchanged 1.0 quantizes to 255"), Blue, static_cast<uint8>(255));
+		TestEqual(TEXT("Per-call clamped channel count"),
+			Diagnostics.ClampedChannelCount, Case.ExpectedClampedChannels);
+	}
+	uint8 SemanticRed = 0;
+	uint8 SemanticGreen = 0;
+	uint8 SemanticBlue = 0;
+	TestTrue(TEXT("Requested waypoint-row RGB triple quantizes"),
+		dronegcs::wpl110::QuantizeRgb(
+			0.8f, 1.05078125f, 0.95f, 1.0f,
+			SemanticRed, SemanticGreen, SemanticBlue));
+	TestEqual(TEXT("Direct linear 0.8 truncates to 204"),
+		SemanticRed, static_cast<uint8>(204));
+	TestEqual(TEXT("Direct over-one green saturates to 255"),
+		SemanticGreen, static_cast<uint8>(255));
+	TestEqual(TEXT("Direct linear 0.95 truncates to 242"),
+		SemanticBlue, static_cast<uint8>(242));
+
+	const float QuietNaN = std::numeric_limits<float>::quiet_NaN();
+	const float PositiveInfinity = std::numeric_limits<float>::infinity();
+	const float NegativeInfinity = -std::numeric_limits<float>::infinity();
+	const FLinearColor NonFiniteCases[] = {
+		FLinearColor(QuietNaN, 0.0f, 0.0f, 1.0f),
+		FLinearColor(0.0f, PositiveInfinity, 0.0f, 1.0f),
+		FLinearColor(0.0f, 0.0f, NegativeInfinity, 1.0f),
+		FLinearColor(0.0f, 0.0f, 0.0f, QuietNaN)
+	};
+	for (const FLinearColor& Color : NonFiniteCases)
+	{
+		uint8 Red = 0;
+		uint8 Green = 0;
+		uint8 Blue = 0;
+		TestFalse(TEXT("Non-finite RGBA remains rejected"),
+			dronegcs::wpl110::QuantizeRgb(
+				Color.R, Color.G, Color.B, Color.A, Red, Green, Blue));
+	}
+
+	FRoutePreviewData SaturatedData = MakeGoldenData(*this);
+	SaturatedData.Colors[0] = FFloat16Color(FLinearColor(
+		0.8f, 1.05078125f, 0.95f, 1.0f));
+	FMemorySink Sink;
+	const FRouteWaypointGenerationResult Result = GenerateToMemory(
+		SaturatedData, MakeContext(*this), 0, Sink);
+	TestTrue(TEXT("Out-of-range finite route color generates"), Result.bSuccess);
+	TestEqual(TEXT("One route sample was clamped"), Result.ClampedSampleCount, 1);
+	TestEqual(TEXT("One route channel was clamped"), Result.ClampedChannelCount, 1ll);
+	FUTF8ToTCHAR Converted(
+		reinterpret_cast<const ANSICHAR*>(Sink.Bytes.GetData()), Sink.Bytes.Num());
+	const FString Text(Converted.Length(), Converted.Get());
+	TArray<FString> Lines;
+	Text.ParseIntoArray(Lines, TEXT("\r\n"), false);
+	TArray<FString> Fields;
+	Lines[1].ParseIntoArray(Fields, TEXT("\t"), false);
+	const FLinearColor StoredColor = SaturatedData.Colors[0].GetFloats();
+	uint8 ExpectedRed = 0;
+	uint8 ExpectedGreen = 0;
+	uint8 ExpectedBlue = 0;
+	TestTrue(TEXT("Stored half-source row color quantizes"),
+		dronegcs::wpl110::QuantizeRgb(
+			StoredColor.R, StoredColor.G, StoredColor.B, StoredColor.A,
+			ExpectedRed, ExpectedGreen, ExpectedBlue));
+	const uint8 ExpectedChannels[] = {ExpectedRed, ExpectedGreen, ExpectedBlue};
+	for (int32 ChannelIndex = 0; ChannelIndex < 3; ++ChannelIndex)
+	{
+		const int32 Value = FCString::Atoi(*Fields[4 + ChannelIndex]);
+		TestEqual(TEXT("WPL row uses the shared RGB quantization authority"),
+			Value, static_cast<int32>(ExpectedChannels[ChannelIndex]));
+		TestTrue(TEXT("Generated WPL RGB remains in uint8 range"),
+			Value >= 0 && Value <= 255);
+	}
+	TestEqual(TEXT("Saturated row green is 255"), ExpectedGreen, static_cast<uint8>(255));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRouteWaypointGoldenTests,
 	"DroneGCS.RouteWaypointGenerator.2DC1.GoldenFiles",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -387,12 +495,9 @@ bool FRouteWaypointValidationAndFailureTests::RunTest(const FString& Parameters)
 	}
 
 	const FLinearColor InvalidColors[] = {
-		FLinearColor(-0.0001f, 0.0f, 0.0f, 1.0f),
-		// 1.0001 rounds to exactly 1.0 in the real FFloat16Color storage;
-		// 1.001 preserves an above-one half-float for the generator defense.
-		FLinearColor(1.001f, 0.0f, 0.0f, 1.0f),
 		FLinearColor(std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f, 1.0f),
 		FLinearColor(0.0f, std::numeric_limits<float>::infinity(), 0.0f, 1.0f),
+		FLinearColor(0.0f, 0.0f, -std::numeric_limits<float>::infinity(), 1.0f),
 		FLinearColor(0.0f, 0.0f, 0.0f, std::numeric_limits<float>::quiet_NaN())
 	};
 	for (const FLinearColor& InvalidColor : InvalidColors)
@@ -401,7 +506,7 @@ bool FRouteWaypointValidationAndFailureTests::RunTest(const FString& Parameters)
 		Invalid.Colors[0] = FFloat16Color(InvalidColor);
 		FMemorySink Sink;
 		const FRouteWaypointGenerationResult Result = GenerateToMemory(Invalid, Context, 0, Sink);
-		TestEqual(TEXT("Invalid RGB or alpha rejected"), Result.ErrorCode,
+		TestEqual(TEXT("Non-finite RGB or alpha rejected"), Result.ErrorCode,
 			ERouteWaypointGeneratorErrorCode::InvalidColor);
 	}
 

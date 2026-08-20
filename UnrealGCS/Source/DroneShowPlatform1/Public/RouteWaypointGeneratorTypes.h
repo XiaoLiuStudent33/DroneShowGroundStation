@@ -12,7 +12,7 @@ namespace RouteWaypointGeneratorContract
 	// If NPZ position/color precision, channel interpretation, or decoding changes
 	// can alter output bytes, bump this generator version or the input schema.
 	inline constexpr const TCHAR* WaypointGeneratorVersion =
-		TEXT("qgc-wpl110-wgs84-relative-rgb-v1");
+		TEXT("qgc-wpl110-wgs84-relative-rgb-saturate-v2");
 	inline constexpr int64 HeaderBytes = dronegcs::wpl110::HeaderLength;
 	inline constexpr int64 RowCrLfBytes = 2;
 	inline constexpr int64 MaxSequenceCharacters = 10;
@@ -107,6 +107,8 @@ struct DRONESHOWPLATFORM1_API FRouteWaypointGenerationResult
 	int32 RouteSlotIndex = INDEX_NONE;
 	int32 RowCount = 0;
 	int64 BytesWritten = 0;
+	int32 ClampedSampleCount = 0;
+	int64 ClampedChannelCount = 0;
 	ERouteWaypointGeneratorErrorCode ErrorCode = ERouteWaypointGeneratorErrorCode::None;
 	FString Diagnostic;
 };

@@ -127,6 +127,8 @@ struct FRouteWaypointBatchGenerator::FImpl
 			--Progress.ActiveRoutes;
 			Progress.RowsWritten += Result.RowCount;
 			Progress.BytesWritten += Result.BytesWritten;
+			Progress.ClampedSampleCount += Result.ClampedSampleCount;
+			Progress.ClampedChannelCount += Result.ClampedChannelCount;
 			if (Result.bSuccess)
 			{
 				++Progress.CompletedRoutes;

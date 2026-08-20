@@ -299,6 +299,8 @@ FRouteWaypointGenerationResult RouteWaypointGenerator::GenerateRoute(
 {
 	int32 RowCount = 0;
 	int64 BytesWritten = 0;
+	int32 ClampedSampleCount = 0;
+	int64 ClampedChannelCount = 0;
 	const FRoutePreviewData* const RouteData = Input.RouteData;
 	if (RouteData == nullptr || !RouteData->IsLoaded() || !RouteData->SourceIdentity.IsValid())
 	{
@@ -384,12 +386,18 @@ FRouteWaypointGenerationResult RouteWaypointGenerator::GenerateRoute(
 		uint8 Red = 0;
 		uint8 Green = 0;
 		uint8 Blue = 0;
+		dronegcs::wpl110::RgbSaturationDiagnostics Saturation;
 		if (!dronegcs::wpl110::QuantizeRgb(
-				Color.R, Color.G, Color.B, Color.A, Red, Green, Blue))
+				Color.R, Color.G, Color.B, Color.A, Red, Green, Blue, &Saturation))
 		{
 			return MakeFailure(Input.RouteSlotIndex, RowCount, BytesWritten,
 				ERouteWaypointGeneratorErrorCode::InvalidColor,
-				TEXT("Route color contains invalid linear RGBA values."));
+				TEXT("Route color contains non-finite linear RGBA values."));
+		}
+		if (Saturation.ClampedChannelCount > 0)
+		{
+			++ClampedSampleCount;
+			ClampedChannelCount += Saturation.ClampedChannelCount;
 		}
 
 		RouteAssignmentGeo::FGeodeticPosition Geodetic;
@@ -451,6 +459,8 @@ FRouteWaypointGenerationResult RouteWaypointGenerator::GenerateRoute(
 	Result.RouteSlotIndex = Input.RouteSlotIndex;
 	Result.RowCount = RowCount;
 	Result.BytesWritten = BytesWritten;
+	Result.ClampedSampleCount = ClampedSampleCount;
+	Result.ClampedChannelCount = ClampedChannelCount;
 	return Result;
 }
 

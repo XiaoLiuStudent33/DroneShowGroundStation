@@ -72,6 +72,121 @@ bool FGCSRouteWorkflowLookupFailureTest::RunTest(const FString& Parameters)
 	C->Shutdown(); GI->Shutdown(); return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGCSRouteWorkflowConvertWithoutAssignmentWidgetsTest,
+	"DroneGCS.UI.RouteWorkflow.ConvertWithoutAssignmentWidgets",
+	EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowConvertWithoutAssignmentWidgetsTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UGameInstance* GI=NewObject<UGameInstance>(GEngine);
+	if(!TestNotNull(TEXT("GameInstance"),GI)) return false;
+	GI->InitializeStandalone(TEXT("GCSRouteWorkflowConvertWithoutAssignmentWidgetsTest"));
+	UGCSRouteWorkflowCoordinator* C=NewObject<UGCSRouteWorkflowCoordinator>(GI);
+	C->InitializeForTest(GI);
+	UClass* WorkflowClass=LoadClass<UUserWidget>(nullptr,TEXT("/Game/UI/WBP_GCS_RouteWorkflow.WBP_GCS_RouteWorkflow_C"));
+	if(!TestNotNull(TEXT("Workflow class"),WorkflowClass)) { GI->Shutdown(); return false; }
+
+	const TArray<FName> AssignmentWidgetNames={
+		TEXT("TXT_AssignmentState"),TEXT("TXT_AssignmentMode"),TEXT("TXT_ConsoleAccepted"),
+		TEXT("TXT_MatchedCount"),TEXT("TXT_VacantCount"),TEXT("TXT_SpareCount"),
+		TEXT("TXT_SectionAssignment"),TEXT("TXT_StateAssignmentLabel"),
+		TEXT("TXT_StateAssignmentValue"),TEXT("HBOX_AssignmentState"),
+		TEXT("HBOX_AssignmentCounts"),
+		TEXT("HBOX_StateAssignment")};
+	C->SetWorkflowFactoryForTest([GI,WorkflowClass,AssignmentWidgetNames]()
+	{
+		UUserWidget* Workflow=CreateWidget<UUserWidget>(GI,WorkflowClass);
+		UUserWidget* Convert=Workflow&&Workflow->WidgetTree
+			? Cast<UUserWidget>(Workflow->WidgetTree->FindWidget(TEXT("WBP_GCS_RouteConvert"))):nullptr;
+		if(Convert&&Convert->WidgetTree)
+		{
+			for(const FName Name:AssignmentWidgetNames)
+			{
+				if(UWidget* Widget=Convert->WidgetTree->FindWidget(Name))
+				{
+					Convert->WidgetTree->RemoveWidget(Widget);
+				}
+			}
+		}
+		return Workflow;
+	},false);
+
+	FString Error;
+	if(!TestTrue(TEXT("Open RouteWorkflow without Convert Assignment widgets"),C->ShowRouteWorkflow(Error)))
+	{
+		AddError(Error); C->Shutdown(); GI->Shutdown(); return false;
+	}
+	TestTrue(TEXT("Required binding remains valid"),C->IsBindingValidForTest());
+	UUserWidget* Workflow=C->GetWorkflowWidgetForTest();
+	UUserWidget* Convert=Workflow&&Workflow->WidgetTree
+		? Cast<UUserWidget>(Workflow->WidgetTree->FindWidget(TEXT("WBP_GCS_RouteConvert"))):nullptr;
+	if(!TestNotNull(TEXT("RouteConvert page"),Convert))
+	{
+		C->Shutdown(); GI->Shutdown(); return false;
+	}
+	for(const FName Name:AssignmentWidgetNames)
+	{
+		TestNull(*FString::Printf(TEXT("%s may be absent"),*Name.ToString()),
+			Convert->WidgetTree->FindWidget(Name));
+	}
+	for(const FName Name:{FName(TEXT("HBOX_StateArtifact")),FName(TEXT("TXT_StateArtifactLabel")),
+		FName(TEXT("TXT_StateArtifactValue"))})
+	{
+		TestNotNull(*FString::Printf(TEXT("Artifact widget %s remains bound"),*Name.ToString()),
+			Convert->WidgetTree->FindWidget(Name));
+	}
+
+	FGCSRouteWorkflowCommandGateInputs BrowseGate;
+	BrowseGate.bWorkspaceReady=true;
+	C->SetCommandGateInputsForTest(BrowseGate);
+	int32 PrepareCalls=0;
+	FGCSRouteWorkflowCommandTestHooks Hooks;
+	Hooks.OpenNpzDialog=[](FString& Out){Out=TEXT("C:/RouteCleanup/fixture.npz");return true;};
+	Hooks.PrepareRoute=[&PrepareCalls](const FString&,FString&){++PrepareCalls;return true;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	C->ClickRouteBrowseForTest();
+	TestEqual(TEXT("Browse/Prepare dispatch remains bound"),PrepareCalls,1);
+	TestTrue(TEXT("Prepared path retained"),C->GetSelectedRoutePathForTest().EndsWith(TEXT("fixture.npz")));
+	TestNotNull(TEXT("Dataset state presentation remains bound"),
+		Convert->WidgetTree->FindWidget(TEXT("TXT_StateDatasetValue")));
+
+	if(UEditableTextBox* Latitude=Cast<UEditableTextBox>(Convert->WidgetTree->FindWidget(TEXT("EDT_OriginLatitude"))))
+		Latitude->SetText(FText::FromString(TEXT("30.5")));
+	if(UEditableTextBox* Longitude=Cast<UEditableTextBox>(Convert->WidgetTree->FindWidget(TEXT("EDT_OriginLongitude"))))
+		Longitude->SetText(FText::FromString(TEXT("120.25")));
+	if(UEditableTextBox* Altitude=Cast<UEditableTextBox>(Convert->WidgetTree->FindWidget(TEXT("EDT_OriginAltitude"))))
+		Altitude->SetText(FText::FromString(TEXT("50")));
+	FGCSRouteWorkflowCommandGateInputs LoadGate;
+	LoadGate.bHasPreparedRoute=true; LoadGate.bOriginValid=true;
+	C->SetCommandGateInputsForTest(LoadGate);
+	int32 LoadSteps=0;
+	Hooks={};
+	Hooks.CommitRoute=[&LoadSteps](FString&){++LoadSteps;return true;};
+	Hooks.SetOrigin=[&LoadSteps](double,double,double,FString&){++LoadSteps;return true;};
+	Hooks.SetOverlay=[&LoadSteps](bool,FString&){++LoadSteps;return true;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	C->ClickLoadPreviewForTest();
+	TestEqual(TEXT("Load Preview dispatch remains bound"),LoadSteps,3);
+
+	FGCSRouteWorkflowCommandGateInputs GenerateGate;
+	GenerateGate.bRouteLoaded=true; GenerateGate.bShowOriginSet=true;
+	GenerateGate.bWorkspaceReady=true;
+	C->SetCommandGateInputsForTest(GenerateGate);
+	int32 GenerateCalls=0;
+	Hooks={};
+	Hooks.StartGeneration=[&GenerateCalls](int32,FString&){++GenerateCalls;return true;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	C->ClickGenerateWaypointsForTest();
+	TestEqual(TEXT("Generate dispatch remains bound"),GenerateCalls,1);
+
+	C->RefreshReadOnlyStateForTest();
+	UTextBlock* ArtifactState=Cast<UTextBlock>(Convert->WidgetTree->FindWidget(TEXT("TXT_StateArtifactValue")));
+	TestTrue(TEXT("Artifact state refresh remains bound"),ArtifactState&&!ArtifactState->GetText().IsEmpty());
+
+	C->Shutdown(); GI->Shutdown(); return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowFormattingTest,"DroneGCS.UI.RouteWorkflow.ProgressAndFormatting",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
 bool FGCSRouteWorkflowFormattingTest::RunTest(const FString& Parameters)
 {

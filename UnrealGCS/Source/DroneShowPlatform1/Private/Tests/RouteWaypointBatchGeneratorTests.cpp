@@ -181,11 +181,18 @@ namespace
 		const int32 WorkerCount,
 		const int32 MatchedCount,
 		const FString& IdentityLabel,
-		FBatchArtifactImage& OutImage)
+		FBatchArtifactImage& OutImage,
+		const bool bInjectSaturation = false)
 	{
 		const FString Root = BatchTempRoot(TEXT("success"));
 		const TSharedPtr<FRoutePreviewData, ESPMode::ThreadSafe> Data =
 			MakeBatchData(Test, FrameCount, RouteCount);
+		if (bInjectSaturation && Data->Colors.Num() >= 2)
+		{
+			Data->Colors[0] = FFloat16Color(FLinearColor(1.2f, -0.1f, 0.75f, 1.0f));
+			Data->Colors[1] = FFloat16Color(FLinearColor(
+				1.966796875f, 0.5f, 1.05078125f, 1.0f));
+		}
 		const FRouteWaypointGenerationSnapshot Snapshot = MakeSnapshot(Test, Data);
 		const FRouteArtifactBuildIdentity Build = MakeBatchBuild(Test, Snapshot, IdentityLabel);
 		const FRouteArtifactWorkspaceAuthorityGate Gate = MakeBatchGate(Build, Snapshot);
@@ -341,6 +348,14 @@ bool FRouteWaypointBatchDeterminismTests::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Degraded full Route domain generation"), RunSuccessfulBatch(
 		*this, 3, 5, 2, 3, TEXT("degraded"), Degraded));
 	TestEqual(TEXT("Degraded still has five route files"), Degraded.RouteBytes.Num(), 5);
+
+	FBatchArtifactImage Saturated;
+	TestTrue(TEXT("Finite out-of-range RGB batch succeeds and validates"),
+		RunSuccessfulBatch(*this, 3, 5, 2, 5, TEXT("saturation"), Saturated, true));
+	TestEqual(TEXT("Batch aggregates clamped samples"),
+		Saturated.Progress.ClampedSampleCount, 2ll);
+	TestEqual(TEXT("Batch aggregates clamped channels"),
+		Saturated.Progress.ClampedChannelCount, 4ll);
 	return true;
 }
 
@@ -422,7 +437,8 @@ bool FRouteWaypointBatchFailureCancelTests::RunTest(const FString& Parameters)
 	}, INDEX_NONE, 0);
 	ExpectRouteFailure(TEXT("color"), [](FRoutePreviewData& Data)
 	{
-		Data.Colors[8] = FFloat16Color(FLinearColor(1.01f, 0.0f, 0.0f, 1.0f));
+		Data.Colors[8] = FFloat16Color(FLinearColor(
+			std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f, 1.0f));
 	}, INDEX_NONE, 8);
 	ExpectRouteFailure(TEXT("writer"), [](FRoutePreviewData&) {}, 15, 15);
 

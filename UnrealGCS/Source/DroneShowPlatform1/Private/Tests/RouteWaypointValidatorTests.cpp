@@ -66,8 +66,8 @@ namespace
 			FVector3f(1.0f, 2.0f, -3.0f)
 		};
 		Data->Colors = {
-			FFloat16Color(FLinearColor(0.5f, 0.25f, 1.0f, 1.0f)),
-			FFloat16Color(FLinearColor(0.0f, 0.75f, 0.125f, 1.0f))
+			FFloat16Color(FLinearColor(1.2f, -0.1f, 0.5f, 1.0f)),
+			FFloat16Color(FLinearColor(0.8f, 1.05078125f, 1.966796875f, 1.0f))
 		};
 		FRouteArtifactDigest256 Digest;
 		FString Error;
@@ -109,6 +109,10 @@ namespace
 			Test.AddError(Generated.Diagnostic);
 			return false;
 		}
+		Test.TestEqual(TEXT("SourceBound fixture clamped samples"),
+			Generated.ClampedSampleCount, 2);
+		Test.TestEqual(TEXT("SourceBound fixture clamped channels"),
+			Generated.ClampedChannelCount, 4ll);
 		OutContext.RouteData = OutData;
 		OutContext.SourceIdentity = OutData->SourceIdentity;
 		OutContext.RouteDatasetGeneration = 1;
@@ -173,6 +177,8 @@ bool FRouteWaypointStreamingValidationTests::RunTest(const FString& Parameters)
 			&Context, SourceBound));
 	TestEqual(TEXT("Both levels hash the same physical bytes"),
 		SourceBound.FileDigest, Semantic.FileDigest);
+	TestTrue(TEXT("SourceBound fixture contains saturated/truncated RGB"),
+		BytesToText(Bytes).Contains(TEXT("\t255\t0\t127\t0\t")));
 	for (const int32 ChunkSize : {1, 2, 3, 7, 11, 17, 64})
 	{
 		dronegcs::wpl110::StreamingParser Parser(2);

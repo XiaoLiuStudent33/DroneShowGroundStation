@@ -7,14 +7,12 @@
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
 #include "Components/WidgetSwitcher.h"
-#include "DSPGCSFrozenAssignmentSyncSubsystem.h"
 #include "DSPGCSUploadJobSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/Paths.h"
 #include "RouteArtifactWorkspaceSubsystem.h"
-#include "RouteAssignmentSubsystem.h"
 #include "RoutePreviewSubsystem.h"
 #include "RouteWaypointGenerationSubsystem.h"
 
@@ -88,22 +86,6 @@ namespace GCSRouteWorkflowPrivate
 		return Result;
 	}
 
-	FString AssignmentState(const ERouteAssignmentState V)
-	{
-		switch (V) { case ERouteAssignmentState::Empty:return TEXT("Empty"); case ERouteAssignmentState::Draft:return TEXT("Draft"); case ERouteAssignmentState::Ready:return TEXT("Ready"); case ERouteAssignmentState::Frozen:return TEXT("Frozen"); default:return TEXT("--"); }
-	}
-	FString Readiness(const ERouteAssignmentReadinessKind V)
-	{
-		switch (V) { case ERouteAssignmentReadinessKind::FullReady:return TEXT("Full Ready"); case ERouteAssignmentReadinessKind::DegradedReady:return TEXT("Degraded Ready"); default:return TEXT("Not Ready"); }
-	}
-	FString Completion(const ERouteAssignmentCompletionMode V)
-	{
-		return V == ERouteAssignmentCompletionMode::Full ? TEXT("Full") : (V == ERouteAssignmentCompletionMode::Degraded ? TEXT("Degraded") : TEXT("Unset"));
-	}
-	FString Sync(const EDSPGCSFrozenAssignmentSyncState V)
-	{
-		switch (V) { case EDSPGCSFrozenAssignmentSyncState::FrozenLocal:return TEXT("Frozen Local"); case EDSPGCSFrozenAssignmentSyncState::SyncingToConsole:return TEXT("Syncing"); case EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted:return TEXT("Accepted"); case EDSPGCSFrozenAssignmentSyncState::SyncFailed:return TEXT("Sync Failed"); default:return TEXT("Not Frozen"); }
-	}
 	FString Current(const ERouteArtifactCurrentStatus V)
 	{
 		return V == ERouteArtifactCurrentStatus::Ready ? TEXT("Ready")
@@ -295,9 +277,7 @@ bool UGCSRouteWorkflowCoordinator::BindWorkflowWidgets(UUserWidget* Workflow, FS
 		TEXT("TXT_RouteFilePath"),TEXT("TXT_RouteCount"),TEXT("TXT_FrameCount"),TEXT("TXT_DatasetState"),
 		TEXT("BTN_RouteBrowse"),TEXT("BTN_OutputBrowse"),TEXT("BTN_LoadPreview"),TEXT("BTN_GenerateWaypoints"),
 		TEXT("EDT_OriginLatitude"),TEXT("EDT_OriginLongitude"),TEXT("EDT_OriginAltitude"),
-		TEXT("TXT_AssignmentState"),TEXT("TXT_AssignmentMode"),TEXT("TXT_ConsoleAccepted"),
-		TEXT("TXT_MatchedCount"),TEXT("TXT_VacantCount"),TEXT("TXT_SpareCount"),TEXT("TXT_OutputPath"),
-		TEXT("TXT_StateDatasetValue"),TEXT("TXT_StatePreviewValue"),TEXT("TXT_StateAssignmentValue"),TEXT("TXT_StateArtifactValue"),
+		TEXT("TXT_OutputPath"),TEXT("TXT_StateDatasetValue"),TEXT("TXT_StatePreviewValue"),TEXT("TXT_StateArtifactValue"),
 		TEXT("PROGRESS_Convert"),TEXT("TXT_GeneratedCount"),TEXT("TXT_ValidatedCount"),TEXT("TXT_ConvertPercent"),
 		TEXT("TXT_ArtifactReadyValue"),TEXT("TXT_ArtifactIdValue"),TEXT("TXT_ArtifactElapsedValue")}), ConvertWidgets, OutError)) return false;
 	if (!ResolveRequiredWidgets(Upload, Required({
@@ -737,15 +717,6 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 		FString PreviewText = Preview->IsPreviewModeActive() ? TEXT("Preview: ")+Playback(Preview->GetPlaybackState()) : (Preview->IsRouteOverlayVisible() ? TEXT("Live + Frame-0 Overlay") : (Preview->IsRouteOverlayEnabled() ? TEXT("Overlay Enabled") : TEXT("--")));
 		SetText(ConvertWidgets,TEXT("TXT_StatePreviewValue"),PreviewText);
 	}
-	URouteAssignmentSubsystem* Assignment = GI->GetSubsystem<URouteAssignmentSubsystem>(); FRouteAssignmentSnapshot AS;
-	const ERouteAssignmentState AState = Assignment ? Assignment->GetState() : ERouteAssignmentState::Empty;
-	const ERouteAssignmentReadinessKind AReady = Assignment ? Assignment->GetReadinessKind() : ERouteAssignmentReadinessKind::NotReady;
-	const bool HasAS = Assignment && (Assignment->GetFrozenSnapshot(AS) || Assignment->GetWorkingSnapshot(AS));
-	const FString StateText = AssignmentState(AState), ModeText = HasAS && AS.CompletionMode != ERouteAssignmentCompletionMode::Unset ? Completion(AS.CompletionMode) : Readiness(AReady);
-	const UDSPGCSFrozenAssignmentSyncSubsystem* Frozen = GI->GetSubsystem<UDSPGCSFrozenAssignmentSyncSubsystem>(); const FString SyncText = Sync(Frozen ? Frozen->GetSyncState() : EDSPGCSFrozenAssignmentSyncState::NotFrozen);
-	SetText(ConvertWidgets,TEXT("TXT_AssignmentState"),StateText); SetText(ConvertWidgets,TEXT("TXT_AssignmentMode"),ModeText); SetText(ConvertWidgets,TEXT("TXT_ConsoleAccepted"),SyncText);
-	SetText(ConvertWidgets,TEXT("TXT_MatchedCount"),FString::FromInt(HasAS ? AS.Summary.MatchedCount:0)); SetText(ConvertWidgets,TEXT("TXT_VacantCount"),FString::FromInt(HasAS ? AS.Summary.VacantRouteSlotCount:0)); SetText(ConvertWidgets,TEXT("TXT_SpareCount"),FString::FromInt(HasAS ? AS.Summary.SpareCount:0));
-	SetText(ConvertWidgets,TEXT("TXT_StateAssignmentValue"),FString::Printf(TEXT("%s / %s / %s"),*StateText,*Readiness(AReady),*SyncText));
 	URouteArtifactWorkspaceSubsystem* Workspace = GI->GetSubsystem<URouteArtifactWorkspaceSubsystem>(); ERouteArtifactCurrentStatus C=ERouteArtifactCurrentStatus::None; ERouteArtifactGenerationStatus G=ERouteArtifactGenerationStatus::None; ERouteArtifactRecoveryStatus R=ERouteArtifactRecoveryStatus::Stable; FRouteArtifactCurrentInfo Info; FString Root;
 	if (Workspace) { C=Workspace->GetCurrentStatus(); G=Workspace->GetGenerationStatus(); R=Workspace->GetLastRecoveryResult().Status; Info=Workspace->GetCurrentInfo(); FString Error; if(!Workspace->ResolveWorkspaceRoot(Root,Error)) Root.Reset(); }
 	SetText(ConvertWidgets,TEXT("TXT_OutputPath"),Root.IsEmpty()?TEXT("--"):Root); SetTooltip(ConvertWidgets,TEXT("TXT_OutputPath"),Root.IsEmpty()?TEXT("--"):Root); const FString ReadyText=Ready(C,R); SetText(ConvertWidgets,TEXT("TXT_ArtifactReadyValue"),ReadyText); SetText(UploadWidgets,TEXT("TXT_ArtifactReadyValue"),ReadyText);

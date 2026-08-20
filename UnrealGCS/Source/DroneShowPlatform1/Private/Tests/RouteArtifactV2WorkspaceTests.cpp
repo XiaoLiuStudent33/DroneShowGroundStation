@@ -55,7 +55,8 @@ namespace
 	{
 		FRouteArtifactBuildIdentityV2 Build;
 		Build.SourceDatasetDigest = V2Hash(Test, TEXT("offline-source"));
-		Build.WaypointGeneratorVersion = TEXT("qgc-wpl110-wgs84-relative-rgb-v1");
+		Build.WaypointGeneratorVersion =
+			RouteWaypointGeneratorContract::WaypointGeneratorVersion;
 		Build.GeneratorInputDigest = V2Hash(Test, TEXT("offline-generator-input"));
 		Build.ShowOriginLatitudeE7 = 305000000;
 		Build.ShowOriginLongitudeE7 = 1202500000;
@@ -365,6 +366,19 @@ bool FRouteArtifactV2WorkspaceSourceSafetyTest::RunTest(const FString& Parameter
 	TestTrue(TEXT("v2 root configured"), Manager.SetConfiguredWorkspaceRoot(Root, Error));
 	const FRouteArtifactBuildIdentityV2 Build = V2Build(*this);
 	const FRouteArtifactWorkspaceSourceGate Gate = V2Gate(*this, Build);
+	FRouteArtifactBuildIdentityV2 LegacyGeneratorBuild = Build;
+	LegacyGeneratorBuild.WaypointGeneratorVersion =
+		TEXT("qgc-wpl110-wgs84-relative-rgb-v1");
+	FString LegacyGeneratorSetID;
+	FString SaturatingGeneratorSetID;
+	TestTrue(TEXT("legacy generator v2 identity"),
+		RouteArtifactIdentityV2::ComputeArtifactSetID(
+			LegacyGeneratorBuild, LegacyGeneratorSetID, Error));
+	TestTrue(TEXT("saturating generator v2 identity"),
+		RouteArtifactIdentityV2::ComputeArtifactSetID(
+			Build, SaturatingGeneratorSetID, Error));
+	TestNotEqual(TEXT("GeneratorVersion changes v2 ArtifactSetID"),
+		LegacyGeneratorSetID, SaturatingGeneratorSetID);
 	FRouteArtifactAssignmentBinding Fleet0Assignment;
 	Fleet0Assignment.FleetSessionID = TEXT("fleet-0");
 	Fleet0Assignment.AssignmentRevision = 1;

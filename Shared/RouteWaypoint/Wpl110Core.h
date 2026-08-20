@@ -18,7 +18,6 @@ namespace dronegcs::wpl110
 	inline constexpr int FractionDigits = 7;
 	inline constexpr std::size_t FieldCount = 12;
 	inline constexpr std::size_t MaxRowBytes = 80;
-	inline constexpr float ColorBoundaryTolerance = 1.0f / 4194304.0f;
 
 	enum class ErrorCode : std::uint8_t
 	{
@@ -68,6 +67,11 @@ namespace dronegcs::wpl110
 	{
 		std::array<Byte, MaxRowBytes> Bytes{};
 		std::size_t Size = 0;
+	};
+
+	struct RgbSaturationDiagnostics
+	{
+		std::uint8_t ClampedChannelCount = 0;
 	};
 
 	inline std::uint64_t UnsignedMagnitude(const std::int64_t Value)
@@ -229,20 +233,34 @@ namespace dronegcs::wpl110
 		const float Alpha,
 		std::uint8_t& OutRed,
 		std::uint8_t& OutGreen,
-		std::uint8_t& OutBlue)
+		std::uint8_t& OutBlue,
+		RgbSaturationDiagnostics* const OutDiagnostics = nullptr)
 	{
 		OutRed = OutGreen = OutBlue = 0;
+		if (OutDiagnostics)
+		{
+			*OutDiagnostics = RgbSaturationDiagnostics{};
+		}
 		if (!std::isfinite(Red) || !std::isfinite(Green)
-			|| !std::isfinite(Blue) || !std::isfinite(Alpha)
-			|| Red < -ColorBoundaryTolerance || Red > 1.0f + ColorBoundaryTolerance
-			|| Green < -ColorBoundaryTolerance || Green > 1.0f + ColorBoundaryTolerance
-			|| Blue < -ColorBoundaryTolerance || Blue > 1.0f + ColorBoundaryTolerance)
+			|| !std::isfinite(Blue) || !std::isfinite(Alpha))
 		{
 			return false;
 		}
-		OutRed = static_cast<std::uint8_t>(std::clamp(Red, 0.0f, 1.0f) * 255.0f);
-		OutGreen = static_cast<std::uint8_t>(std::clamp(Green, 0.0f, 1.0f) * 255.0f);
-		OutBlue = static_cast<std::uint8_t>(std::clamp(Blue, 0.0f, 1.0f) * 255.0f);
+
+		auto SaturateAndQuantize = [OutDiagnostics](
+			const float Value,
+			std::uint8_t& OutValue)
+		{
+			const float Saturated = std::clamp(Value, 0.0f, 1.0f);
+			if (OutDiagnostics && Saturated != Value)
+			{
+				++OutDiagnostics->ClampedChannelCount;
+			}
+			OutValue = static_cast<std::uint8_t>(Saturated * 255.0f);
+		};
+		SaturateAndQuantize(Red, OutRed);
+		SaturateAndQuantize(Green, OutGreen);
+		SaturateAndQuantize(Blue, OutBlue);
 		return true;
 	}
 

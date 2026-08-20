@@ -58,6 +58,8 @@ struct DRONESHOWPLATFORM1_API FRouteWaypointBatchProgress
 	int64 TotalRowsExpected = 0;
 	int64 RowsWritten = 0;
 	int64 BytesWritten = 0;
+	int64 ClampedSampleCount = 0;
+	int64 ClampedChannelCount = 0;
 	FString AttemptID;
 	FString ArtifactSetID;
 	int32 WorkerCount = 0;

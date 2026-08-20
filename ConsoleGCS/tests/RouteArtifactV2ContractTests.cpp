@@ -180,7 +180,8 @@ int RunRouteArtifactV2ContractTests()
 
 		// E: generator implementation identity is content-significant.
 		Changed = Baseline;
-		Changed.WaypointGeneratorVersion += "-changed";
+		Changed.WaypointGeneratorVersion =
+			"qgc-wpl110-wgs84-relative-rgb-saturate-v2";
 		Expect(SetId(Changed) != BaselineId,
 			"GeneratorVersion did not change the v2 ArtifactSetID.");
 
