@@ -163,6 +163,10 @@ public:
     bool IsCurrentIdentityStill(
         const ExpectedRouteArtifactV2Identity& expectedIdentity,
         ConsoleArtifactV2Diagnostic& diagnostic) const;
+    bool IsCurrentIdentityStill(
+        const ExpectedRouteArtifactV2Identity& expectedIdentity,
+        const RouteArtifactV2CurrentDirectoryIdentity& expectedCurrentDirectoryIdentity,
+        ConsoleArtifactV2Diagnostic& diagnostic) const;
 
     static ConsoleArtifactV2ValidationResult ValidateCurrentForTest(
         const std::string& configuredWorkspaceRoot,

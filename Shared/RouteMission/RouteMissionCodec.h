@@ -245,6 +245,29 @@ namespace dronegcs::route_mission
 		return true;
 	}
 
+	/** Header plus all encoded MissionItem records for one legacy FTP payload. */
+	inline bool CheckedLegacyMissionFtpUploadPayloadSizeV1(
+		const std::uint32_t RowCount,
+		std::size_t& OutBytes,
+		Error& OutError)
+	{
+		OutBytes = 0;
+		std::size_t RecordBytes = 0;
+		if (!CheckedMissionPayloadSize(RowCount, RecordBytes, OutError))
+		{
+			return false;
+		}
+		if (RecordBytes > (std::numeric_limits<std::size_t>::max)()
+			- LegacyMissionFtpContainerBytesV1)
+		{
+			return Fail(OutError, ErrorCode::SizeOverflow,
+				"Legacy Mission FTP upload payload size overflowed.");
+		}
+		OutBytes = LegacyMissionFtpContainerBytesV1 + RecordBytes;
+		OutError = {};
+		return true;
+	}
+
 	using ByteConsumer = bool (*)(const Byte* Bytes, std::size_t Size, void* Context);
 
 	class WholeRouteEncoderV1 final

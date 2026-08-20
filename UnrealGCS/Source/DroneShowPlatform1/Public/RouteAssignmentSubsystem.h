@@ -30,6 +30,21 @@ public:
 	/** Captures current Fleet/Route sources, builds a production candidate, and atomically replaces Working. */
 	bool BuildAndReplaceWorkingAssignment(FString& OutError);
 
+	/**
+	 * Re-captures current Fleet/Route authority, rejects a stale request, and
+	 * atomically installs an explicit DroneID to RouteSlot working assignment.
+	 */
+	bool BuildAndReplaceExplicitWorkingAssignment(
+		const FRouteAssignmentExplicitBindingRequest& Request,
+		FString& OutError);
+
+	/** Pure deterministic materializer used by the authoritative explicit path. */
+	static bool BuildExplicitCandidateFromSourceSnapshot(
+		const FRouteAssignmentSourceSnapshot& SourceSnapshot,
+		const TArray<FRouteAssignmentExplicitBinding>& Bindings,
+		FRouteAssignmentCandidate& OutCandidate,
+		FString& OutError);
+
 	/** Returns whether the current working assignment can be frozen, with no state mutation. */
 	bool CanFreeze(ERouteAssignmentFreezePolicy FreezePolicy, FString& OutError) const;
 

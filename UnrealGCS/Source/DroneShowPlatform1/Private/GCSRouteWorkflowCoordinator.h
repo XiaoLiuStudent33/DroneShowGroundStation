@@ -62,7 +62,29 @@ enum class EGCSRouteWorkflowCommandErrorCategory : uint8
 	None,
 	Dataset,
 	Preview,
-	Artifact
+	Artifact,
+	Upload
+};
+
+struct FGCSRouteUploadCommandGateInputs
+{
+	bool bArtifactReady = false;
+	bool bFrozenConsoleAccepted = false;
+	bool bHasActiveJobBinding = false;
+	bool bHasExecutableJob = false;
+	bool bCommandInFlight = false;
+	uint8 JobState = 0;
+	uint32 FailedCount = 0;
+};
+
+struct FGCSRouteUploadCommandGate
+{
+	bool bStartEnabled = false;
+	bool bPauseEnabled = false;
+	bool bResumeEnabled = false;
+	bool bCancelEnabled = false;
+	bool bRetryFailedEnabled = false;
+	bool bApplyMaxEnabled = false;
 };
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -124,6 +146,12 @@ public:
 		FString& OutError);
 	static FGCSRouteWorkflowCommandGate ComputeCommandGate(
 		const FGCSRouteWorkflowCommandGateInputs& Inputs);
+	static bool ParsePositiveConcurrency(
+		const FString& Text,
+		int32& OutValue,
+		FString& OutError);
+	static FGCSRouteUploadCommandGate ComputeUploadCommandGate(
+		const FGCSRouteUploadCommandGateInputs& Inputs);
 
 #if WITH_DEV_AUTOMATION_TESTS
 	void InitializeForTest(UGameInstance* InGameInstance);
@@ -174,6 +202,18 @@ private:
 	void HandleLoadPreviewClicked();
 	UFUNCTION()
 	void HandleGenerateWaypointsClicked();
+	UFUNCTION()
+	void HandleStartUploadClicked();
+	UFUNCTION()
+	void HandlePauseUploadClicked();
+	UFUNCTION()
+	void HandleResumeUploadClicked();
+	UFUNCTION()
+	void HandleCancelUploadClicked();
+	UFUNCTION()
+	void HandleRetryFailedClicked();
+	UFUNCTION()
+	void HandleApplyMaxConcurrencyClicked();
 
 	UUserWidget* CreateRouteWorkflowWidget(FString& OutError);
 	bool BindWorkflowWidgets(UUserWidget* WorkflowWidget, FString& OutError);
@@ -191,6 +231,9 @@ private:
 	void UnbindCommandControls();
 	FGCSRouteWorkflowCommandGateInputs GatherCommandGateInputs() const;
 	void UpdateCommandControlState();
+	FGCSRouteUploadCommandGateInputs GatherUploadCommandGateInputs() const;
+	void UpdateUploadCommandControlState();
+	bool ReadConcurrencyDraft(int32& OutValue, FString& OutError) const;
 	void SetCommandError(EGCSRouteWorkflowCommandErrorCategory Category, const FString& Message);
 	void ClearCommandError(EGCSRouteWorkflowCommandErrorCategory Category);
 	void ApplyCommandErrorPresentation();

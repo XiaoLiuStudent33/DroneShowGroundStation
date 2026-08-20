@@ -6,12 +6,13 @@
  * 调用链：main -> Run -> RunProductionMavlink。
  */
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 
 #include "ConsoleGCSApplication.h"
 
 #include "AppConfig.h"
 #include "CommandManager.h"
-#include "ConsoleArtifactConsumer.h"
+#include "ConsoleArtifactConsumerV2.h"
 #include "ConsoleUploadJobAuthority.h"
 #include "ConsoleUI.h"
 #include "DroneManager.h"
@@ -253,7 +254,7 @@ int ConsoleGCSApplication::RunProductionMavlink(
     DSPGCSProductionCommandReceiver commandReceiver;
     DSPGCSFrozenAssignmentReceiver frozenAssignmentReceiver;
     FrozenAssignmentStore frozenAssignmentStore;
-    ConsoleArtifactConsumer artifactConsumer(appConfig.artifactWorkspaceRoot);
+    ConsoleArtifactConsumerV2 artifactConsumer(appConfig.artifactWorkspaceRoot);
     ConsoleUploadJobAuthority uploadJobAuthority(
         appConfig.artifactWorkspaceRoot,
         &artifactConsumer,

@@ -26,7 +26,7 @@ bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("Widget created"),First);
 	UUserWidget* Upload=First&&First->WidgetTree?Cast<UUserWidget>(First->WidgetTree->FindWidget(TEXT("WBP_GCS_RouteUpload"))):nullptr;
 	TestNotNull(TEXT("Nested RouteUpload"),Upload);
-	for(const FName Name:{FName(TEXT("BTN_StartUpload")),FName(TEXT("BTN_PauseUpload")),FName(TEXT("BTN_ResumeUpload")),FName(TEXT("BTN_CancelUpload")),FName(TEXT("BTN_RetryFailed"))})
+	for(const FName Name:{FName(TEXT("BTN_StartUpload")),FName(TEXT("BTN_PauseUpload")),FName(TEXT("BTN_ResumeUpload")),FName(TEXT("BTN_CancelUpload")),FName(TEXT("BTN_RetryFailed")),FName(TEXT("BTN_ApplyMaxConcurrency"))})
 	{
 		UButton* Button=Upload&&Upload->WidgetTree?Cast<UButton>(Upload->WidgetTree->FindWidget(Name)):nullptr;
 		TestNotNull(*FString::Printf(TEXT("%s resolved"),*Name.ToString()),Button);
@@ -34,7 +34,19 @@ bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
 	}
 	UEditableTextBox* Concurrency=Upload&&Upload->WidgetTree?Cast<UEditableTextBox>(Upload->WidgetTree->FindWidget(TEXT("EDT_MaxConcurrency"))):nullptr;
 	TestNotNull(TEXT("Concurrency resolved"),Concurrency);
-	if(Concurrency) { TestTrue(TEXT("Concurrency read only"),Concurrency->GetIsReadOnly()); TestFalse(TEXT("Concurrency disabled"),Concurrency->GetIsEnabled()); }
+	if(Concurrency)
+	{
+		TestFalse(TEXT("Concurrency draft is editable"),Concurrency->GetIsReadOnly());
+		TestTrue(TEXT("Concurrency draft is enabled"),Concurrency->GetIsEnabled());
+		Concurrency->SetText(FText::FromString(TEXT("37")));
+		C->RefreshReadOnlyStateForTest();
+		TestEqual(TEXT("Snapshot refresh does not overwrite concurrency draft"),
+			Concurrency->GetText().ToString(),FString(TEXT("37")));
+	}
+	UTextBlock* CurrentConcurrency=Upload&&Upload->WidgetTree?Cast<UTextBlock>(Upload->WidgetTree->FindWidget(TEXT("TXT_CurrentMaxConcurrencyValue"))):nullptr;
+	TestNotNull(TEXT("Current concurrency presentation resolved"),CurrentConcurrency);
+	if(CurrentConcurrency) TestEqual(TEXT("No Job authoritative concurrency"),
+		CurrentConcurrency->GetText().ToString(),FString(TEXT("Current: --")));
 	TestEqual(TEXT("Created once"),C->GetWorkflowCreationCountForTest(),1);
 	TestTrue(TEXT("Ticker active"),C->IsRefreshTickerActiveForTest());
 	TestTrue(TEXT("Repeated Show"),C->ShowRouteWorkflow(Error));
@@ -227,6 +239,85 @@ bool FGCSRouteWorkflowFormattingTest::RunTest(const FString& Parameters)
 			UGCSRouteWorkflowCoordinator::FormatRouteState(static_cast<uint8>(State.Key)),
 			State.Value);
 	}
+	int32 Concurrency=0;
+	FString Error;
+	TestTrue(TEXT("Positive concurrency parses"),
+		UGCSRouteWorkflowCoordinator::ParsePositiveConcurrency(
+			TEXT(" 12 "),Concurrency,Error));
+	TestEqual(TEXT("Positive concurrency value"),Concurrency,12);
+	for(const FString& Invalid:{FString(),FString(TEXT("0")),FString(TEXT("-1")),
+		FString(TEXT("1.5")),FString(TEXT("abc")),FString(TEXT("2147483648"))})
+	{
+		TestFalse(*FString::Printf(TEXT("Invalid concurrency rejected: %s"),*Invalid),
+			UGCSRouteWorkflowCoordinator::ParsePositiveConcurrency(
+				Invalid,Concurrency,Error));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowUploadCommandGateTest,
+	"DroneGCS.UI.RouteWorkflow.UploadCommandGate",
+	EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowUploadCommandGateTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	auto NoneEnabled=[](const FGCSRouteUploadCommandGate& Gate)
+	{
+		return !Gate.bStartEnabled&&!Gate.bPauseEnabled&&!Gate.bResumeEnabled&&
+			!Gate.bCancelEnabled&&!Gate.bRetryFailedEnabled&&!Gate.bApplyMaxEnabled;
+	};
+	FGCSRouteUploadCommandGateInputs Inputs;
+	TestTrue(TEXT("No Artifact disables all"),NoneEnabled(
+		UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
+	Inputs.bArtifactReady=true;
+	TestTrue(TEXT("No Frozen disables all"),NoneEnabled(
+		UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
+	Inputs.bFrozenConsoleAccepted=true;
+	auto Gate=UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs);
+	TestTrue(TEXT("Ready authorities and NoJob enable only Start"),
+		Gate.bStartEnabled&&!Gate.bPauseEnabled&&!Gate.bResumeEnabled&&
+		!Gate.bCancelEnabled&&!Gate.bRetryFailedEnabled&&!Gate.bApplyMaxEnabled);
+	Inputs.bCommandInFlight=true;
+	TestTrue(TEXT("Command in-flight disables all"),NoneEnabled(
+		UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
+	Inputs.bCommandInFlight=false;
+	Inputs.bHasActiveJobBinding=true;
+	Inputs.bHasExecutableJob=true;
+	Inputs.JobState=static_cast<uint8>(dspgcs::UploadJobState::Validating);
+	TestTrue(TEXT("Validating disables all"),NoneEnabled(
+		UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
+	for(const dspgcs::UploadJobState State:{dspgcs::UploadJobState::Ready,
+		dspgcs::UploadJobState::Running})
+	{
+		Inputs.JobState=static_cast<uint8>(State);
+		Gate=UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs);
+		TestTrue(TEXT("Ready/Running gate"),Gate.bPauseEnabled&&Gate.bCancelEnabled&&
+			Gate.bApplyMaxEnabled&&!Gate.bStartEnabled&&!Gate.bResumeEnabled&&
+			!Gate.bRetryFailedEnabled);
+	}
+	Inputs.JobState=static_cast<uint8>(dspgcs::UploadJobState::Paused);
+	Gate=UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs);
+	TestTrue(TEXT("Paused gate"),Gate.bResumeEnabled&&Gate.bCancelEnabled&&
+		Gate.bApplyMaxEnabled&&!Gate.bPauseEnabled&&!Gate.bStartEnabled);
+	Inputs.JobState=static_cast<uint8>(dspgcs::UploadJobState::Failed);
+	Inputs.FailedCount=0;
+	Gate=UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs);
+	TestTrue(TEXT("Failed without failed routes"),Gate.bCancelEnabled&&
+		Gate.bApplyMaxEnabled&&!Gate.bRetryFailedEnabled);
+	Inputs.FailedCount=2;
+	TestTrue(TEXT("Failed routes enable RetryFailed"),
+		UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs).bRetryFailedEnabled);
+	for(const dspgcs::UploadJobState State:{dspgcs::UploadJobState::Completed,
+		dspgcs::UploadJobState::Cancelled})
+	{
+		Inputs.JobState=static_cast<uint8>(State);
+		TestTrue(TEXT("Terminal state disables all"),NoneEnabled(
+			UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
+	}
+	Inputs.bHasExecutableJob=false;
+	Inputs.JobState=0;
+	TestTrue(TEXT("Bound validation error requires explicit reset"),NoneEnabled(
+		UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
 	return true;
 }
 

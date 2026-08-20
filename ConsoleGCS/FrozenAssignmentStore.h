@@ -51,6 +51,7 @@ public:
     static constexpr std::size_t MaxRetiredAuthoritySessions = 32;
 
     void SynchronizeFleetSession(const std::string& currentFleetSessionId);
+    std::string GetCurrentFleetSessionID() const;
 
     bool HasAcceptedAssignment(
         const std::string& currentFleetSessionId) const;

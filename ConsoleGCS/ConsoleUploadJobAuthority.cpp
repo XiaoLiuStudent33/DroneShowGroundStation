@@ -1,4 +1,5 @@
 #include "ConsoleUploadJobAuthority.h"
+#include "RouteMissionCodec.h"
 
 #include <algorithm>
 #include <chrono>
@@ -6,7 +7,7 @@
 #include <iomanip>
 #include <random>
 #include <sstream>
-#include <unordered_map>
+#include <unordered_set>
 
 namespace
 {
@@ -23,14 +24,26 @@ namespace
         const dronegcs::route_artifact::Digest256& source)
     {
         dspgcs::UploadJobDigest result{};
-        std::copy(source.Bytes.begin(), source.Bytes.end(), result.begin());
+        if (source.IsSet)
+            std::copy(source.Bytes.begin(), source.Bytes.end(), result.begin());
         return result;
+    }
+
+    bool SameStartBinding(
+        const dspgcs::UploadJobSnapshotDTO& snapshot,
+        const dspgcs::UploadJobCommandDTO& command)
+    {
+        return dspgcs::UploadArtifactBindingEqual(
+                snapshot.artifactBinding, command.artifactBinding) &&
+            dspgcs::UploadFrozenAssignmentBindingEqual(
+                snapshot.frozenAssignmentBinding,
+                command.frozenAssignmentBinding);
     }
 }
 
 ConsoleUploadJobAuthority::ConsoleUploadJobAuthority(
     std::string workspaceRoot,
-    ConsoleArtifactConsumer* artifactConsumer,
+    ConsoleArtifactConsumerV2* artifactConsumer,
     FrozenAssignmentStore* frozenAssignmentStore)
     : workspaceRoot_(std::move(workspaceRoot))
     , artifactConsumer_(artifactConsumer)
@@ -53,54 +66,47 @@ std::string ConsoleUploadJobAuthority::MakeCanonicalId()
     return stream.str();
 }
 
-bool ConsoleUploadJobAuthority::SameBinding(
-    const dronegcs::route_artifact::AssignmentBinding& binding,
-    const dspgcs::UploadArtifactIdentityDTO& identity)
-{
-    return binding.FleetSessionId == identity.fleetSessionId &&
-        binding.AssignmentAuthoritySessionId == identity.assignmentAuthoritySessionId &&
-        binding.AssignmentRevision >= 0 &&
-        static_cast<std::uint64_t>(binding.AssignmentRevision) == identity.assignmentRevision &&
-        binding.AssignmentDigest == ToArtifactDigest(identity.assignmentDigest);
-}
-
 bool ConsoleUploadJobAuthority::SameFrozenBinding(
     const FrozenAssignmentAcceptedSnapshot& frozen,
-    const dspgcs::UploadArtifactIdentityDTO& identity)
+    const dspgcs::UploadFrozenAssignmentBindingDTO& binding)
 {
-    return frozen.identity.fleetSessionId == identity.fleetSessionId &&
-        frozen.identity.assignmentAuthoritySessionId == identity.assignmentAuthoritySessionId &&
-        frozen.identity.assignmentRevision == identity.assignmentRevision &&
-        frozen.canonicalPayloadDigest == identity.assignmentDigest;
+    return frozen.identity.fleetSessionId == binding.fleetSessionId &&
+        frozen.identity.assignmentAuthoritySessionId ==
+            binding.assignmentAuthoritySessionId &&
+        frozen.identity.assignmentRevision == binding.assignmentRevision &&
+        frozen.canonicalPayloadDigest == binding.assignmentDigest;
 }
 
-ExpectedArtifactIdentity ConsoleUploadJobAuthority::ToExpectedIdentity(
-    const dspgcs::UploadArtifactIdentityDTO& identity)
+ExpectedRouteArtifactV2Identity ConsoleUploadJobAuthority::ToExpectedIdentity(
+    const dspgcs::UploadArtifactBindingDTO& binding)
 {
-    ExpectedArtifactIdentity result;
-    result.artifactSetId = identity.artifactSetId;
-    result.artifactSetDigest = ToArtifactDigest(identity.artifactSetDigest);
-    result.assignmentBinding.FleetSessionId = identity.fleetSessionId;
-    result.assignmentBinding.AssignmentAuthoritySessionId =
-        identity.assignmentAuthoritySessionId;
-    result.assignmentBinding.AssignmentRevision =
-        static_cast<std::int64_t>(identity.assignmentRevision);
-    result.assignmentBinding.AssignmentDigest = ToArtifactDigest(identity.assignmentDigest);
+    ExpectedRouteArtifactV2Identity result;
+    result.artifactSetId = binding.artifactSetId;
+    result.artifactSetDigest = ToArtifactDigest(binding.artifactSetDigest);
     return result;
 }
 
-dspgcs::UploadArtifactIdentityDTO ConsoleUploadJobAuthority::ToWireIdentity(
-    const ValidatedArtifactSnapshot& snapshot)
+dspgcs::UploadArtifactBindingDTO
+ConsoleUploadJobAuthority::ToWireArtifactBinding(
+    const AcceptedRouteArtifactV2& snapshot)
 {
-    dspgcs::UploadArtifactIdentityDTO result;
+    dspgcs::UploadArtifactBindingDTO result;
     result.artifactSetId = snapshot.artifactSetId;
     result.artifactSetDigest = ToWireDigest(snapshot.artifactSetDigest);
-    result.fleetSessionId = snapshot.assignmentBinding.FleetSessionId;
-    result.assignmentAuthoritySessionId =
-        snapshot.assignmentBinding.AssignmentAuthoritySessionId;
-    result.assignmentRevision = static_cast<std::uint64_t>(
-        snapshot.assignmentBinding.AssignmentRevision);
-    result.assignmentDigest = ToWireDigest(snapshot.assignmentBinding.AssignmentDigest);
+    return result;
+}
+
+dspgcs::UploadStableSourceDTO ConsoleUploadJobAuthority::ToWireStableSource(
+    const AcceptedRouteArtifactV2StableSource& stableSource)
+{
+    dspgcs::UploadStableSourceDTO result;
+    result.sourceDatasetDigest = ToWireDigest(stableSource.sourceDatasetDigest);
+    result.normalizedShowOriginLatitudeE7 =
+        stableSource.normalizedShowOriginLatitudeE7;
+    result.normalizedShowOriginLongitudeE7 =
+        stableSource.normalizedShowOriginLongitudeE7;
+    result.routeSlotCount = stableSource.routeSlotCount > 0
+        ? static_cast<std::uint32_t>(stableSource.routeSlotCount) : 0;
     return result;
 }
 
@@ -125,7 +131,8 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::Reject(
 
 dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::Accept(
     const dspgcs::UploadJobCommandDTO& command,
-    const Job& job) const
+    const std::uint64_t revision,
+    const std::uint32_t effectiveConcurrency) const
 {
     dspgcs::UploadJobCommandAckDTO result;
     result.clientCommandId = command.clientCommandId;
@@ -133,9 +140,8 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::Accept(
     result.commandType = command.commandType;
     result.status = dspgcs::UploadJobCommandAckStatus::Accepted;
     result.resultCode = dspgcs::UploadJobErrorCode::None;
-    result.authoritativeJobRevision = job.snapshot.jobRevision;
-    result.effectiveMaxConcurrentUploads =
-        job.snapshot.effectiveMaxConcurrentUploads;
+    result.authoritativeJobRevision = revision;
+    result.effectiveMaxConcurrentUploads = effectiveConcurrency;
     return result;
 }
 
@@ -166,7 +172,8 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
     const dspgcs::UploadJobCommandDTO& command,
     const std::vector<std::uint8_t>& canonicalCommandPayload)
 {
-    const std::string idempotencyKey = clientSessionId + ":" + command.clientCommandId;
+    const std::string idempotencyKey =
+        clientSessionId + ":" + command.clientCommandId;
     const auto previous = idempotency_.find(idempotencyKey);
     if (previous != idempotency_.end())
     {
@@ -180,64 +187,106 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
     Job* job = FindJob(command.uploadJobId);
     if (command.commandType == dspgcs::UploadJobCommandType::Start)
     {
+        const auto pendingItem = pendingStarts_.find(command.uploadJobId);
         if (job)
         {
-            if (!dspgcs::UploadArtifactIdentityEqual(
-                job->snapshot.artifactIdentity, command.artifactIdentity))
-            {
-                acknowledgement = Reject(command,
-                    dspgcs::UploadJobErrorCode::JobIdCollision,
-                    "UploadJobID is already bound to a different Artifact identity.",
+            acknowledgement = SameStartBinding(job->snapshot, command)
+                ? Accept(command, job->snapshot.jobRevision,
+                    job->snapshot.effectiveMaxConcurrentUploads)
+                : Reject(command, dspgcs::UploadJobErrorCode::JobIdCollision,
+                    "UploadJobID is already bound to different authorities.",
                     job->snapshot.jobRevision,
                     job->snapshot.effectiveMaxConcurrentUploads);
-            }
-            else
-            {
-                acknowledgement = Accept(command, *job);
-            }
+        }
+        else if (pendingItem != pendingStarts_.end())
+        {
+            acknowledgement = SameStartBinding(pendingItem->second.snapshot, command)
+                ? Accept(command, pendingItem->second.snapshot.jobRevision,
+                    pendingItem->second.snapshot.effectiveMaxConcurrentUploads)
+                : Reject(command, dspgcs::UploadJobErrorCode::JobIdCollision,
+                    "UploadJobID is already pending with different authorities.");
         }
         else if (!artifactConsumer_ || !frozenAssignmentStore_)
         {
             acknowledgement = Reject(command,
-                dspgcs::UploadJobErrorCode::ArtifactNotValidated,
-                "Artifact validation authority is unavailable.");
+                dspgcs::UploadJobErrorCode::ArtifactNotAccepted,
+                "Upload Job authorities are unavailable.");
+        }
+        else if (!pendingStarts_.empty())
+        {
+            acknowledgement = Reject(command,
+                dspgcs::UploadJobErrorCode::InvalidJobState,
+                "Another Artifact validation is already pending.");
         }
         else
         {
-            const auto frozen = frozenAssignmentStore_->GetAcceptedSnapshot(
-                command.artifactIdentity.fleetSessionId);
-            if (!frozen || !SameFrozenBinding(*frozen, command.artifactIdentity))
+            const std::string currentFleetSessionId =
+                frozenAssignmentStore_->GetCurrentFleetSessionID();
+            if (currentFleetSessionId !=
+                command.frozenAssignmentBinding.fleetSessionId)
             {
                 acknowledgement = Reject(command,
-                    dspgcs::UploadJobErrorCode::FrozenAssignmentMismatch,
-                    "Start identity does not match the accepted Frozen Assignment.");
+                    dspgcs::UploadJobErrorCode::FleetSessionStale,
+                    "Start FleetSessionID is not the current Console Fleet session.");
             }
             else
             {
-                Job created;
-                created.snapshot.uploadJobId = command.uploadJobId;
-                created.snapshot.artifactIdentity = command.artifactIdentity;
-                created.snapshot.artifactGateState =
-                    dspgcs::UploadArtifactGateState::Validating;
-                created.snapshot.jobState = dspgcs::UploadJobState::Validating;
-                created.snapshot.jobRevision = 1;
-                created.snapshot.snapshotSequence = 1;
-                created.snapshot.snapshotToken = MakeCanonicalId();
-                created.snapshot.updatedAtUtcMs = UtcNowMs();
-                created.snapshot.effectiveMaxConcurrentUploads =
-                    command.requestedMaxConcurrentUploads;
-                created.validationGeneration = artifactConsumer_->RequestValidation(
-                    ToExpectedIdentity(command.artifactIdentity), frozen);
-                validationJobs_[created.validationGeneration] = command.uploadJobId;
-                auto insertion = jobs_.emplace(command.uploadJobId, std::move(created));
-                acknowledgement = Accept(command, insertion.first->second);
+                const auto frozen = frozenAssignmentStore_->GetAcceptedSnapshot(
+                    command.frozenAssignmentBinding.fleetSessionId);
+                if (!frozen)
+                {
+                    acknowledgement = Reject(command,
+                        dspgcs::UploadJobErrorCode::FrozenAssignmentMissing,
+                        "No Console-accepted Frozen Assignment exists for this Fleet session.");
+                }
+                else if (!SameFrozenBinding(
+                    *frozen, command.frozenAssignmentBinding))
+                {
+                    acknowledgement = Reject(command,
+                        dspgcs::UploadJobErrorCode::FrozenAssignmentIdentityMismatch,
+                        "Start does not match the current accepted Frozen Assignment.");
+                }
+                else
+                {
+                    PendingStart pending;
+                    pending.snapshot.uploadJobId = command.uploadJobId;
+                    pending.snapshot.artifactBinding = command.artifactBinding;
+                    pending.snapshot.frozenAssignmentBinding =
+                        command.frozenAssignmentBinding;
+                    pending.snapshot.artifactGateState =
+                        dspgcs::UploadArtifactGateState::Validating;
+                    pending.snapshot.jobState = dspgcs::UploadJobState::Validating;
+                    pending.snapshot.jobRevision = 1;
+                    pending.snapshot.snapshotSequence = 1;
+                    pending.snapshot.snapshotToken = MakeCanonicalId();
+                    pending.snapshot.updatedAtUtcMs = UtcNowMs();
+                    pending.snapshot.effectiveMaxConcurrentUploads =
+                        command.requestedMaxConcurrentUploads;
+                    pending.idempotencyKey = idempotencyKey;
+                    pending.command = command;
+                    pending.expectedArtifact =
+                        ToExpectedIdentity(command.artifactBinding);
+                    pending.frozenSnapshot = frozen;
+                    pending.validationGeneration =
+                        artifactConsumer_->RequestValidation(pending.expectedArtifact);
+                    validationStarts_[pending.validationGeneration] =
+                        command.uploadJobId;
+                    const std::uint64_t revision = pending.snapshot.jobRevision;
+                    const std::uint32_t concurrency =
+                        pending.snapshot.effectiveMaxConcurrentUploads;
+                    pendingStarts_.emplace(command.uploadJobId, std::move(pending));
+                    startOutcomes_.erase(command.uploadJobId);
+                    acknowledgement = Accept(command, revision, concurrency);
+                }
             }
         }
     }
     else if (!job)
     {
         acknowledgement = Reject(command, dspgcs::UploadJobErrorCode::UnknownJob,
-            "Upload Job does not exist.");
+            pendingStarts_.find(command.uploadJobId) != pendingStarts_.end()
+                ? "Upload Job Start is still pending validation."
+                : "Upload Job does not exist.");
     }
     else if (command.expectedJobRevision != job->snapshot.jobRevision)
     {
@@ -269,14 +318,7 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
                 accepted = false;
             else
             {
-                job->snapshot.jobState = dspgcs::UploadJobState::Cancelled;
-                for (auto& route : job->routes)
-                {
-                    if (route.state != dspgcs::UploadRouteState::Succeeded)
-                        route.state = dspgcs::UploadRouteState::Cancelled;
-                }
-                job->artifactLease.reset();
-                RecalculateAggregate(*job);
+                job->snapshot.jobState = dspgcs::UploadJobState::Cancelling;
             }
             break;
         case dspgcs::UploadJobCommandType::RetryFailed:
@@ -285,7 +327,9 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
                 accepted = false;
             else
             {
-                for (auto& route : job->routes)
+                for (auto& target : job->targets)
+                {
+                    auto& route = target.state;
                     if (route.state == dspgcs::UploadRouteState::Failed)
                     {
                         route.state = dspgcs::UploadRouteState::Waiting;
@@ -293,6 +337,7 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
                         route.safeFailureSummary.clear();
                         route.retryable = false;
                     }
+                }
                 job->snapshot.jobState = dspgcs::UploadJobState::Ready;
                 job->snapshot.firstFailure = {};
                 RecalculateAggregate(*job);
@@ -323,7 +368,8 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
         {
             ++job->snapshot.jobRevision;
             job->snapshot.updatedAtUtcMs = UtcNowMs();
-            acknowledgement = Accept(command, *job);
+            acknowledgement = Accept(command, job->snapshot.jobRevision,
+                job->snapshot.effectiveMaxConcurrentUploads);
         }
     }
 
@@ -331,127 +377,291 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
     return acknowledgement;
 }
 
-void ConsoleUploadJobAuthority::FailJob(
-    Job& job,
+void ConsoleUploadJobAuthority::FailPendingStart(
+    const std::string& uploadJobId,
     const dspgcs::UploadJobErrorCode code,
-    const char* diagnostic)
+    const char* diagnostic,
+    const PendingStart* pending)
 {
-    job.snapshot.artifactGateState = dspgcs::UploadArtifactGateState::Rejected;
-    job.snapshot.jobState = dspgcs::UploadJobState::Failed;
-    job.snapshot.firstFailure.jobErrorCode = code;
-    job.snapshot.firstFailure.occurredAtUtcMs = UtcNowMs();
-    job.snapshot.firstFailure.safeSummary = diagnostic ? diagnostic : "";
-    ++job.snapshot.jobRevision;
-    job.snapshot.updatedAtUtcMs = UtcNowMs();
-    job.artifactLease.reset();
+    startOutcomes_[uploadJobId] = {
+        code, diagnostic ? diagnostic : "Upload Job Start failed." };
+    if (pending)
+    {
+        const auto record = idempotency_.find(pending->idempotencyKey);
+        if (record != idempotency_.end())
+        {
+            record->second.acknowledgement = Reject(
+                pending->command, code, diagnostic);
+        }
+    }
 }
 
 bool ConsoleUploadJobAuthority::AcquireArtifactLease(
-    Job& job,
-    ConsoleArtifactDiagnostic& diagnostic)
+    const PendingStart& pending,
+    const RouteArtifactV2CurrentDirectoryIdentity& currentDirectoryIdentity,
+    std::unique_ptr<dronegcs::route_artifact::ArtifactReadLease>& lease,
+    ConsoleArtifactV2Diagnostic& diagnostic)
 {
     if (!artifactConsumer_->IsCurrentIdentityStill(
-        ToExpectedIdentity(job.snapshot.artifactIdentity), diagnostic))
+        pending.expectedArtifact, currentDirectoryIdentity, diagnostic))
         return false;
-    auto lease = std::make_unique<dronegcs::route_artifact::ArtifactReadLease>();
+
+    auto candidate =
+        std::make_unique<dronegcs::route_artifact::ArtifactReadLease>();
     bool recovered = false;
     std::string error;
-    const auto result = lease->TryAcquire(
+    const auto result = candidate->TryAcquire(
         std::filesystem::u8path(workspaceRoot_).wstring(), recovered, error);
-    if (result != dronegcs::route_artifact::ArtifactReadLeaseAcquireResult::Acquired)
+    if (result !=
+        dronegcs::route_artifact::ArtifactReadLeaseAcquireResult::Acquired)
     {
-        diagnostic.errorCode = ConsoleArtifactErrorCode::IoFailure;
+        diagnostic.errorCode = ConsoleArtifactV2ErrorCode::IoFailure;
         diagnostic.safeDetail = result ==
             dronegcs::route_artifact::ArtifactReadLeaseAcquireResult::Busy
             ? "Artifact Current promotion gate is busy."
-            : error;
+            : "Artifact Current lease acquisition failed.";
         return false;
     }
     if (!artifactConsumer_->IsCurrentIdentityStill(
-        ToExpectedIdentity(job.snapshot.artifactIdentity), diagnostic))
+        pending.expectedArtifact, currentDirectoryIdentity, diagnostic))
         return false;
-    job.artifactLease = std::move(lease);
+    lease = std::move(candidate);
     return true;
 }
 
-void ConsoleUploadJobAuthority::CompleteValidation(
-    Job& job,
-    const ConsoleArtifactValidationResult& result)
+void ConsoleUploadJobAuthority::CompletePendingStart(
+    const std::string& uploadJobId,
+    PendingStart pending,
+    const ConsoleArtifactV2ValidationResult& result)
 {
+    auto fail = [this, &uploadJobId, &pending](
+        const dspgcs::UploadJobErrorCode code, const char* message)
+    {
+        FailPendingStart(uploadJobId, code, message, &pending);
+    };
+
     if (!result.success || !result.snapshot)
     {
         const auto code = result.diagnostic.errorCode ==
-            ConsoleArtifactErrorCode::ArtifactIdentityMismatch
+                ConsoleArtifactV2ErrorCode::ArtifactIdentityMismatch
             ? dspgcs::UploadJobErrorCode::ArtifactIdentityMismatch
-            : dspgcs::UploadJobErrorCode::ArtifactValidationFailed;
-        FailJob(job, code, "Artifact validation failed.");
-        return;
-    }
-    const dspgcs::UploadArtifactIdentityDTO validatedIdentity =
-        ToWireIdentity(*result.snapshot);
-    if (!dspgcs::UploadArtifactIdentityEqual(
-        validatedIdentity, job.snapshot.artifactIdentity))
-    {
-        FailJob(job, dspgcs::UploadJobErrorCode::ArtifactIdentityMismatch,
-            "Validated Artifact identity differs from Start.");
-        return;
-    }
-    ConsoleArtifactDiagnostic diagnostic;
-    if (!AcquireArtifactLease(job, diagnostic))
-    {
-        const auto code = diagnostic.errorCode ==
-            ConsoleArtifactErrorCode::ArtifactIdentityMismatch
-            ? dspgcs::UploadJobErrorCode::CurrentReplaced
-            : dspgcs::UploadJobErrorCode::ArtifactLeaseUnavailable;
-        FailJob(job, code, diagnostic.safeDetail.c_str());
+            : result.diagnostic.errorCode ==
+                ConsoleArtifactV2ErrorCode::FileChangedDuringValidation
+                ? dspgcs::UploadJobErrorCode::ArtifactCurrentChanged
+                : dspgcs::UploadJobErrorCode::ArtifactNotAccepted;
+        fail(code, "Artifact v2 validation did not produce the requested accepted snapshot.");
         return;
     }
 
-    latestValidatedArtifact_ = result.snapshot;
-    job.validatedArtifact = result.snapshot;
-    job.routes.clear();
-    job.routes.reserve(result.snapshot->matchedMappings.size());
-    std::unordered_map<std::int32_t, const ValidatedArtifactRouteDescriptor*> descriptors;
-    for (const auto& descriptor : result.snapshot->routes)
-        descriptors.emplace(descriptor.routeSlotIndex, &descriptor);
-    for (const auto& mapping : result.snapshot->matchedMappings)
+    const auto artifactBinding = ToWireArtifactBinding(*result.snapshot);
+    if (!dspgcs::UploadArtifactBindingEqual(
+        artifactBinding, pending.snapshot.artifactBinding))
     {
-        dspgcs::UploadRouteStateDTO route;
-        route.routeSlotIndex = mapping.RouteSlotIndex;
-        route.droneId = mapping.DroneId;
-        route.state = dspgcs::UploadRouteState::Waiting;
-        const auto descriptor = descriptors.find(mapping.RouteSlotIndex);
-        if (descriptor != descriptors.end() && descriptor->second->fileByteSize >= 0)
-            route.totalBytes = static_cast<std::uint64_t>(descriptor->second->fileByteSize);
-        route.updatedAtUtcMs = UtcNowMs();
-        job.routes.push_back(std::move(route));
+        fail(dspgcs::UploadJobErrorCode::ArtifactIdentityMismatch,
+            "Validated Artifact identity differs from Start.");
+        return;
     }
-    std::sort(job.routes.begin(), job.routes.end(),
-        [](const auto& left, const auto& right)
-        { return left.routeSlotIndex < right.routeSlotIndex; });
-    job.snapshot.artifactGateState = dspgcs::UploadArtifactGateState::Validated;
+    if (!pending.frozenSnapshot || !SameFrozenBinding(
+        *pending.frozenSnapshot, pending.snapshot.frozenAssignmentBinding))
+    {
+        fail(dspgcs::UploadJobErrorCode::FrozenAssignmentIdentityMismatch,
+            "Captured Frozen Assignment identity differs from Start.");
+        return;
+    }
+
+    const auto artifactStable = ToWireStableSource(
+        result.snapshot->stableSource);
+    const auto& frozen = *pending.frozenSnapshot;
+    if (artifactStable.sourceDatasetDigest != frozen.sourceDatasetDigest)
+    {
+        fail(dspgcs::UploadJobErrorCode::StableSourceDatasetMismatch,
+            "Artifact and Frozen Assignment source dataset digests differ.");
+        return;
+    }
+    if (artifactStable.normalizedShowOriginLatitudeE7 !=
+            frozen.normalizedShowOriginLatitudeE7 ||
+        artifactStable.normalizedShowOriginLongitudeE7 !=
+            frozen.normalizedShowOriginLongitudeE7)
+    {
+        fail(dspgcs::UploadJobErrorCode::StableSourceOriginMismatch,
+            "Artifact and Frozen Assignment normalized origins differ.");
+        return;
+    }
+    if (artifactStable.routeSlotCount != frozen.routeSlotCount)
+    {
+        fail(dspgcs::UploadJobErrorCode::RouteDomainMismatch,
+            "Artifact and Frozen Assignment route domains differ.");
+        return;
+    }
+    if (frozen.matchedCount != frozen.matchedMappings.size() ||
+        static_cast<std::uint64_t>(frozen.matchedCount) + frozen.vacantCount !=
+            frozen.routeSlotCount)
+    {
+        fail(dspgcs::UploadJobErrorCode::InvalidMapping,
+            "Frozen Assignment mapping counts are inconsistent.");
+        return;
+    }
+
+    std::unordered_set<std::string> droneIds;
+    std::unordered_set<std::int32_t> routeSlots;
+    droneIds.reserve(frozen.matchedMappings.size());
+    routeSlots.reserve(frozen.matchedMappings.size());
+    std::vector<Target> targets;
+    targets.reserve(frozen.matchedMappings.size());
+    std::size_t missionPayloadBytes = 0;
+    dronegcs::route_mission::Error missionSizeError;
+    if (result.snapshot->frameCount <= 0 ||
+        !dronegcs::route_mission::CheckedLegacyMissionFtpUploadPayloadSizeV1(
+            static_cast<std::uint32_t>(result.snapshot->frameCount),
+            missionPayloadBytes,
+            missionSizeError))
+    {
+        fail(dspgcs::UploadJobErrorCode::ArtifactNotAccepted,
+            "Artifact FrameCount cannot be represented by the Mission codec.");
+        return;
+    }
+    for (const auto& mapping : frozen.matchedMappings)
+    {
+        if (mapping.droneId.empty() || mapping.routeSlotIndex < 0 ||
+            static_cast<std::uint64_t>(mapping.routeSlotIndex) >=
+                frozen.routeSlotCount ||
+            !droneIds.insert(mapping.droneId).second ||
+            !routeSlots.insert(mapping.routeSlotIndex).second)
+        {
+            fail(dspgcs::UploadJobErrorCode::InvalidMapping,
+                "Frozen Assignment contains an invalid or duplicate mapping.");
+            return;
+        }
+        const std::size_t routeIndex =
+            static_cast<std::size_t>(mapping.routeSlotIndex);
+        if (routeIndex >= result.snapshot->routes.size() ||
+            result.snapshot->routes[routeIndex].routeSlotIndex !=
+                mapping.routeSlotIndex ||
+            result.snapshot->routes[routeIndex].fileByteSize < 0)
+        {
+            fail(dspgcs::UploadJobErrorCode::RouteRecordMissing,
+                "A Frozen Assignment RouteSlot has no validated Artifact record.");
+            return;
+        }
+        const auto& record = result.snapshot->routes[routeIndex];
+        Target target;
+        target.metadata.droneId = mapping.droneId;
+        target.metadata.routeSlotIndex = mapping.routeSlotIndex;
+        target.metadata.relativePath = record.relativePath;
+        target.metadata.fileByteSize = record.fileByteSize;
+        target.metadata.missionItemCount =
+            static_cast<std::uint32_t>(result.snapshot->frameCount);
+        target.metadata.missionPayloadByteSize =
+            static_cast<std::uint64_t>(missionPayloadBytes);
+        target.metadata.routeArtifactDigest = record.routeArtifactDigest;
+        target.state.routeSlotIndex = mapping.routeSlotIndex;
+        target.state.droneId = mapping.droneId;
+        target.state.state = dspgcs::UploadRouteState::Waiting;
+        target.state.totalBytes = target.metadata.missionPayloadByteSize;
+        target.state.updatedAtUtcMs = UtcNowMs();
+        targets.push_back(std::move(target));
+    }
+    std::sort(targets.begin(), targets.end(),
+        [](const Target& left, const Target& right)
+        {
+            return left.metadata.routeSlotIndex < right.metadata.routeSlotIndex;
+        });
+
+    const std::string currentFleetSessionId =
+        frozenAssignmentStore_->GetCurrentFleetSessionID();
+    if (currentFleetSessionId !=
+        pending.snapshot.frozenAssignmentBinding.fleetSessionId)
+    {
+        fail(dspgcs::UploadJobErrorCode::FleetSessionStale,
+            "Fleet session changed during Artifact validation.");
+        return;
+    }
+    const auto currentFrozen = frozenAssignmentStore_->GetAcceptedSnapshot(
+        pending.snapshot.frozenAssignmentBinding.fleetSessionId);
+    if (!currentFrozen)
+    {
+        fail(dspgcs::UploadJobErrorCode::FrozenAssignmentMissing,
+            "Frozen Assignment disappeared during Artifact validation.");
+        return;
+    }
+    if (!SameFrozenBinding(
+        *currentFrozen, pending.snapshot.frozenAssignmentBinding))
+    {
+        fail(dspgcs::UploadJobErrorCode::FrozenAssignmentIdentityMismatch,
+            "Frozen Assignment changed during Artifact validation.");
+        return;
+    }
+
+    std::unique_ptr<dronegcs::route_artifact::ArtifactReadLease> lease;
+    ConsoleArtifactV2Diagnostic diagnostic;
+    if (!AcquireArtifactLease(
+        pending, result.snapshot->currentDirectoryIdentity, lease, diagnostic))
+    {
+        const auto code = diagnostic.errorCode ==
+                ConsoleArtifactV2ErrorCode::ArtifactIdentityMismatch
+            ? dspgcs::UploadJobErrorCode::ArtifactIdentityMismatch
+            : diagnostic.errorCode ==
+                ConsoleArtifactV2ErrorCode::FileChangedDuringValidation
+                ? dspgcs::UploadJobErrorCode::ArtifactCurrentChanged
+                : dspgcs::UploadJobErrorCode::LeaseAcquireFailed;
+        fail(code, "Artifact Current changed or its read lease could not be acquired.");
+        return;
+    }
+
+    Job job;
+    job.snapshot = pending.snapshot;
+    job.snapshot.artifactBinding = artifactBinding;
+    job.snapshot.stableSource = artifactStable;
+    job.snapshot.artifactGateState =
+        dspgcs::UploadArtifactGateState::Validated;
     job.snapshot.jobState = dspgcs::UploadJobState::Ready;
-    job.snapshot.matchedCount = static_cast<std::uint32_t>(result.snapshot->matchedCount);
-    job.snapshot.vacantCount = static_cast<std::uint32_t>(result.snapshot->vacantCount);
-    job.snapshot.spareCount = static_cast<std::uint32_t>(result.snapshot->spareCount);
-    job.snapshot.excludedCount = static_cast<std::uint32_t>(result.snapshot->excludedCount);
-    ++job.snapshot.jobRevision;
+    job.snapshot.jobRevision = pending.snapshot.jobRevision + 1;
     job.snapshot.updatedAtUtcMs = UtcNowMs();
+    job.snapshot.matchedCount = frozen.matchedCount;
+    job.snapshot.vacantCount = frozen.vacantCount;
+    job.snapshot.spareCount = frozen.spareCount;
+    job.snapshot.excludedCount = frozen.excludedCount;
+    job.targets = std::move(targets);
+    job.artifactSnapshot = result.snapshot;
+    job.frozenSnapshot = pending.frozenSnapshot;
+    job.currentDirectoryIdentity = result.snapshot->currentDirectoryIdentity;
+    job.artifactLease = std::move(lease);
     RecalculateAggregate(job);
+
+    const std::uint64_t revision = job.snapshot.jobRevision;
+    const std::uint32_t concurrency =
+        job.snapshot.effectiveMaxConcurrentUploads;
+    const auto insertion = jobs_.emplace(uploadJobId, std::move(job));
+    if (!insertion.second)
+    {
+        fail(dspgcs::UploadJobErrorCode::JobIdCollision,
+            "UploadJobID was materialized concurrently.");
+        return;
+    }
+    startOutcomes_.erase(uploadJobId);
+    const auto record = idempotency_.find(pending.idempotencyKey);
+    if (record != idempotency_.end())
+    {
+        record->second.acknowledgement =
+            Accept(pending.command, revision, concurrency);
+    }
 }
 
 void ConsoleUploadJobAuthority::Tick()
 {
     if (!artifactConsumer_) return;
-    ConsoleArtifactValidationResult result;
+    ConsoleArtifactV2ValidationResult result;
     while (artifactConsumer_->PollCompleted(result))
     {
-        const auto item = validationJobs_.find(result.generation);
-        if (item == validationJobs_.end()) continue;
-        Job* job = FindJob(item->second);
-        if (job && job->validationGeneration == result.generation)
-            CompleteValidation(*job, result);
-        validationJobs_.erase(item);
+        const auto generationItem = validationStarts_.find(result.generation);
+        if (generationItem == validationStarts_.end()) continue;
+        const std::string uploadJobId = generationItem->second;
+        validationStarts_.erase(generationItem);
+        const auto pendingItem = pendingStarts_.find(uploadJobId);
+        if (pendingItem == pendingStarts_.end()) continue;
+        PendingStart pending = std::move(pendingItem->second);
+        pendingStarts_.erase(pendingItem);
+        CompletePendingStart(uploadJobId, std::move(pending), result);
     }
 }
 
@@ -462,8 +672,9 @@ void ConsoleUploadJobAuthority::RecalculateAggregate(Job& job)
     snapshot.retryWaitingCount = snapshot.succeededCount = snapshot.failedCount = 0;
     snapshot.cancelledCount = 0;
     snapshot.totalBytes = snapshot.bytesCompleted = 0;
-    for (const auto& route : job.routes)
+    for (const auto& target : job.targets)
     {
+        const auto& route = target.state;
         snapshot.totalBytes += route.totalBytes;
         snapshot.bytesCompleted += route.bytesCompleted;
         switch (route.state)
@@ -483,20 +694,38 @@ dspgcs::UploadJobSnapshotDTO ConsoleUploadJobAuthority::BuildSnapshot(
     const dspgcs::UploadJobSnapshotRequestDTO& request)
 {
     Job* job = FindJob(request.uploadJobId);
-    if (!job)
+    if (job)
     {
-        dspgcs::UploadJobSnapshotDTO error;
-        error.clientRequestId = request.clientRequestId;
-        error.uploadJobId = request.uploadJobId;
+        job->snapshot.clientRequestId = request.clientRequestId;
+        job->snapshot.snapshotToken = MakeCanonicalId();
+        ++job->snapshot.snapshotSequence;
+        job->snapshotTokenRevision = job->snapshot.jobRevision;
+        return job->snapshot;
+    }
+    const auto pendingItem = pendingStarts_.find(request.uploadJobId);
+    if (pendingItem != pendingStarts_.end())
+    {
+        auto& snapshot = pendingItem->second.snapshot;
+        snapshot.clientRequestId = request.clientRequestId;
+        snapshot.snapshotToken = MakeCanonicalId();
+        ++snapshot.snapshotSequence;
+        return snapshot;
+    }
+    dspgcs::UploadJobSnapshotDTO error;
+    error.clientRequestId = request.clientRequestId;
+    error.uploadJobId = request.uploadJobId;
+    const auto outcome = startOutcomes_.find(request.uploadJobId);
+    if (outcome != startOutcomes_.end())
+    {
+        error.resultCode = outcome->second.errorCode;
+        error.safeDiagnostic = outcome->second.safeDiagnostic;
+    }
+    else
+    {
         error.resultCode = dspgcs::UploadJobErrorCode::UnknownJob;
         error.safeDiagnostic = "Upload Job does not exist in this Console process.";
-        return error;
     }
-    job->snapshot.clientRequestId = request.clientRequestId;
-    job->snapshot.snapshotToken = MakeCanonicalId();
-    ++job->snapshot.snapshotSequence;
-    job->snapshotTokenRevision = job->snapshot.jobRevision;
-    return job->snapshot;
+    return error;
 }
 
 bool ConsoleUploadJobAuthority::BuildRoutePage(
@@ -524,7 +753,10 @@ bool ConsoleUploadJobAuthority::BuildRoutePage(
             errorCode = dspgcs::UploadJobErrorCode::StaleJobRevision;
             return false;
         }
-        job->pageSnapshot = job->routes;
+        job->pageSnapshot.clear();
+        job->pageSnapshot.reserve(job->targets.size());
+        for (const auto& target : job->targets)
+            job->pageSnapshot.push_back(target.state);
         job->pageSnapshotRevision = job->snapshotTokenRevision;
         job->pageSnapshotToken = request.snapshotToken;
     }
@@ -558,7 +790,8 @@ bool ConsoleUploadJobAuthority::BuildRoutePage(
         errorCode = dspgcs::UploadJobErrorCode::MalformedMessage;
         return false;
     }
-    page.nextPageStart = page.pageStart + static_cast<std::uint32_t>(page.routes.size());
+    page.nextPageStart = page.pageStart +
+        static_cast<std::uint32_t>(page.routes.size());
     page.hasMore = page.nextPageStart < page.totalRouteCount;
     return true;
 }
@@ -575,7 +808,8 @@ void ConsoleUploadJobAuthority::QueueRouteDeltas(
     for (const auto& update : updates)
     {
         const std::size_t routeBytes = dspgcs::UploadRouteStateEncodedBytes(update);
-        if (!batch.routes.empty() && encodedBytes + routeBytes > RoutePayloadBudgetBytes)
+        if (!batch.routes.empty() &&
+            encodedBytes + routeBytes > RoutePayloadBudgetBytes)
         {
             batch.deltaSequence = ++job.nextDeltaSequence;
             pendingDeltas_.push_back(std::move(batch));
@@ -614,22 +848,26 @@ bool ConsoleUploadJobAuthority::ApplyExecutorRouteUpdates(
     resolvedUpdates.reserve(updates.size());
     for (const auto& update : updates)
     {
-        const auto item = std::lower_bound(job->routes.begin(), job->routes.end(),
-            update.routeSlotIndex, [](const auto& route, const std::int32_t slot)
-            { return route.routeSlotIndex < slot; });
+        const auto item = std::lower_bound(job->targets.begin(), job->targets.end(),
+            update.routeSlotIndex,
+            [](const Target& target, const std::int32_t slot)
+            { return target.metadata.routeSlotIndex < slot; });
         const auto stateValue = static_cast<std::uint8_t>(update.state);
-        if (item == job->routes.end() || item->routeSlotIndex != update.routeSlotIndex ||
-            update.droneId != item->droneId ||
-            update.totalBytes != item->totalBytes ||
-            stateValue < static_cast<std::uint8_t>(dspgcs::UploadRouteState::Waiting) ||
-            stateValue > static_cast<std::uint8_t>(dspgcs::UploadRouteState::Cancelled) ||
+        if (item == job->targets.end() ||
+            item->metadata.routeSlotIndex != update.routeSlotIndex ||
+            update.droneId != item->metadata.droneId ||
+            update.totalBytes != item->state.totalBytes ||
+            stateValue < static_cast<std::uint8_t>(
+                dspgcs::UploadRouteState::Waiting) ||
+            stateValue > static_cast<std::uint8_t>(
+                dspgcs::UploadRouteState::Cancelled) ||
             update.bytesCompleted > update.totalBytes)
         {
             error = "Executor route update identity is invalid.";
             return false;
         }
         resolvedUpdates.emplace_back(
-            static_cast<std::size_t>(item - job->routes.begin()), &update);
+            static_cast<std::size_t>(item - job->targets.begin()), &update);
     }
     auto adjustStateCount = [](dspgcs::UploadJobSnapshotDTO& snapshot,
         const dspgcs::UploadRouteState state, const bool increment)
@@ -649,7 +887,7 @@ bool ConsoleUploadJobAuthority::ApplyExecutorRouteUpdates(
     };
     for (const auto& resolved : resolvedUpdates)
     {
-        auto& current = job->routes[resolved.first];
+        auto& current = job->targets[resolved.first].state;
         const auto& update = *resolved.second;
         adjustStateCount(job->snapshot, current.state, false);
         adjustStateCount(job->snapshot, update.state, true);
@@ -680,7 +918,8 @@ bool ConsoleUploadJobAuthority::TransitionJobForExecutor(
     }
     const auto oldState = job->snapshot.jobState;
     const bool legal =
-        (oldState == dspgcs::UploadJobState::Ready && newState == dspgcs::UploadJobState::Running) ||
+        (oldState == dspgcs::UploadJobState::Ready &&
+            newState == dspgcs::UploadJobState::Running) ||
         (oldState == dspgcs::UploadJobState::Running &&
             (newState == dspgcs::UploadJobState::Completed ||
              newState == dspgcs::UploadJobState::Failed));
@@ -698,10 +937,97 @@ bool ConsoleUploadJobAuthority::TransitionJobForExecutor(
     return true;
 }
 
+std::optional<UploadJobExecutionView>
+ConsoleUploadJobAuthority::GetExecutionView(
+    const std::string& uploadJobId) const
+{
+    const auto item = jobs_.find(uploadJobId);
+    if (item == jobs_.end()) return std::nullopt;
+    const Job& job = item->second;
+    if (!job.artifactLease || !job.artifactSnapshot || !job.frozenSnapshot)
+        return std::nullopt;
+
+    UploadJobExecutionView view;
+    view.uploadJobId = job.snapshot.uploadJobId;
+    view.jobRevision = job.snapshot.jobRevision;
+    view.artifactBinding = job.snapshot.artifactBinding;
+    view.frozenBinding = job.snapshot.frozenAssignmentBinding;
+    view.effectiveMaxConcurrentUploads =
+        job.snapshot.effectiveMaxConcurrentUploads;
+    view.artifactSnapshot = job.artifactSnapshot;
+    view.frozenSnapshot = job.frozenSnapshot;
+    view.currentDirectoryIdentity = job.currentDirectoryIdentity;
+    view.artifactReadLease = job.artifactLease.get();
+    view.targets.reserve(job.targets.size());
+    for (const Target& target : job.targets)
+        view.targets.push_back(target.metadata);
+    return view;
+}
+
+bool ConsoleUploadJobAuthority::IsCancellationRequested(
+    const std::string& uploadJobId) const
+{
+    const auto item = jobs_.find(uploadJobId);
+    return item != jobs_.end() &&
+        item->second.snapshot.jobState == dspgcs::UploadJobState::Cancelling;
+}
+
+void ConsoleUploadJobAuthority::FinalizeCancellation(Job& job)
+{
+    const std::int64_t now = UtcNowMs();
+    std::vector<dspgcs::UploadRouteStateDTO> updates;
+    updates.reserve(job.targets.size());
+    for (Target& target : job.targets)
+    {
+        if (target.state.state == dspgcs::UploadRouteState::Succeeded ||
+            target.state.state == dspgcs::UploadRouteState::Cancelled)
+            continue;
+        target.state.state = dspgcs::UploadRouteState::Cancelled;
+        target.state.errorCode = dspgcs::RouteUploadErrorCode::Cancelled;
+        target.state.retryable = false;
+        target.state.safeFailureSummary.clear();
+        target.state.updatedAtUtcMs = now;
+        updates.push_back(target.state);
+    }
+    job.snapshot.jobState = dspgcs::UploadJobState::Cancelled;
+    ++job.snapshot.jobRevision;
+    job.snapshot.updatedAtUtcMs = now;
+    RecalculateAggregate(job);
+    QueueRouteDeltas(job, updates);
+    job.artifactLease.reset();
+}
+
+bool ConsoleUploadJobAuthority::FinalizeExecutorCancellation(
+    const std::string& uploadJobId,
+    std::string& error)
+{
+    Job* job = FindJob(uploadJobId);
+    if (!job)
+    {
+        error = "Executor cancellation finalization requires an existing Job.";
+        return false;
+    }
+    if (job->snapshot.jobState == dspgcs::UploadJobState::Cancelled)
+    {
+        error.clear();
+        return true;
+    }
+    if (job->snapshot.jobState != dspgcs::UploadJobState::Cancelling ||
+        !job->artifactLease)
+    {
+        error = "Executor cancellation finalization requires a leased Cancelling Job.";
+        return false;
+    }
+    FinalizeCancellation(*job);
+    error.clear();
+    return true;
+}
+
 bool ConsoleUploadJobAuthority::DestroyFailedJob(const std::string& uploadJobId)
 {
     const auto item = jobs_.find(uploadJobId);
-    if (item == jobs_.end() || item->second.snapshot.jobState != dspgcs::UploadJobState::Failed)
+    if (item == jobs_.end() ||
+        item->second.snapshot.jobState != dspgcs::UploadJobState::Failed)
         return false;
     item->second.artifactLease.reset();
     jobs_.erase(item);
@@ -724,6 +1050,23 @@ ConsoleUploadJobAuthority::FindCurrentSnapshotForTest(
     return job ? &job->snapshot : nullptr;
 }
 
+std::optional<UploadJobTargetMetadata>
+ConsoleUploadJobAuthority::FindTargetMetadataForTest(
+    const std::string& uploadJobId,
+    const std::int32_t routeSlotIndex) const
+{
+    const auto job = jobs_.find(uploadJobId);
+    if (job == jobs_.end()) return std::nullopt;
+    const auto target = std::lower_bound(
+        job->second.targets.begin(), job->second.targets.end(), routeSlotIndex,
+        [](const Target& value, const std::int32_t slot)
+        { return value.metadata.routeSlotIndex < slot; });
+    if (target == job->second.targets.end() ||
+        target->metadata.routeSlotIndex != routeSlotIndex)
+        return std::nullopt;
+    return target->metadata;
+}
+
 std::size_t ConsoleUploadJobAuthority::GetFrozenPageRouteCountForTest(
     const std::string& uploadJobId) const
 {
@@ -733,7 +1076,9 @@ std::size_t ConsoleUploadJobAuthority::GetFrozenPageRouteCountForTest(
 
 bool ConsoleUploadJobAuthority::InstallSyntheticReadyJobForTest(
     const std::string& uploadJobId,
-    const dspgcs::UploadArtifactIdentityDTO& identity,
+    const dspgcs::UploadArtifactBindingDTO& artifactBinding,
+    const dspgcs::UploadFrozenAssignmentBindingDTO& frozenBinding,
+    const dspgcs::UploadStableSourceDTO& stableSource,
     std::vector<dspgcs::UploadRouteStateDTO> routes,
     const std::uint32_t vacantCount,
     const std::uint32_t spareCount,
@@ -747,17 +1092,22 @@ bool ConsoleUploadJobAuthority::InstallSyntheticReadyJobForTest(
         error = "Synthetic Job input is invalid.";
         return false;
     }
-    auto lease = std::make_unique<dronegcs::route_artifact::ArtifactReadLease>();
+    auto lease =
+        std::make_unique<dronegcs::route_artifact::ArtifactReadLease>();
     bool recovered = false;
     const auto acquire = lease->TryAcquire(
         std::filesystem::u8path(workspaceRoot_).wstring(), recovered, error);
-    if (acquire != dronegcs::route_artifact::ArtifactReadLeaseAcquireResult::Acquired)
+    if (acquire !=
+        dronegcs::route_artifact::ArtifactReadLeaseAcquireResult::Acquired)
         return false;
     Job job;
     job.snapshot.uploadJobId = uploadJobId;
     job.snapshot.snapshotToken = MakeCanonicalId();
-    job.snapshot.artifactIdentity = identity;
-    job.snapshot.artifactGateState = dspgcs::UploadArtifactGateState::Validated;
+    job.snapshot.artifactBinding = artifactBinding;
+    job.snapshot.frozenAssignmentBinding = frozenBinding;
+    job.snapshot.stableSource = stableSource;
+    job.snapshot.artifactGateState =
+        dspgcs::UploadArtifactGateState::Validated;
     job.snapshot.jobState = dspgcs::UploadJobState::Ready;
     job.snapshot.jobRevision = 1;
     job.snapshot.snapshotSequence = 1;
@@ -767,9 +1117,19 @@ bool ConsoleUploadJobAuthority::InstallSyntheticReadyJobForTest(
     job.snapshot.spareCount = spareCount;
     job.snapshot.excludedCount = excludedCount;
     job.snapshot.effectiveMaxConcurrentUploads = maxConcurrentUploads;
-    std::sort(routes.begin(), routes.end(), [](const auto& left, const auto& right)
+    std::sort(routes.begin(), routes.end(),
+        [](const auto& left, const auto& right)
         { return left.routeSlotIndex < right.routeSlotIndex; });
-    job.routes = std::move(routes);
+    job.targets.reserve(routes.size());
+    for (auto& route : routes)
+    {
+        Target target;
+        target.metadata.droneId = route.droneId;
+        target.metadata.routeSlotIndex = route.routeSlotIndex;
+        target.metadata.fileByteSize = static_cast<std::int64_t>(route.totalBytes);
+        target.state = std::move(route);
+        job.targets.push_back(std::move(target));
+    }
     job.artifactLease = std::move(lease);
     RecalculateAggregate(job);
     jobs_.emplace(uploadJobId, std::move(job));

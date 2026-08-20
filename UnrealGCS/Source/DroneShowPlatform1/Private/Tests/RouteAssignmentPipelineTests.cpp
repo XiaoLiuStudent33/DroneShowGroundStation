@@ -115,6 +115,7 @@ namespace
 		const FRouteAssignmentCandidate& Right)
 	{
 		if (Left.SourceIdentity.FleetSessionID != Right.SourceIdentity.FleetSessionID
+			|| Left.BindingProvenance != Right.BindingProvenance
 			|| Left.SourceIdentity.FleetRevisionAtCapture
 				!= Right.SourceIdentity.FleetRevisionAtCapture
 			|| Left.SourceIdentity.RouteDatasetGeneration
@@ -180,6 +181,7 @@ namespace
 		const FRouteAssignmentSnapshot& Right)
 	{
 		if (Left.AssignmentAuthoritySessionID != Right.AssignmentAuthoritySessionID
+			|| Left.BindingProvenance != Right.BindingProvenance
 			|| Left.AssignmentRevision != Right.AssignmentRevision
 			|| Left.SourceIdentity.FleetSessionID != Right.SourceIdentity.FleetSessionID
 			|| Left.SourceIdentity.FleetRevisionAtCapture
@@ -502,6 +504,127 @@ bool FPipeline12ProductionConfigTest::RunTest(const FString& Parameters)
 
 #undef IMPLEMENT_PIPELINE_TEST
 
+#define IMPLEMENT_EXPLICIT_TEST(ClassName, LeafName) \
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(ClassName, \
+		"DroneGCS.RouteAssignment.Explicit." LeafName, \
+		EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+IMPLEMENT_EXPLICIT_TEST(FExplicit01ValidThreeTest, "01ValidThreeBindings")
+bool FExplicit01ValidThreeTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FRouteAssignmentSourceSnapshot Source = MakeSnapshot();
+	AddDrone(Source, TEXT("Alpha"));
+	AddDrone(Source, TEXT("Bravo"));
+	AddDrone(Source, TEXT("Charlie"));
+	AddRoute(Source, 0.0);
+	AddRoute(Source, 1.0);
+	AddRoute(Source, 2.0);
+	TArray<FRouteAssignmentExplicitBinding> Bindings;
+	Bindings.Add({TEXT("Charlie"), 2});
+	Bindings.Add({TEXT("Alpha"), 0});
+	Bindings.Add({TEXT("Bravo"), 1});
+	FRouteAssignmentCandidate Candidate;
+	FString Error;
+	TestTrue(TEXT("Three explicit bindings materialize"),
+		URouteAssignmentSubsystem::BuildExplicitCandidateFromSourceSnapshot(
+			Source, Bindings, Candidate, Error));
+	TestEqual(TEXT("Explicit provenance retained"), Candidate.BindingProvenance,
+		ERouteAssignmentBindingProvenance::Explicit);
+	TestEqual(TEXT("All explicit drones matched"), Candidate.MatchedEntries.Num(), 3);
+	TestEqual(TEXT("No route slots vacant"), Candidate.VacantRouteSlots.Num(), 0);
+	for (const FRouteAssignmentEntry& Entry : Candidate.MatchedEntries)
+	{
+		TestFalse(TEXT("Explicit entry has no positional distance"),
+			Entry.bHorizontalDistanceValid);
+		TestEqual(TEXT("Explicit distance storage is canonical zero"),
+			Entry.HorizontalDistanceMeters, 0.0);
+	}
+	return true;
+}
+
+IMPLEMENT_EXPLICIT_TEST(FExplicit02PartialDegradedTest, "02PartialDegradedDomain")
+bool FExplicit02PartialDegradedTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FRouteAssignmentSourceSnapshot Source = MakeSnapshot();
+	AddDrone(Source, TEXT("Alpha"));
+	AddDrone(Source, TEXT("Bravo"));
+	AddDrone(Source, TEXT("Charlie"));
+	for (int32 Slot = 0; Slot < 1200; ++Slot)
+	{
+		AddRoute(Source, static_cast<double>(Slot));
+	}
+	TArray<FRouteAssignmentExplicitBinding> Bindings = {
+		{TEXT("Alpha"), 0}, {TEXT("Bravo"), 1}, {TEXT("Charlie"), 2}};
+	FRouteAssignmentCandidate Candidate;
+	FString Error;
+	TestTrue(TEXT("Three-of-1200 explicit assignment materializes"),
+		URouteAssignmentSubsystem::BuildExplicitCandidateFromSourceSnapshot(
+			Source, Bindings, Candidate, Error));
+	TestEqual(TEXT("Three routes matched"), Candidate.MatchedEntries.Num(), 3);
+	TestEqual(TEXT("Remaining routes vacant"), Candidate.VacantRouteSlots.Num(), 1197);
+	URouteAssignmentSubsystem* Authority = MakeAuthority();
+	TestTrue(TEXT("Partial explicit candidate accepted"),
+		Authority->ReplaceWorkingAssignment(Candidate, Error));
+	TestEqual(TEXT("Partial explicit assignment is DegradedReady"),
+		Authority->GetReadinessKind(), ERouteAssignmentReadinessKind::DegradedReady);
+	TestTrue(TEXT("Partial explicit assignment freezes with degraded policy"),
+		Authority->Freeze(ERouteAssignmentFreezePolicy::AllowDegraded, Error));
+	return true;
+}
+
+IMPLEMENT_EXPLICIT_TEST(FExplicit03InvalidInputTest, "03InvalidInputs")
+bool FExplicit03InvalidInputTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FRouteAssignmentSourceSnapshot Source = MakeSnapshot();
+	AddDrone(Source, TEXT("Alpha"));
+	AddDrone(Source, TEXT("Bravo"));
+	AddRoute(Source, 0.0);
+	AddRoute(Source, 1.0);
+	auto Rejects = [&Source](const TArray<FRouteAssignmentExplicitBinding>& Bindings)
+	{
+		FRouteAssignmentCandidate Candidate;
+		FString Error;
+		return !URouteAssignmentSubsystem::BuildExplicitCandidateFromSourceSnapshot(
+			Source, Bindings, Candidate, Error);
+	};
+	TestTrue(TEXT("Duplicate Drone rejected"), Rejects({
+		{TEXT("Alpha"), 0}, {TEXT("alpha"), 1}}));
+	TestTrue(TEXT("Duplicate RouteSlot rejected"), Rejects({
+		{TEXT("Alpha"), 0}, {TEXT("Bravo"), 0}}));
+	TestTrue(TEXT("Unknown Drone rejected"), Rejects({{TEXT("Unknown"), 0}}));
+	TestTrue(TEXT("Out-of-range RouteSlot rejected"),
+		Rejects({{TEXT("Alpha"), 2}}));
+	return true;
+}
+
+IMPLEMENT_EXPLICIT_TEST(FExplicit04DistanceContractTest, "04DistanceContract")
+bool FExplicit04DistanceContractTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FRouteAssignmentCandidate Explicit = MakeDirectCandidate(0.0, false);
+	Explicit.BindingProvenance = ERouteAssignmentBindingProvenance::Explicit;
+	URouteAssignmentSubsystem* Authority = MakeAuthority();
+	FString Error;
+	TestTrue(TEXT("Explicit candidate does not require positional distance"),
+		Authority->ReplaceWorkingAssignment(Explicit, Error));
+	Authority->Reset();
+	Explicit.MatchedEntries[0].HorizontalDistanceMeters = 0.1;
+	Explicit.MatchedEntries[0].bHorizontalDistanceValid = true;
+	TestFalse(TEXT("Explicit candidate cannot masquerade as positional"),
+		Authority->ReplaceWorkingAssignment(Explicit, Error));
+	TestFalse(TEXT("Positional candidate above 0.20m remains rejected"),
+		Authority->ReplaceWorkingAssignment(
+			MakeDirectCandidate(
+				RouteAssignmentContract::MaxHorizontalMatchDistanceMeters + 0.001),
+			Error));
+	return true;
+}
+
+#undef IMPLEMENT_EXPLICIT_TEST
+
 #define IMPLEMENT_DEFENSE_TEST(ClassName, LeafName) \
 	IMPLEMENT_SIMPLE_AUTOMATION_TEST(ClassName, \
 		"DroneGCS.RouteAssignment.AuthorityDefense." LeafName, \
@@ -718,6 +841,92 @@ bool FIntegration03FrozenTest::RunTest(const FString& Parameters)
 		Authority->GetCurrentAssignmentRevision(), Before.AssignmentRevision);
 	TestEqual(TEXT("State remains Frozen"), Authority->GetState(), ERouteAssignmentState::Frozen);
 	GameInstance->Shutdown();
+	return true;
+}
+
+IMPLEMENT_INTEGRATION_TEST(FIntegration04ExplicitAuthorityTest, "04ExplicitAuthorityAndStaleSources")
+bool FIntegration04ExplicitAuthorityTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const FString RouteFile = MakeTemporaryRouteNpz(*this);
+	if (RouteFile.IsEmpty())
+	{
+		return false;
+	}
+	UGameInstance* GameInstance = NewObject<UGameInstance>(GEngine);
+	GameInstance->InitializeStandalone(TEXT("RouteAssignmentExplicitAuthorityTestWorld"));
+	UFleetManagerSubsystem* Fleet = GameInstance->GetSubsystem<UFleetManagerSubsystem>();
+	URoutePreviewSubsystem* Route = GameInstance->GetSubsystem<URoutePreviewSubsystem>();
+	URouteAssignmentSubsystem* Authority =
+		GameInstance->GetSubsystem<URouteAssignmentSubsystem>();
+	if (!TestNotNull(TEXT("Fleet available"), Fleet)
+		|| !TestNotNull(TEXT("Route available"), Route)
+		|| !TestNotNull(TEXT("Authority available"), Authority))
+	{
+		GameInstance->Shutdown();
+		IFileManager::Get().Delete(*RouteFile, false, true, true);
+		return false;
+	}
+
+	FGCSFleetSnapshot FleetSnapshot;
+	FleetSnapshot.Header.SessionID = TEXT("EXPLICIT-FLEET-SESSION");
+	FleetSnapshot.FleetRevision = 40;
+	FleetSnapshot.Drones.Add(MakeLiveDrone());
+	TestTrue(TEXT("Initial Fleet installed"), Fleet->ApplySnapshot(FleetSnapshot));
+	FString Error;
+	TestTrue(TEXT("Initial Route loaded"), Route->LoadRoute(RouteFile, Error));
+	TestTrue(TEXT("Initial ShowOrigin set"),
+		Route->SetShowOrigin(30.0, 120.0, 50.0, Error));
+
+	FRouteAssignmentSourceSnapshot InitialSource;
+	TestTrue(TEXT("Initial explicit source captured"),
+		Authority->CaptureSourceSnapshot(InitialSource, Error));
+	FRouteAssignmentExplicitBindingRequest Request;
+	Request.ExpectedSourceIdentity = InitialSource.SourceIdentity;
+	Request.Bindings.Add({TEXT("LiveAlpha"), 0});
+
+	FleetSnapshot.FleetRevision = 41;
+	TestTrue(TEXT("Fleet revision advanced"), Fleet->ApplySnapshot(FleetSnapshot));
+	TestFalse(TEXT("Stale Fleet explicit request rejected"),
+		Authority->BuildAndReplaceExplicitWorkingAssignment(Request, Error));
+	TestEqual(TEXT("Stale Fleet issued no revision"),
+		Authority->GetCurrentAssignmentRevision(), static_cast<int64>(0));
+
+	FRouteAssignmentSourceSnapshot FleetCurrentSource;
+	TestTrue(TEXT("Fleet-current source captured"),
+		Authority->CaptureSourceSnapshot(FleetCurrentSource, Error));
+	Request.ExpectedSourceIdentity = FleetCurrentSource.SourceIdentity;
+	TestTrue(TEXT("Route reloaded"), Route->LoadRoute(RouteFile, Error));
+	TestTrue(TEXT("Reloaded ShowOrigin set"),
+		Route->SetShowOrigin(30.0, 120.0, 50.0, Error));
+	TestFalse(TEXT("Stale Route explicit request rejected"),
+		Authority->BuildAndReplaceExplicitWorkingAssignment(Request, Error));
+	TestEqual(TEXT("Stale Route issued no revision"),
+		Authority->GetCurrentAssignmentRevision(), static_cast<int64>(0));
+
+	FRouteAssignmentSourceSnapshot CurrentSource;
+	TestTrue(TEXT("Current explicit source captured"),
+		Authority->CaptureSourceSnapshot(CurrentSource, Error));
+	Request.ExpectedSourceIdentity = CurrentSource.SourceIdentity;
+	TestTrue(TEXT("Current explicit request accepted"),
+		Authority->BuildAndReplaceExplicitWorkingAssignment(Request, Error));
+	FRouteAssignmentSnapshot Working;
+	TestTrue(TEXT("Explicit Working snapshot available"),
+		Authority->GetWorkingSnapshot(Working));
+	TestEqual(TEXT("Working provenance is Explicit"), Working.BindingProvenance,
+		ERouteAssignmentBindingProvenance::Explicit);
+	TestFalse(TEXT("Explicit Working carries no positional residual"),
+		Working.MatchedEntries[0].bHorizontalDistanceValid);
+	TestTrue(TEXT("Explicit Working freezes through the standard authority"),
+		Authority->Freeze(ERouteAssignmentFreezePolicy::RequireFull, Error));
+	FRouteAssignmentSnapshot Frozen;
+	TestTrue(TEXT("Explicit Frozen snapshot available"),
+		Authority->GetFrozenSnapshot(Frozen));
+	TestEqual(TEXT("Frozen provenance remains local Explicit audit metadata"),
+		Frozen.BindingProvenance, ERouteAssignmentBindingProvenance::Explicit);
+
+	GameInstance->Shutdown();
+	IFileManager::Get().Delete(*RouteFile, false, true, true);
 	return true;
 }
 

@@ -326,6 +326,8 @@ bool RouteAssignmentMaterializer::MaterializeAssignmentCandidate(
 	TSet<FString> MatchedDroneKeys;
 	TSet<int32> MatchedRouteSlots;
 	FRouteAssignmentCandidate LocalCandidate;
+	LocalCandidate.BindingProvenance =
+		ERouteAssignmentBindingProvenance::MatchedByPosition;
 	LocalCandidate.SourceIdentity = SourceSnapshot.SourceIdentity;
 	LocalCandidate.CandidateDroneCount = SourceSnapshot.Drones.Num();
 	LocalCandidate.RouteSlotCount = SourceRouteCount;

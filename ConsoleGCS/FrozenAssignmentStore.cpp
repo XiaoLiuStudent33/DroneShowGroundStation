@@ -17,6 +17,12 @@ void FrozenAssignmentStore::SynchronizeFleetSession(
     retiredAuthoritySessions_.clear();
 }
 
+std::string FrozenAssignmentStore::GetCurrentFleetSessionID() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return currentFleetSessionId_;
+}
+
 bool FrozenAssignmentStore::HasAcceptedAssignment(
     const std::string& currentFleetSessionId) const
 {

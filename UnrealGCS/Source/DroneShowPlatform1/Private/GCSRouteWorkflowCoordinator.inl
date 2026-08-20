@@ -7,6 +7,7 @@
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
 #include "Components/WidgetSwitcher.h"
+#include "DSPGCSFrozenAssignmentSyncSubsystem.h"
 #include "DSPGCSUploadJobSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "GameFramework/PlayerController.h"
@@ -114,6 +115,18 @@ namespace GCSRouteWorkflowPrivate
 	FString Gate(const dspgcs::UploadArtifactGateState V)
 	{
 		switch (V) { case dspgcs::UploadArtifactGateState::NotChecked:return TEXT("Not Checked"); case dspgcs::UploadArtifactGateState::Validating:return TEXT("Validating"); case dspgcs::UploadArtifactGateState::Validated:return TEXT("Validated"); case dspgcs::UploadArtifactGateState::Rejected:return TEXT("Rejected"); default:return TEXT("--"); }
+	}
+	FString FrozenState(const EDSPGCSFrozenAssignmentSyncState V)
+	{
+		switch (V)
+		{
+		case EDSPGCSFrozenAssignmentSyncState::NotFrozen:return TEXT("Frozen: Not Frozen");
+		case EDSPGCSFrozenAssignmentSyncState::FrozenLocal:return TEXT("Frozen: Local Only");
+		case EDSPGCSFrozenAssignmentSyncState::SyncingToConsole:return TEXT("Frozen: Syncing");
+		case EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted:return TEXT("Frozen: Console Accepted");
+		case EDSPGCSFrozenAssignmentSyncState::SyncFailed:return TEXT("Frozen: Sync Failed");
+		default:return TEXT("Frozen: --");
+		}
 	}
 	FString Playback(const ERoutePreviewPlaybackState V)
 	{
@@ -287,7 +300,8 @@ bool UGCSRouteWorkflowCoordinator::BindWorkflowWidgets(UUserWidget* Workflow, FS
 		TEXT("TXT_UploadSucceeded"),TEXT("TXT_UploadFailed"),TEXT("TXT_UploadCancelled"),TEXT("TXT_UploadJobStateValue"),
 		TEXT("TXT_UploadThroughputValue"),TEXT("TXT_UploadBytesValue"),TEXT("TXT_UploadElapsedValue"),TEXT("PROGRESS_Upload"),
 		TEXT("TXT_UploadPercent"),TEXT("EDT_MaxConcurrency"),TEXT("BTN_StartUpload"),TEXT("BTN_PauseUpload"),
-		TEXT("BTN_ResumeUpload"),TEXT("BTN_CancelUpload"),TEXT("BTN_RetryFailed")}), UploadWidgets, OutError)) return false;
+		TEXT("TXT_CurrentMaxConcurrencyValue"),TEXT("BTN_ResumeUpload"),TEXT("BTN_CancelUpload"),
+		TEXT("BTN_RetryFailed"),TEXT("BTN_ApplyMaxConcurrency")}), UploadWidgets, OutError)) return false;
 	RouteConvertWidgetRef = Convert; RouteUploadWidgetRef = Upload;
 	ClearRouteListModel();
 	ApplyReadOnlyControlState();
@@ -298,9 +312,15 @@ bool UGCSRouteWorkflowCoordinator::BindWorkflowWidgets(UUserWidget* Workflow, FS
 void UGCSRouteWorkflowCoordinator::ApplyReadOnlyControlState()
 {
 	using namespace GCSRouteWorkflowPrivate;
-	for (const FName Name : {FName(TEXT("BTN_StartUpload")),FName(TEXT("BTN_PauseUpload")),FName(TEXT("BTN_ResumeUpload")),FName(TEXT("BTN_CancelUpload")),FName(TEXT("BTN_RetryFailed"))})
+	for (const FName Name : {FName(TEXT("BTN_StartUpload")),FName(TEXT("BTN_PauseUpload")),
+		FName(TEXT("BTN_ResumeUpload")),FName(TEXT("BTN_CancelUpload")),
+		FName(TEXT("BTN_RetryFailed")),FName(TEXT("BTN_ApplyMaxConcurrency"))})
 		if (UButton* Button = Get<UButton>(UploadWidgets, Name)) Button->SetIsEnabled(false);
-	if (UEditableTextBox* Box = Get<UEditableTextBox>(UploadWidgets, TEXT("EDT_MaxConcurrency"))) { Box->SetIsReadOnly(true); Box->SetIsEnabled(false); }
+	if (UEditableTextBox* Box = Get<UEditableTextBox>(UploadWidgets, TEXT("EDT_MaxConcurrency")))
+	{
+		Box->SetIsReadOnly(false);
+		Box->SetIsEnabled(true);
+	}
 	for (const FName Name : {FName(TEXT("EDT_OriginLatitude")),FName(TEXT("EDT_OriginLongitude")),FName(TEXT("EDT_OriginAltitude"))})
 		if (UEditableTextBox* Box = Get<UEditableTextBox>(ConvertWidgets, Name)) { Box->SetIsReadOnly(false); Box->SetIsEnabled(true); }
 }
@@ -328,6 +348,36 @@ void UGCSRouteWorkflowCoordinator::BindCommandControls()
 		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleGenerateWaypointsClicked);
 		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleGenerateWaypointsClicked);
 	}
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_StartUpload")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleStartUploadClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleStartUploadClicked);
+	}
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_PauseUpload")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandlePauseUploadClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandlePauseUploadClicked);
+	}
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_ResumeUpload")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleResumeUploadClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleResumeUploadClicked);
+	}
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_CancelUpload")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleCancelUploadClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleCancelUploadClicked);
+	}
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_RetryFailed")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRetryFailedClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRetryFailedClicked);
+	}
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_ApplyMaxConcurrency")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleApplyMaxConcurrencyClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleApplyMaxConcurrencyClicked);
+	}
 }
 
 void UGCSRouteWorkflowCoordinator::UnbindCommandControls()
@@ -341,6 +391,18 @@ void UGCSRouteWorkflowCoordinator::UnbindCommandControls()
 		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleLoadPreviewClicked);
 	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_GenerateWaypoints")))
 		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleGenerateWaypointsClicked);
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_StartUpload")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleStartUploadClicked);
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_PauseUpload")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandlePauseUploadClicked);
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_ResumeUpload")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleResumeUploadClicked);
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_CancelUpload")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleCancelUploadClicked);
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_RetryFailed")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRetryFailedClicked);
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_ApplyMaxConcurrency")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleApplyMaxConcurrencyClicked);
 }
 
 void UGCSRouteWorkflowCoordinator::HandleRouteBrowseClicked()
@@ -563,6 +625,130 @@ void UGCSRouteWorkflowCoordinator::HandleGenerateWaypointsClicked()
 	UpdateCommandControlState();
 }
 
+bool UGCSRouteWorkflowCoordinator::ReadConcurrencyDraft(
+	int32& OutValue,
+	FString& OutError) const
+{
+	const UEditableTextBox* Draft = GCSRouteWorkflowPrivate::Get<UEditableTextBox>(
+		UploadWidgets, TEXT("EDT_MaxConcurrency"));
+	return ParsePositiveConcurrency(
+		Draft ? Draft->GetText().ToString() : FString(), OutValue, OutError);
+}
+
+void UGCSRouteWorkflowCoordinator::HandleStartUploadClicked()
+{
+	if (!IsInGameThread() || !GameInstanceRef.IsValid()) return;
+	if (!ComputeUploadCommandGate(GatherUploadCommandGateInputs()).bStartEnabled) return;
+	int32 Maximum = 0;
+	FString Error;
+	if (!ReadConcurrencyDraft(Maximum, Error))
+	{
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
+		return;
+	}
+	UDSPGCSUploadJobSubsystem* Upload =
+		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	FString UploadJobID;
+	if (!Upload || !Upload->StartUploadJobFromCurrentAuthorities(
+		Maximum, UploadJobID, Error))
+	{
+		if (Error.IsEmpty()) Error = TEXT("Upload Job Start was rejected.");
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
+	}
+	else
+	{
+		ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload);
+	}
+	RefreshReadOnlyState();
+}
+
+void UGCSRouteWorkflowCoordinator::HandlePauseUploadClicked()
+{
+	if (!IsInGameThread() || !GameInstanceRef.IsValid()) return;
+	if (!ComputeUploadCommandGate(GatherUploadCommandGateInputs()).bPauseEnabled) return;
+	UDSPGCSUploadJobSubsystem* Upload =
+		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	FString Error;
+	if (!Upload || !Upload->PauseUploadJob(Error))
+	{
+		if (Error.IsEmpty()) Error = TEXT("Pause command was rejected.");
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
+	}
+	else ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload);
+	RefreshReadOnlyState();
+}
+
+void UGCSRouteWorkflowCoordinator::HandleResumeUploadClicked()
+{
+	if (!IsInGameThread() || !GameInstanceRef.IsValid()) return;
+	if (!ComputeUploadCommandGate(GatherUploadCommandGateInputs()).bResumeEnabled) return;
+	UDSPGCSUploadJobSubsystem* Upload =
+		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	FString Error;
+	if (!Upload || !Upload->ResumeUploadJob(Error))
+	{
+		if (Error.IsEmpty()) Error = TEXT("Resume command was rejected.");
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
+	}
+	else ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload);
+	RefreshReadOnlyState();
+}
+
+void UGCSRouteWorkflowCoordinator::HandleCancelUploadClicked()
+{
+	if (!IsInGameThread() || !GameInstanceRef.IsValid()) return;
+	if (!ComputeUploadCommandGate(GatherUploadCommandGateInputs()).bCancelEnabled) return;
+	UDSPGCSUploadJobSubsystem* Upload =
+		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	FString Error;
+	if (!Upload || !Upload->CancelUploadJob(Error))
+	{
+		if (Error.IsEmpty()) Error = TEXT("Cancel command was rejected.");
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
+	}
+	else ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload);
+	RefreshReadOnlyState();
+}
+
+void UGCSRouteWorkflowCoordinator::HandleRetryFailedClicked()
+{
+	if (!IsInGameThread() || !GameInstanceRef.IsValid()) return;
+	if (!ComputeUploadCommandGate(
+		GatherUploadCommandGateInputs()).bRetryFailedEnabled) return;
+	UDSPGCSUploadJobSubsystem* Upload =
+		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	FString Error;
+	if (!Upload || !Upload->RetryFailedRoutes(Error))
+	{
+		if (Error.IsEmpty()) Error = TEXT("Retry Failed command was rejected.");
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
+	}
+	else ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload);
+	RefreshReadOnlyState();
+}
+
+void UGCSRouteWorkflowCoordinator::HandleApplyMaxConcurrencyClicked()
+{
+	if (!IsInGameThread() || !GameInstanceRef.IsValid()) return;
+	if (!ComputeUploadCommandGate(GatherUploadCommandGateInputs()).bApplyMaxEnabled) return;
+	int32 Maximum = 0;
+	FString Error;
+	if (!ReadConcurrencyDraft(Maximum, Error))
+	{
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
+		return;
+	}
+	UDSPGCSUploadJobSubsystem* Upload =
+		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	if (!Upload || !Upload->SetMaxConcurrentUploads(Maximum, Error))
+	{
+		if (Error.IsEmpty()) Error = TEXT("Maximum concurrency command was rejected.");
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
+	}
+	else ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload);
+	RefreshReadOnlyState();
+}
+
 FGCSRouteWorkflowCommandGateInputs UGCSRouteWorkflowCoordinator::GatherCommandGateInputs() const
 {
 #if WITH_DEV_AUTOMATION_TESTS
@@ -638,6 +824,63 @@ void UGCSRouteWorkflowCoordinator::UpdateCommandControlState()
 	}
 }
 
+FGCSRouteUploadCommandGateInputs
+UGCSRouteWorkflowCoordinator::GatherUploadCommandGateInputs() const
+{
+	FGCSRouteUploadCommandGateInputs Inputs;
+	if (!GameInstanceRef.IsValid()) return Inputs;
+	const UGameInstance* GI = GameInstanceRef.Get();
+	const URouteArtifactWorkspaceSubsystem* Workspace =
+		GI->GetSubsystem<URouteArtifactWorkspaceSubsystem>();
+	const UDSPGCSFrozenAssignmentSyncSubsystem* Frozen =
+		GI->GetSubsystem<UDSPGCSFrozenAssignmentSyncSubsystem>();
+	const UDSPGCSUploadJobSubsystem* Upload =
+		GI->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	if (Workspace)
+	{
+		const ERouteArtifactRecoveryStatus Recovery =
+			Workspace->GetLastRecoveryResult().Status;
+		Inputs.bArtifactReady =
+			Workspace->GetCurrentStatus() == ERouteArtifactCurrentStatus::Ready &&
+			(Recovery == ERouteArtifactRecoveryStatus::Stable ||
+			 Recovery == ERouteArtifactRecoveryStatus::Recovered);
+	}
+	Inputs.bFrozenConsoleAccepted = Frozen &&
+		Frozen->GetSyncState() == EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted;
+	if (!Upload) return Inputs;
+	const FDSPGCSUploadJobCommandStatus Command = Upload->GetCommandStatus();
+	Inputs.bHasActiveJobBinding = Command.bHasActiveJobBinding;
+	Inputs.bHasExecutableJob = Command.bHasExecutableJob;
+	Inputs.bCommandInFlight = Command.bCommandInFlight;
+	if (const dspgcs::UploadJobSnapshotDTO* Snapshot =
+		Upload->GetStateMirror().GetSnapshot())
+	{
+		Inputs.JobState = static_cast<uint8>(Snapshot->jobState);
+		Inputs.FailedCount = Snapshot->failedCount;
+	}
+	return Inputs;
+}
+
+void UGCSRouteWorkflowCoordinator::UpdateUploadCommandControlState()
+{
+	using namespace GCSRouteWorkflowPrivate;
+	const FGCSRouteUploadCommandGate Gate =
+		ComputeUploadCommandGate(GatherUploadCommandGateInputs());
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_StartUpload")))
+		Button->SetIsEnabled(Gate.bStartEnabled);
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_PauseUpload")))
+		Button->SetIsEnabled(Gate.bPauseEnabled);
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_ResumeUpload")))
+		Button->SetIsEnabled(Gate.bResumeEnabled);
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_CancelUpload")))
+		Button->SetIsEnabled(Gate.bCancelEnabled);
+	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_RetryFailed")))
+		Button->SetIsEnabled(Gate.bRetryFailedEnabled);
+	if (UButton* Button = Get<UButton>(
+		UploadWidgets, TEXT("BTN_ApplyMaxConcurrency")))
+		Button->SetIsEnabled(Gate.bApplyMaxEnabled);
+}
+
 void UGCSRouteWorkflowCoordinator::SetCommandError(
 	const EGCSRouteWorkflowCommandErrorCategory Category,
 	const FString& Message)
@@ -681,6 +924,9 @@ void UGCSRouteWorkflowCoordinator::ApplyCommandErrorPresentation()
 		break;
 	case EGCSRouteWorkflowCommandErrorCategory::Artifact:
 		SetText(ConvertWidgets, TEXT("TXT_StateArtifactValue"), CommandErrorMessage);
+		break;
+	case EGCSRouteWorkflowCommandErrorCategory::Upload:
+		SetText(UploadWidgets, TEXT("TXT_UploadJobStateValue"), CommandErrorMessage);
 		break;
 	default:
 		break;
@@ -734,12 +980,32 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	const UDSPGCSUploadJobSubsystem* Upload=GI->GetSubsystem<UDSPGCSUploadJobSubsystem>(); const dspgcs::UploadJobSnapshotDTO* Job=Upload?Upload->GetStateMirror().GetSnapshot():nullptr;
 	const auto Count=[this,Job](FName Name,uint32 Value){GCSRouteWorkflowPrivate::SetText(UploadWidgets,Name,Job?FString::Printf(TEXT("%u"),Value):TEXT("0"));};
 	Count(TEXT("TXT_UploadMatched"),Job?Job->matchedCount:0); Count(TEXT("TXT_UploadVacant"),Job?Job->vacantCount:0); Count(TEXT("TXT_UploadSpare"),Job?Job->spareCount:0); Count(TEXT("TXT_UploadWaiting"),Job?Job->waitingCount:0); Count(TEXT("TXT_UploadPreparing"),Job?Job->preparingCount:0); Count(TEXT("TXT_UploadUploading"),Job?Job->uploadingCount:0); Count(TEXT("TXT_UploadRetryWaiting"),Job?Job->retryWaitingCount:0); Count(TEXT("TXT_UploadSucceeded"),Job?Job->succeededCount:0); Count(TEXT("TXT_UploadFailed"),Job?Job->failedCount:0); Count(TEXT("TXT_UploadCancelled"),Job?Job->cancelledCount:0);
-	SetText(UploadWidgets,TEXT("TXT_ConsoleValidatedValue"),Job?Gate(Job->artifactGateState):TEXT("--")); SetText(UploadWidgets,TEXT("TXT_UploadJobStateValue"),Job?TEXT("Protocol: ")+JobState(Job->jobState):TEXT("Protocol: --"));
-	const uint64 Total=Job?Job->totalBytes:0,Done=Job?Job->bytesCompleted:0; const double UR=ComputeProgressRatio(Done,Total); SetText(UploadWidgets,TEXT("TXT_UploadThroughputValue"),FormatThroughput(Job?Job->throughputBytesPerSecond:0)); SetText(UploadWidgets,TEXT("TXT_UploadBytesValue"),FString::Printf(TEXT("%s / %s"),*FormatByteCount(Done),*FormatByteCount(Total))); SetText(UploadWidgets,TEXT("TXT_UploadElapsedValue"),FormatElapsedMilliseconds(Job?Job->elapsedMs:0)); if(UProgressBar* Bar=Get<UProgressBar>(UploadWidgets,TEXT("PROGRESS_Upload"))) Bar->SetPercent(UR); SetText(UploadWidgets,TEXT("TXT_UploadPercent"),FormatPercent(UR)); SetEdit(UploadWidgets,TEXT("EDT_MaxConcurrency"),Job?FString::Printf(TEXT("%u"),Job->effectiveMaxConcurrentUploads):TEXT("--"));
+	const UDSPGCSFrozenAssignmentSyncSubsystem* FrozenSync =
+		GI->GetSubsystem<UDSPGCSFrozenAssignmentSyncSubsystem>();
+	FString ConsoleState = FrozenState(FrozenSync
+		? FrozenSync->GetSyncState() : EDSPGCSFrozenAssignmentSyncState::NotFrozen);
+	if (Job) ConsoleState += TEXT(" / Artifact: ") + Gate(Job->artifactGateState);
+	SetText(UploadWidgets,TEXT("TXT_ConsoleValidatedValue"),ConsoleState);
+	FString JobPresentation = Job
+		? TEXT("Protocol: ") + JobState(Job->jobState) : TEXT("Protocol: --");
+	const FDSPGCSUploadJobCommandStatus CommandStatus =
+		Upload ? Upload->GetCommandStatus() : FDSPGCSUploadJobCommandStatus{};
+	if (!CommandStatus.LastSafeDiagnostic.IsEmpty() &&
+		(CommandStatus.bCommandTimedOut || CommandStatus.bHasAuthoritativeFailure ||
+		 CommandStatus.LastCommandResultCode !=
+			 static_cast<int32>(dspgcs::UploadJobErrorCode::None) ||
+		 (CommandStatus.bHasCommandAck && CommandStatus.LastCommandAckStatus ==
+			 static_cast<int32>(dspgcs::UploadJobCommandAckStatus::Rejected))))
+	{
+		JobPresentation += TEXT(" / ") + CommandStatus.LastSafeDiagnostic.Left(320);
+	}
+	SetText(UploadWidgets,TEXT("TXT_UploadJobStateValue"),JobPresentation);
+	const uint64 Total=Job?Job->totalBytes:0,Done=Job?Job->bytesCompleted:0; const double UR=ComputeProgressRatio(Done,Total); SetText(UploadWidgets,TEXT("TXT_UploadThroughputValue"),FormatThroughput(Job?Job->throughputBytesPerSecond:0)); SetText(UploadWidgets,TEXT("TXT_UploadBytesValue"),FString::Printf(TEXT("%s / %s"),*FormatByteCount(Done),*FormatByteCount(Total))); SetText(UploadWidgets,TEXT("TXT_UploadElapsedValue"),FormatElapsedMilliseconds(Job?Job->elapsedMs:0)); if(UProgressBar* Bar=Get<UProgressBar>(UploadWidgets,TEXT("PROGRESS_Upload"))) Bar->SetPercent(UR); SetText(UploadWidgets,TEXT("TXT_UploadPercent"),FormatPercent(UR)); SetText(UploadWidgets,TEXT("TXT_CurrentMaxConcurrencyValue"),Job?FString::Printf(TEXT("Current: %u"),Job->effectiveMaxConcurrentUploads):TEXT("Current: --"));
 	RefreshArtifactIdentity();
 	SyncRouteListModel();
 	RefreshVisibleRouteRows();
 	UpdateCommandControlState();
+	UpdateUploadCommandControlState();
 	ApplyCommandErrorPresentation();
 }
 
@@ -786,8 +1052,8 @@ void UGCSRouteWorkflowCoordinator::RefreshArtifactIdentity()
 
 	const FGCSRouteUploadArtifactDisplay Display = ResolveArtifactDisplay(
 		Job != nullptr,
-		Job ? WorkflowFromUtf8(Job->artifactIdentity.artifactSetId) : FString(),
-		Job ? WorkflowDigestHex(Job->artifactIdentity.artifactSetDigest) : FString(),
+		Job ? WorkflowFromUtf8(Job->artifactBinding.artifactSetId) : FString(),
+		Job ? WorkflowDigestHex(Job->artifactBinding.artifactSetDigest) : FString(),
 		bCurrentUsable,
 		CurrentArtifactID,
 		CurrentDigest,
@@ -1115,6 +1381,79 @@ FGCSRouteWorkflowCommandGate UGCSRouteWorkflowCoordinator::ComputeCommandGate(
 		&& Inputs.bRouteLoaded
 		&& Inputs.bShowOriginSet
 		&& Inputs.bWorkspaceReady;
+	return Gate;
+}
+
+bool UGCSRouteWorkflowCoordinator::ParsePositiveConcurrency(
+	const FString& Text,
+	int32& OutValue,
+	FString& OutError)
+{
+	OutValue = 0;
+	const FString Trimmed = Text.TrimStartAndEnd();
+	if (Trimmed.IsEmpty())
+	{
+		OutError = TEXT("Maximum concurrency is required.");
+		return false;
+	}
+	uint64 Value = 0;
+	for (const TCHAR Character : Trimmed)
+	{
+		if (Character < TEXT('0') || Character > TEXT('9'))
+		{
+			OutError = TEXT("Maximum concurrency must be a positive integer.");
+			return false;
+		}
+		Value = Value * 10 + static_cast<uint64>(Character - TEXT('0'));
+		if (Value > static_cast<uint64>(MAX_int32))
+		{
+			OutError = TEXT("Maximum concurrency is too large.");
+			return false;
+		}
+	}
+	if (Value == 0)
+	{
+		OutError = TEXT("Maximum concurrency must be greater than zero.");
+		return false;
+	}
+	OutValue = static_cast<int32>(Value);
+	OutError.Reset();
+	return true;
+}
+
+FGCSRouteUploadCommandGate UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(
+	const FGCSRouteUploadCommandGateInputs& Inputs)
+{
+	FGCSRouteUploadCommandGate Gate;
+	if (Inputs.bCommandInFlight) return Gate;
+	if (!Inputs.bHasActiveJobBinding && !Inputs.bHasExecutableJob)
+	{
+		Gate.bStartEnabled =
+			Inputs.bArtifactReady && Inputs.bFrozenConsoleAccepted;
+		return Gate;
+	}
+	if (!Inputs.bHasExecutableJob) return Gate;
+	switch (static_cast<dspgcs::UploadJobState>(Inputs.JobState))
+	{
+	case dspgcs::UploadJobState::Ready:
+	case dspgcs::UploadJobState::Running:
+		Gate.bPauseEnabled = true;
+		Gate.bCancelEnabled = true;
+		Gate.bApplyMaxEnabled = true;
+		break;
+	case dspgcs::UploadJobState::Paused:
+		Gate.bResumeEnabled = true;
+		Gate.bCancelEnabled = true;
+		Gate.bApplyMaxEnabled = true;
+		break;
+	case dspgcs::UploadJobState::Failed:
+		Gate.bCancelEnabled = true;
+		Gate.bRetryFailedEnabled = Inputs.FailedCount > 0;
+		Gate.bApplyMaxEnabled = true;
+		break;
+	default:
+		break;
+	}
 	return Gate;
 }
 

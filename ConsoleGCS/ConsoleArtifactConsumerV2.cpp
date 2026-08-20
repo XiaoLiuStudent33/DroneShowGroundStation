@@ -841,16 +841,31 @@ bool ConsoleArtifactConsumerV2::IsCurrentIdentityStill(
     const ExpectedRouteArtifactV2Identity& expectedIdentity,
     ConsoleArtifactV2Diagnostic& diagnostic) const
 {
+    const auto accepted = GetAcceptedSnapshot();
+    if (!accepted)
+    {
+        SetError(diagnostic,
+            ConsoleArtifactV2ErrorCode::CurrentMissing,
+            "No accepted v2 Artifact snapshot is available.");
+        return false;
+    }
+    return IsCurrentIdentityStill(
+        expectedIdentity, accepted->currentDirectoryIdentity, diagnostic);
+}
+
+bool ConsoleArtifactConsumerV2::IsCurrentIdentityStill(
+    const ExpectedRouteArtifactV2Identity& expectedIdentity,
+    const RouteArtifactV2CurrentDirectoryIdentity& expectedCurrentDirectoryIdentity,
+    ConsoleArtifactV2Diagnostic& diagnostic) const
+{
     LoadedMetadata metadata;
     if (!LoadMetadata(workspaceRoot_, expectedIdentity, metadata, diagnostic, false))
         return false;
-    const auto accepted = GetAcceptedSnapshot();
-    if (accepted
-        && !(accepted->currentDirectoryIdentity == metadata.currentIdentity))
+    if (!(expectedCurrentDirectoryIdentity == metadata.currentIdentity))
     {
         SetError(diagnostic,
             ConsoleArtifactV2ErrorCode::FileChangedDuringValidation,
-            "Current directory identity differs from the accepted v2 snapshot.");
+            "Current directory identity differs from the expected v2 snapshot.");
         return false;
     }
     return true;

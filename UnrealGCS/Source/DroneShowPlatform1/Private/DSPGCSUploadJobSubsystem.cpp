@@ -1,6 +1,9 @@
 #include "DSPGCSUploadJobSubsystem.h"
 
+#include "DSPGCSFrozenAssignmentSyncSubsystem.h"
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
+#include "RouteArtifactTypesV2.h"
+#include "RouteArtifactWorkspaceSubsystem.h"
 
 #include "Engine/GameInstance.h"
 #include "HAL/PlatformTime.h"
@@ -21,6 +24,19 @@ namespace
 		return FString(UTF8_TO_TCHAR(Value.c_str()));
 	}
 
+	FString UploadJobDigestToHex(const dspgcs::UploadJobDigest& Digest)
+	{
+		static constexpr TCHAR Digits[] = TEXT("0123456789abcdef");
+		FString Result;
+		Result.Reserve(64);
+		for (const std::uint8_t Byte : Digest)
+		{
+			Result.AppendChar(Digits[(Byte >> 4) & 0x0f]);
+			Result.AppendChar(Digits[Byte & 0x0f]);
+		}
+		return Result;
+	}
+
 	std::int64_t UtcNowMs()
 	{
 		const FDateTime Epoch(1970, 1, 1);
@@ -33,10 +49,15 @@ void UDSPGCSUploadJobSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	Collection.InitializeDependency<UDSPGCSProductionTelemetryProviderSubsystem>();
+	Collection.InitializeDependency<URouteArtifactWorkspaceSubsystem>();
+	Collection.InitializeDependency<UDSPGCSFrozenAssignmentSyncSubsystem>();
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
 		ProviderRef = GameInstance->GetSubsystem<
 			UDSPGCSProductionTelemetryProviderSubsystem>();
+		WorkspaceRef = GameInstance->GetSubsystem<URouteArtifactWorkspaceSubsystem>();
+		FrozenSyncRef =
+			GameInstance->GetSubsystem<UDSPGCSFrozenAssignmentSyncSubsystem>();
 	}
 	ClientSessionID = MakeCanonicalID();
 	if (auto* Provider = ProviderRef.Get())
@@ -63,10 +84,20 @@ void UDSPGCSUploadJobSubsystem::Deinitialize()
 	}
 	if (auto* Provider = ProviderRef.Get()) Provider->SetUploadJobFrameHandler({});
 	ProviderRef.Reset();
+	WorkspaceRef.Reset();
+	FrozenSyncRef.Reset();
 	Mirror.Reset();
 	PendingCommandFrame.clear();
-	PendingSnapshotRequestFrame.clear();
-	PendingSnapshotRequestID.clear();
+	ClearPendingSnapshotRequest();
+	ActiveJobID.clear();
+	bCommandInFlight = false;
+	bCommandTimedOut = false;
+	bHasCommandAck = false;
+	LastSafeDiagnostic.Reset();
+#if WITH_DEV_AUTOMATION_TESTS
+	StartAuthorityCaptureForTest = {};
+	FrameSenderForTest = {};
+#endif
 	Super::Deinitialize();
 }
 
@@ -99,6 +130,120 @@ bool UDSPGCSUploadJobSubsystem::ParseDigestHex(
 	return true;
 }
 
+bool UDSPGCSUploadJobSubsystem::CaptureCurrentAuthorityBindings(
+	dspgcs::UploadArtifactBindingDTO& OutArtifactBinding,
+	dspgcs::UploadFrozenAssignmentBindingDTO& OutFrozenBinding,
+	FString& OutError)
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	if (StartAuthorityCaptureForTest)
+	{
+		return StartAuthorityCaptureForTest(
+			OutArtifactBinding, OutFrozenBinding, OutError);
+	}
+#endif
+	URouteArtifactWorkspaceSubsystem* Workspace = WorkspaceRef.Get();
+	UDSPGCSFrozenAssignmentSyncSubsystem* FrozenSync = FrozenSyncRef.Get();
+	if (!Workspace || !FrozenSync)
+	{
+		OutError = TEXT("Upload Job source authorities are unavailable.");
+		return false;
+	}
+	const ERouteArtifactRecoveryStatus Recovery =
+		Workspace->GetLastRecoveryResult().Status;
+	if (Workspace->GetCurrentStatus() != ERouteArtifactCurrentStatus::Ready ||
+		(Recovery != ERouteArtifactRecoveryStatus::Stable &&
+			Recovery != ERouteArtifactRecoveryStatus::Recovered))
+	{
+		OutError = TEXT("Route Artifact is not ready for upload.");
+		return false;
+	}
+	const FRouteArtifactCurrentInfo& Artifact = Workspace->GetCurrentInfo();
+	if (Artifact.ArtifactSchemaVersion != RouteArtifactContractV2::ArtifactSchemaVersion ||
+		Artifact.ArtifactSetID.IsEmpty() || !Artifact.ArtifactSetDigest.IsValid())
+	{
+		OutError = TEXT("Current Route Artifact v2 identity is unavailable.");
+		return false;
+	}
+
+	FrozenSync->ProcessPendingAcks();
+	const FDSPGCSFrozenAssignmentSyncStatus Frozen = FrozenSync->GetSyncStatus();
+	if (Frozen.State != EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted)
+	{
+		OutError = TEXT("Frozen Assignment has not been accepted by Console.");
+		return false;
+	}
+	if (Frozen.FleetSessionID.IsEmpty() ||
+		Frozen.AssignmentAuthoritySessionID.IsEmpty() ||
+		Frozen.AssignmentRevision <= 0 || Frozen.CanonicalPayloadDigest.IsEmpty())
+	{
+		OutError = TEXT("Console-accepted Frozen Assignment identity is incomplete.");
+		return false;
+	}
+
+	OutArtifactBinding = {};
+	OutArtifactBinding.artifactSetId = UploadJobToUtf8(Artifact.ArtifactSetID);
+	OutFrozenBinding = {};
+	OutFrozenBinding.fleetSessionId = UploadJobToUtf8(Frozen.FleetSessionID);
+	OutFrozenBinding.assignmentAuthoritySessionId =
+		UploadJobToUtf8(Frozen.AssignmentAuthoritySessionID);
+	OutFrozenBinding.assignmentRevision =
+		static_cast<std::uint64_t>(Frozen.AssignmentRevision);
+	if (!ParseDigestHex(Artifact.ArtifactSetDigest.ToLowerHex(),
+			OutArtifactBinding.artifactSetDigest) ||
+		!ParseDigestHex(Frozen.CanonicalPayloadDigest,
+			OutFrozenBinding.assignmentDigest))
+	{
+		OutError = TEXT("Current Artifact or Frozen Assignment identity is invalid.");
+		return false;
+	}
+	OutError.Reset();
+	return true;
+}
+
+bool UDSPGCSUploadJobSubsystem::StartUploadJobFromCurrentAuthorities(
+	const int32 RequestedMaxConcurrentUploads,
+	FString& OutUploadJobID,
+	FString& OutError)
+{
+	check(IsInGameThread());
+	OutUploadJobID.Reset();
+	if (RequestedMaxConcurrentUploads <= 0)
+	{
+		OutError = TEXT("Maximum concurrent uploads must be a positive integer.");
+		SetLocalCommandFailure(dspgcs::UploadJobCommandType::Start, OutError);
+		return false;
+	}
+	if (bCommandInFlight)
+	{
+		OutError = TEXT("An Upload Job command is already awaiting ACK.");
+		return false;
+	}
+	if (!ActiveJobID.empty() || Mirror.HasAuthoritativeSnapshot() ||
+		Mirror.HasAuthoritativeError())
+	{
+		OutError = TEXT("The active Upload Job must be explicitly prepared for a new Job.");
+		SetLocalCommandFailure(dspgcs::UploadJobCommandType::Start, OutError);
+		return false;
+	}
+	dspgcs::UploadArtifactBindingDTO ArtifactBinding;
+	dspgcs::UploadFrozenAssignmentBindingDTO FrozenBinding;
+	if (!CaptureCurrentAuthorityBindings(
+		ArtifactBinding, FrozenBinding, OutError))
+	{
+		SetLocalCommandFailure(dspgcs::UploadJobCommandType::Start, OutError);
+		return false;
+	}
+	return StartUploadJob(
+		FString(), UploadJobFromUtf8(ArtifactBinding.artifactSetId),
+		UploadJobDigestToHex(ArtifactBinding.artifactSetDigest),
+		UploadJobFromUtf8(FrozenBinding.fleetSessionId),
+		UploadJobFromUtf8(FrozenBinding.assignmentAuthoritySessionId),
+		static_cast<int64>(FrozenBinding.assignmentRevision),
+		UploadJobDigestToHex(FrozenBinding.assignmentDigest),
+		RequestedMaxConcurrentUploads, OutUploadJobID, OutError);
+}
+
 bool UDSPGCSUploadJobSubsystem::StartUploadJob(
 	const FString& RequestedUploadJobID,
 	const FString& ArtifactSetID,
@@ -112,6 +257,15 @@ bool UDSPGCSUploadJobSubsystem::StartUploadJob(
 	FString& OutError)
 {
 	check(IsInGameThread());
+	if (bCommandInFlight || !ActiveJobID.empty() ||
+		Mirror.HasAuthoritativeSnapshot() || Mirror.HasAuthoritativeError())
+	{
+		OutError = bCommandInFlight
+			? TEXT("An Upload Job command is already awaiting ACK.")
+			: TEXT("Prepare the terminal or failed Upload Job before starting a new Job.");
+		SetLocalCommandFailure(dspgcs::UploadJobCommandType::Start, OutError);
+		return false;
+	}
 	dspgcs::UploadJobCommandDTO Command;
 	Command.clientCommandId = MakeCanonicalID();
 	Command.uploadJobId = RequestedUploadJobID.IsEmpty()
@@ -119,23 +273,57 @@ bool UDSPGCSUploadJobSubsystem::StartUploadJob(
 	Command.commandType = dspgcs::UploadJobCommandType::Start;
 	Command.requestedMaxConcurrentUploads = RequestedMaxConcurrentUploads > 0
 		? static_cast<std::uint32_t>(RequestedMaxConcurrentUploads) : 0;
-	Command.artifactIdentity.artifactSetId = UploadJobToUtf8(ArtifactSetID);
-	Command.artifactIdentity.fleetSessionId = UploadJobToUtf8(FleetSessionID);
-	Command.artifactIdentity.assignmentAuthoritySessionId =
+	Command.artifactBinding.artifactSetId = UploadJobToUtf8(ArtifactSetID);
+	Command.frozenAssignmentBinding.fleetSessionId = UploadJobToUtf8(FleetSessionID);
+	Command.frozenAssignmentBinding.assignmentAuthoritySessionId =
 		UploadJobToUtf8(AssignmentAuthoritySessionID);
-	Command.artifactIdentity.assignmentRevision = AssignmentRevision > 0
+	Command.frozenAssignmentBinding.assignmentRevision = AssignmentRevision > 0
 		? static_cast<std::uint64_t>(AssignmentRevision) : 0;
 	if (!ParseDigestHex(ArtifactSetDigestHex,
-			Command.artifactIdentity.artifactSetDigest) ||
+			Command.artifactBinding.artifactSetDigest) ||
 		!ParseDigestHex(AssignmentDigestHex,
-			Command.artifactIdentity.assignmentDigest))
+			Command.frozenAssignmentBinding.assignmentDigest))
 	{
 		OutError = TEXT("Artifact or Assignment digest is not 64 lowercase hex.");
+		SetLocalCommandFailure(dspgcs::UploadJobCommandType::Start, OutError);
 		return false;
 	}
 	if (!SendCommand(Command, OutError)) return false;
 	ActiveJobID = Command.uploadJobId;
+	Mirror.PrepareForNewJob(ActiveJobID);
 	OutUploadJobID = UploadJobFromUtf8(ActiveJobID);
+	return true;
+}
+
+bool UDSPGCSUploadJobSubsystem::PrepareForNewUploadJob(FString& OutError)
+{
+	check(IsInGameThread());
+	if (bCommandInFlight)
+	{
+		OutError = TEXT("Cannot prepare a new Upload Job while a command is awaiting ACK.");
+		return false;
+	}
+	const dspgcs::UploadJobSnapshotDTO* Snapshot = Mirror.GetSnapshot();
+	const bool bTerminal = Snapshot &&
+		(Snapshot->jobState == dspgcs::UploadJobState::Completed ||
+		 Snapshot->jobState == dspgcs::UploadJobState::Failed ||
+		 Snapshot->jobState == dspgcs::UploadJobState::Cancelled);
+	if (!ActiveJobID.empty() && !bTerminal && !Mirror.HasAuthoritativeError())
+	{
+		OutError = TEXT("Only a terminal or validation-failed Upload Job can be prepared for replacement.");
+		return false;
+	}
+	ClearPendingSnapshotRequest();
+	PendingCommandFrame.clear();
+	PendingAttemptCount = 0;
+	ActiveJobID.clear();
+	Mirror.Reset();
+	bCommandTimedOut = false;
+	bHasCommandAck = false;
+	LastCommandAckStatus = dspgcs::UploadJobCommandAckStatus::Rejected;
+	LastCommandResultCode = dspgcs::UploadJobErrorCode::None;
+	LastSafeDiagnostic.Reset();
+	OutError.Reset();
 	return true;
 }
 
@@ -175,6 +363,7 @@ bool UDSPGCSUploadJobSubsystem::SendSimpleCommand(
 	if (!Snapshot || ActiveJobID.empty())
 	{
 		OutError = TEXT("No authoritative Upload Job snapshot is available.");
+		SetLocalCommandFailure(CommandType, OutError);
 		return false;
 	}
 	dspgcs::UploadJobCommandDTO Command;
@@ -190,23 +379,35 @@ bool UDSPGCSUploadJobSubsystem::SendCommand(
 	dspgcs::UploadJobCommandDTO Command,
 	FString& OutError)
 {
-	if (!PendingCommandFrame.empty())
+	if (bCommandInFlight || !PendingCommandFrame.empty())
 	{
 		OutError = TEXT("An Upload Job command is already awaiting ACK.");
 		return false;
 	}
+	CurrentCommandType = Command.commandType;
+	bCommandTimedOut = false;
+	bHasCommandAck = false;
+	LastCommandAckStatus = dspgcs::UploadJobCommandAckStatus::Rejected;
+	LastCommandResultCode = dspgcs::UploadJobErrorCode::None;
+	LastSafeDiagnostic.Reset();
 	std::vector<std::uint8_t> Payload;
 	std::string Error;
 	if (!dspgcs::EncodeUploadJobCommand(Command, Payload, Error))
 	{
 		OutError = UploadJobFromUtf8(Error);
+		SetLocalCommandFailure(Command.commandType, OutError);
 		return false;
 	}
 	std::vector<std::uint8_t> Frame;
 	if (!SendPayload(dspgcs::UploadJobMessageTypes::Command,
-		Command.clientCommandId, Payload, &Frame, OutError)) return false;
+		Command.clientCommandId, Payload, &Frame, OutError))
+	{
+		SetLocalCommandFailure(Command.commandType, OutError);
+		return false;
+	}
 	PendingCommandFrame = std::move(Frame);
 	Mirror.SetPendingCommandID(Command.clientCommandId);
+	bCommandInFlight = true;
 	PendingAttemptCount = 1;
 	RetryAtSeconds = FPlatformTime::Seconds() + CommandRetrySeconds;
 	return true;
@@ -232,6 +433,19 @@ bool UDSPGCSUploadJobSubsystem::SendPayload(
 		OutError = TEXT("Encoded Upload Job DSP frame exceeds safe UDP budget.");
 		return false;
 	}
+#if WITH_DEV_AUTOMATION_TESTS
+	if (FrameSenderForTest)
+	{
+		if (!FrameSenderForTest(Frame))
+		{
+			OutError = TEXT("DSP-GCS test transport is unavailable.");
+			return false;
+		}
+		if (OutFrame) *OutFrame = std::move(Frame);
+		OutError.Reset();
+		return true;
+	}
+#endif
 	auto* Provider = ProviderRef.Get();
 	if (!Provider || !Provider->SendFrame(Frame))
 	{
@@ -241,6 +455,27 @@ bool UDSPGCSUploadJobSubsystem::SendPayload(
 	if (OutFrame) *OutFrame = std::move(Frame);
 	OutError.Reset();
 	return true;
+}
+
+void UDSPGCSUploadJobSubsystem::SetLocalCommandFailure(
+	const dspgcs::UploadJobCommandType CommandType,
+	const FString& SafeDiagnostic)
+{
+	CurrentCommandType = CommandType;
+	bCommandInFlight = false;
+	bHasCommandAck = false;
+	bCommandTimedOut = false;
+	LastCommandAckStatus = dspgcs::UploadJobCommandAckStatus::Rejected;
+	LastCommandResultCode = dspgcs::UploadJobErrorCode::None;
+	LastSafeDiagnostic = SafeDiagnostic.Left(512);
+}
+
+void UDSPGCSUploadJobSubsystem::ClearPendingSnapshotRequest()
+{
+	PendingSnapshotRequestFrame.clear();
+	PendingSnapshotRequestID.clear();
+	PendingSnapshotAttemptCount = 0;
+	bSnapshotRequestInFlight = false;
 }
 
 bool UDSPGCSUploadJobSubsystem::RequestAuthoritativeSnapshot(FString& OutError)
@@ -324,6 +559,13 @@ void UDSPGCSUploadJobSubsystem::ProcessIncoming()
 			{
 				PendingCommandFrame.clear();
 				PendingAttemptCount = 0;
+				bCommandInFlight = false;
+				bCommandTimedOut = false;
+				bHasCommandAck = true;
+				CurrentCommandType = Ack.commandType;
+				LastCommandAckStatus = Ack.status;
+				LastCommandResultCode = Ack.resultCode;
+				LastSafeDiagnostic = UploadJobFromUtf8(Ack.safeDiagnostic).Left(512);
 				FString Ignored;
 				RequestAuthoritativeSnapshot(Ignored);
 			}
@@ -335,11 +577,15 @@ void UDSPGCSUploadJobSubsystem::ProcessIncoming()
 				Snapshot.clientRequestId == PendingSnapshotRequestID &&
 				Mirror.ApplySnapshot(Snapshot))
 			{
-				bSnapshotRequestInFlight = false;
-				PendingSnapshotRequestFrame.clear();
-				PendingSnapshotRequestID.clear();
-				PendingSnapshotAttemptCount = 0;
-				if (Snapshot.jobState == dspgcs::UploadJobState::Validating)
+				ClearPendingSnapshotRequest();
+				if (Snapshot.resultCode != dspgcs::UploadJobErrorCode::None)
+				{
+					LastCommandResultCode = Snapshot.resultCode;
+					LastSafeDiagnostic =
+						UploadJobFromUtf8(Snapshot.safeDiagnostic).Left(512);
+					NextSnapshotPollSeconds = 0.0;
+				}
+				else if (Snapshot.jobState == dspgcs::UploadJobState::Validating)
 				{
 					NextSnapshotPollSeconds = FPlatformTime::Seconds() +
 						ValidationSnapshotPollSeconds;
@@ -361,10 +607,7 @@ void UDSPGCSUploadJobSubsystem::ProcessIncoming()
 				Page.clientRequestId == PendingSnapshotRequestID &&
 				Mirror.ApplyRoutePage(Page))
 			{
-				bSnapshotRequestInFlight = false;
-				PendingSnapshotRequestFrame.clear();
-				PendingSnapshotRequestID.clear();
-				PendingSnapshotAttemptCount = 0;
+				ClearPendingSnapshotRequest();
 				if (Page.hasMore)
 				{
 					FString Ignored;
@@ -400,7 +643,16 @@ bool UDSPGCSUploadJobSubsystem::TickClient(float DeltaSeconds)
 		{
 			PendingCommandFrame.clear();
 			PendingAttemptCount = 0;
+			bCommandInFlight = false;
+			bCommandTimedOut = true;
+			bHasCommandAck = false;
+			LastCommandResultCode = dspgcs::UploadJobErrorCode::None;
+			LastSafeDiagnostic =
+				TEXT("Upload Job command timed out waiting for Console ACK.");
+			Mirror.ClearPendingCommandID();
 			Mirror.MarkTransportReconnected();
+			FString Ignored;
+			RequestAuthoritativeSnapshot(Ignored);
 		}
 		else
 		{
@@ -413,10 +665,7 @@ bool UDSPGCSUploadJobSubsystem::TickClient(float DeltaSeconds)
 	{
 		if (PendingSnapshotAttemptCount >= MaxSnapshotRequestAttempts)
 		{
-			PendingSnapshotRequestFrame.clear();
-			PendingSnapshotRequestID.clear();
-			PendingSnapshotAttemptCount = 0;
-			bSnapshotRequestInFlight = false;
+			ClearPendingSnapshotRequest();
 			Mirror.MarkTransportReconnected();
 			NextSnapshotPollSeconds = Now + SnapshotRequestRetrySeconds;
 		}
@@ -474,5 +723,24 @@ FDSPGCSUploadJobMirrorStatus UDSPGCSUploadJobSubsystem::GetMirrorStatus() const
 		? static_cast<int64>(Snapshot->throughputBytesPerSecond) : MAX_int64;
 	Result.EffectiveMaxConcurrentUploads =
 		static_cast<int32>(Snapshot->effectiveMaxConcurrentUploads);
+	return Result;
+}
+
+FDSPGCSUploadJobCommandStatus UDSPGCSUploadJobSubsystem::GetCommandStatus() const
+{
+	FDSPGCSUploadJobCommandStatus Result;
+	Result.bCommandInFlight = bCommandInFlight;
+	Result.bCommandTimedOut = bCommandTimedOut;
+	Result.bHasCommandAck = bHasCommandAck;
+	Result.bHasActiveJobBinding = !ActiveJobID.empty();
+	Result.bHasExecutableJob = Mirror.HasAuthoritativeSnapshot();
+	Result.bHasAuthoritativeFailure = Mirror.HasAuthoritativeError();
+	Result.bRecoveryRequired = Mirror.IsRecoveryRequired();
+	Result.CurrentCommandType = static_cast<int32>(CurrentCommandType);
+	Result.LastCommandAckStatus = bHasCommandAck
+		? static_cast<int32>(LastCommandAckStatus) : 0;
+	Result.LastCommandResultCode = static_cast<int32>(LastCommandResultCode);
+	Result.ActiveUploadJobID = UploadJobFromUtf8(ActiveJobID);
+	Result.LastSafeDiagnostic = LastSafeDiagnostic;
 	return Result;
 }

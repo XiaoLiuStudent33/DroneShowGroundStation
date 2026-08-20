@@ -230,6 +230,16 @@ namespace
         Expect(!mission::CheckedMissionPayloadSize(65537, bytes, error)
             && error.Code == mission::ErrorCode::RouteRowCountOutOfRange,
             "logical route above 65536 rows was accepted");
+        Expect(mission::CheckedLegacyMissionFtpUploadPayloadSizeV1(
+            1, bytes, error) && bytes == 48,
+            "one-item legacy upload payload size is not 10 + 38");
+        Expect(mission::CheckedLegacyMissionFtpUploadPayloadSizeV1(
+            9000, bytes, error) && bytes == 342010,
+            "9000-item legacy upload payload size is not 10 + 9000 * 38");
+        Expect(!mission::CheckedLegacyMissionFtpUploadPayloadSizeV1(
+            65537, bytes, error) &&
+            error.Code == mission::ErrorCode::RouteRowCountOutOfRange,
+            "legacy upload payload size accepted an unsupported row count");
         std::array<std::uint8_t, 10> container{};
         Expect(!mission::EncodeLegacyMissionFtpContainerV1(
             65536, 1, 0, container, error)

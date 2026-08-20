@@ -121,6 +121,68 @@ bool ConflictLess(const FRouteAssignmentConflict& Left, const FRouteAssignmentCo
 
 	return CompareStringArrays(Left.DroneIDs, Right.DroneIDs) < 0;
 }
+
+bool IsLatitudeValid(const double Latitude)
+{
+	return FMath::IsFinite(Latitude) && Latitude >= -90.0 && Latitude <= 90.0;
+}
+
+bool IsLongitudeValid(const double Longitude)
+{
+	return FMath::IsFinite(Longitude) && Longitude >= -180.0 && Longitude <= 180.0;
+}
+
+ERouteAssignmentExcludedReason DetermineExplicitExcludedReason(
+	const FRouteAssignmentDroneSource& Drone)
+{
+	if (!Drone.bOnline)
+	{
+		return ERouteAssignmentExcludedReason::Offline;
+	}
+	if (!Drone.bGPSValid)
+	{
+		return ERouteAssignmentExcludedReason::InvalidGPS;
+	}
+	if (Drone.GPSFixType < 3)
+	{
+		return ERouteAssignmentExcludedReason::InsufficientGPSFix;
+	}
+	return ERouteAssignmentExcludedReason::InvalidGeo;
+}
+
+bool IsExplicitSpareEligible(const FRouteAssignmentDroneSource& Drone)
+{
+	return Drone.bOnline
+		&& Drone.bGPSValid
+		&& Drone.GPSFixType >= 3
+		&& !(Drone.Latitude == 0.0 && Drone.Longitude == 0.0)
+		&& IsLatitudeValid(Drone.Latitude)
+		&& IsLongitudeValid(Drone.Longitude);
+}
+
+bool HasSameFleetAuthoritySource(
+	const FRouteAssignmentSourceIdentity& Expected,
+	const FRouteAssignmentSourceIdentity& Current)
+{
+	return Expected.FleetSessionID == Current.FleetSessionID
+		&& Expected.FleetRevisionAtCapture == Current.FleetRevisionAtCapture;
+}
+
+bool HasSameRouteAuthoritySource(
+	const FRouteAssignmentSourceIdentity& Expected,
+	const FRouteAssignmentSourceIdentity& Current)
+{
+	return Expected.RouteDatasetGeneration == Current.RouteDatasetGeneration
+		&& Expected.SourceDatasetDigest == Current.SourceDatasetDigest
+		&& Expected.NormalizedShowOriginLatitudeE7
+			== Current.NormalizedShowOriginLatitudeE7
+		&& Expected.NormalizedShowOriginLongitudeE7
+			== Current.NormalizedShowOriginLongitudeE7
+		&& Expected.bShowOriginSet == Current.bShowOriginSet
+		&& Expected.Latitude == Current.Latitude
+		&& Expected.Longitude == Current.Longitude
+		&& Expected.Altitude == Current.Altitude;
+}
 }
 
 void URouteAssignmentSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -374,6 +436,7 @@ bool URouteAssignmentSubsystem::ReplaceWorkingAssignment(
 	CurrentAssignmentRevision = LastIssuedAssignmentRevision;
 
 	FRouteAssignmentSnapshot NewWorkingSnapshot;
+	NewWorkingSnapshot.BindingProvenance = CanonicalCandidate.BindingProvenance;
 	NewWorkingSnapshot.AssignmentAuthoritySessionID = AssignmentAuthoritySessionID;
 	NewWorkingSnapshot.AssignmentRevision = CurrentAssignmentRevision;
 	NewWorkingSnapshot.SourceIdentity = CanonicalCandidate.SourceIdentity;
@@ -448,6 +511,174 @@ bool URouteAssignmentSubsystem::BuildAndReplaceWorkingAssignment(FString& OutErr
 	}
 
 	return true;
+}
+
+bool URouteAssignmentSubsystem::BuildExplicitCandidateFromSourceSnapshot(
+	const FRouteAssignmentSourceSnapshot& SourceSnapshot,
+	const TArray<FRouteAssignmentExplicitBinding>& Bindings,
+	FRouteAssignmentCandidate& OutCandidate,
+	FString& OutError)
+{
+	OutCandidate = FRouteAssignmentCandidate{};
+	OutError.Reset();
+	if (Bindings.IsEmpty())
+	{
+		OutError = TEXT("At least one explicit DroneID to RouteSlot binding is required.");
+		return false;
+	}
+
+	TMap<FString, const FRouteAssignmentDroneSource*> SourceDrones;
+	SourceDrones.Reserve(SourceSnapshot.Drones.Num());
+	for (const FRouteAssignmentDroneSource& Drone : SourceSnapshot.Drones)
+	{
+		const FString IdentityKey = RouteAssignmentPrivate::MakeDroneIdentityKey(Drone.DroneID);
+		if (Drone.DroneID.TrimStartAndEnd().IsEmpty() || SourceDrones.Contains(IdentityKey))
+		{
+			OutError = TEXT("SourceSnapshot contains an empty or duplicate DroneID.");
+			return false;
+		}
+		SourceDrones.Add(IdentityKey, &Drone);
+	}
+
+	TSet<int32> SourceRouteSlots;
+	for (const FRouteAssignmentRouteSlotSource& RouteSlot : SourceSnapshot.RouteSlots)
+	{
+		if (RouteSlot.RouteSlotIndex < 0
+			|| RouteSlot.RouteSlotIndex >= SourceSnapshot.RouteSlots.Num()
+			|| SourceRouteSlots.Contains(RouteSlot.RouteSlotIndex))
+		{
+			OutError = TEXT("SourceSnapshot RouteSlot domain is invalid or duplicated.");
+			return false;
+		}
+		SourceRouteSlots.Add(RouteSlot.RouteSlotIndex);
+	}
+
+	FRouteAssignmentCandidate Candidate;
+	Candidate.BindingProvenance = ERouteAssignmentBindingProvenance::Explicit;
+	Candidate.SourceIdentity = SourceSnapshot.SourceIdentity;
+	Candidate.CandidateDroneCount = SourceSnapshot.Drones.Num();
+	Candidate.RouteSlotCount = SourceSnapshot.RouteSlots.Num();
+	Candidate.MatchedEntries.Reserve(Bindings.Num());
+
+	TSet<FString> MatchedDroneKeys;
+	TSet<int32> MatchedRouteSlots;
+	for (const FRouteAssignmentExplicitBinding& Binding : Bindings)
+	{
+		const FString IdentityKey =
+			RouteAssignmentPrivate::MakeDroneIdentityKey(Binding.DroneID);
+		const FRouteAssignmentDroneSource* const* SourceDrone =
+			SourceDrones.Find(IdentityKey);
+		if (!SourceDrone)
+		{
+			OutError = FString::Printf(
+				TEXT("Explicit binding references unknown DroneID '%s'."),
+				*Binding.DroneID);
+			return false;
+		}
+		if (MatchedDroneKeys.Contains(IdentityKey))
+		{
+			OutError = FString::Printf(
+				TEXT("Explicit binding contains duplicate DroneID '%s'."),
+				*Binding.DroneID);
+			return false;
+		}
+		if (!SourceRouteSlots.Contains(Binding.RouteSlotIndex))
+		{
+			OutError = FString::Printf(
+				TEXT("Explicit RouteSlotIndex %d is outside the current route domain."),
+				Binding.RouteSlotIndex);
+			return false;
+		}
+		if (MatchedRouteSlots.Contains(Binding.RouteSlotIndex))
+		{
+			OutError = FString::Printf(
+				TEXT("Explicit binding contains duplicate RouteSlotIndex %d."),
+				Binding.RouteSlotIndex);
+			return false;
+		}
+
+		MatchedDroneKeys.Add(IdentityKey);
+		MatchedRouteSlots.Add(Binding.RouteSlotIndex);
+		FRouteAssignmentEntry Entry;
+		Entry.DroneID = (*SourceDrone)->DroneID;
+		Entry.RouteSlotIndex = Binding.RouteSlotIndex;
+		Entry.HorizontalDistanceMeters = 0.0;
+		Entry.bHorizontalDistanceValid = false;
+		Candidate.MatchedEntries.Add(MoveTemp(Entry));
+	}
+
+	for (const FRouteAssignmentDroneSource& Drone : SourceSnapshot.Drones)
+	{
+		if (MatchedDroneKeys.Contains(
+			RouteAssignmentPrivate::MakeDroneIdentityKey(Drone.DroneID)))
+		{
+			continue;
+		}
+		if (RouteAssignmentPrivate::IsExplicitSpareEligible(Drone))
+		{
+			FRouteAssignmentSpareDrone Spare;
+			Spare.DroneID = Drone.DroneID;
+			Candidate.SpareDrones.Add(MoveTemp(Spare));
+		}
+		else
+		{
+			FRouteAssignmentExcludedDrone Excluded;
+			Excluded.DroneID = Drone.DroneID;
+			Excluded.Reason =
+				RouteAssignmentPrivate::DetermineExplicitExcludedReason(Drone);
+			Candidate.ExcludedDrones.Add(MoveTemp(Excluded));
+		}
+	}
+
+	for (const FRouteAssignmentRouteSlotSource& RouteSlot : SourceSnapshot.RouteSlots)
+	{
+		if (!MatchedRouteSlots.Contains(RouteSlot.RouteSlotIndex))
+		{
+			Candidate.VacantRouteSlots.Add(RouteSlot.RouteSlotIndex);
+		}
+	}
+
+	OutCandidate = MoveTemp(Candidate);
+	return true;
+}
+
+bool URouteAssignmentSubsystem::BuildAndReplaceExplicitWorkingAssignment(
+	const FRouteAssignmentExplicitBindingRequest& Request,
+	FString& OutError)
+{
+	check(IsInGameThread());
+	OutError.Reset();
+	if (State == ERouteAssignmentState::Frozen)
+	{
+		OutError = TEXT("The route assignment is frozen. Reset is required before replacement.");
+		return false;
+	}
+
+	FRouteAssignmentSourceSnapshot CurrentSource;
+	if (!CaptureSourceSnapshot(CurrentSource, OutError))
+	{
+		return false;
+	}
+	if (!RouteAssignmentPrivate::HasSameFleetAuthoritySource(
+		Request.ExpectedSourceIdentity, CurrentSource.SourceIdentity))
+	{
+		OutError = TEXT("Explicit binding request Fleet authority source is stale.");
+		return false;
+	}
+	if (!RouteAssignmentPrivate::HasSameRouteAuthoritySource(
+		Request.ExpectedSourceIdentity, CurrentSource.SourceIdentity))
+	{
+		OutError = TEXT("Explicit binding request Route authority source is stale.");
+		return false;
+	}
+
+	FRouteAssignmentCandidate Candidate;
+	if (!BuildExplicitCandidateFromSourceSnapshot(
+		CurrentSource, Request.Bindings, Candidate, OutError))
+	{
+		return false;
+	}
+	return ReplaceWorkingAssignment(Candidate, OutError);
 }
 
 bool URouteAssignmentSubsystem::CanFreeze(
@@ -545,6 +776,14 @@ bool URouteAssignmentSubsystem::ValidateCandidate(
 	FString& OutError)
 {
 	OutError.Reset();
+	if (Candidate.BindingProvenance
+			!= ERouteAssignmentBindingProvenance::MatchedByPosition
+		&& Candidate.BindingProvenance
+			!= ERouteAssignmentBindingProvenance::Explicit)
+	{
+		OutError = TEXT("BindingProvenance is invalid.");
+		return false;
+	}
 	if (Candidate.CandidateDroneCount < 0)
 	{
 		OutError = TEXT("CandidateDroneCount must not be negative.");
@@ -662,16 +901,28 @@ bool URouteAssignmentSubsystem::ValidateCandidate(
 			return false;
 		}
 
-		if (!Entry.bHorizontalDistanceValid
-			|| !FMath::IsFinite(Entry.HorizontalDistanceMeters)
-			|| Entry.HorizontalDistanceMeters < 0.0
-			|| Entry.HorizontalDistanceMeters
-				> RouteAssignmentContract::MaxHorizontalMatchDistanceMeters)
+		if (Candidate.BindingProvenance
+			== ERouteAssignmentBindingProvenance::MatchedByPosition
+			&& (!Entry.bHorizontalDistanceValid
+				|| !FMath::IsFinite(Entry.HorizontalDistanceMeters)
+				|| Entry.HorizontalDistanceMeters < 0.0
+				|| Entry.HorizontalDistanceMeters
+					> RouteAssignmentContract::MaxHorizontalMatchDistanceMeters))
 		{
 			OutError = FString::Printf(
 				TEXT("Matched DroneID '%s' must have a valid finite horizontal distance in the production range [0, %.2f] meters."),
 				*Entry.DroneID,
 				RouteAssignmentContract::MaxHorizontalMatchDistanceMeters);
+			return false;
+		}
+		if (Candidate.BindingProvenance
+			== ERouteAssignmentBindingProvenance::Explicit
+			&& (Entry.bHorizontalDistanceValid
+				|| Entry.HorizontalDistanceMeters != 0.0))
+		{
+			OutError = FString::Printf(
+				TEXT("Explicit DroneID '%s' must not carry a positional horizontal distance."),
+				*Entry.DroneID);
 			return false;
 		}
 
@@ -964,6 +1215,7 @@ bool URouteAssignmentSubsystem::ValidateWorkingSnapshotForFreeze(
 	}
 
 	FRouteAssignmentCandidate Candidate;
+	Candidate.BindingProvenance = WorkingSnapshot.BindingProvenance;
 	Candidate.SourceIdentity = WorkingSnapshot.SourceIdentity;
 	Candidate.CandidateDroneCount = WorkingSnapshot.CandidateDroneCount;
 	Candidate.RouteSlotCount = WorkingSnapshot.RouteSlotCount;

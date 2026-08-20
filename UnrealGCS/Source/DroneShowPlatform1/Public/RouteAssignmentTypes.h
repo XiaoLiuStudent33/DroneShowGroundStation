@@ -37,6 +37,14 @@ enum class ERouteAssignmentCompletionMode : uint8
 	Degraded
 };
 
+/** Local audit provenance for how one authoritative assignment was produced. */
+UENUM(BlueprintType)
+enum class ERouteAssignmentBindingProvenance : uint8
+{
+	MatchedByPosition,
+	Explicit
+};
+
 UENUM(BlueprintType)
 enum class ERouteAssignmentExcludedReason : uint8
 {
@@ -83,6 +91,19 @@ struct DRONESHOWPLATFORM1_API FRouteAssignmentEntry
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Route Assignment")
 	bool bHorizontalDistanceValid = false;
+};
+
+/** One caller-requested explicit DroneID to zero-based RouteSlot binding. */
+USTRUCT(BlueprintType)
+struct DRONESHOWPLATFORM1_API FRouteAssignmentExplicitBinding
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Route Assignment")
+	FString DroneID;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Route Assignment")
+	int32 RouteSlotIndex = INDEX_NONE;
 };
 
 USTRUCT(BlueprintType)
@@ -171,6 +192,19 @@ struct DRONESHOWPLATFORM1_API FRouteAssignmentSourceIdentity
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Route Assignment")
 	FDateTime CapturedAtUtc;
+};
+
+/** Stale-safe request for a GameThread-authoritative explicit assignment. */
+USTRUCT(BlueprintType)
+struct DRONESHOWPLATFORM1_API FRouteAssignmentExplicitBindingRequest
+{
+	GENERATED_BODY()
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Route Assignment")
+	FRouteAssignmentSourceIdentity ExpectedSourceIdentity;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Route Assignment")
+	TArray<FRouteAssignmentExplicitBinding> Bindings;
 };
 
 /** Fleet authority values copied for one route-assignment source capture. */
@@ -289,6 +323,10 @@ struct DRONESHOWPLATFORM1_API FRouteAssignmentCandidate
 	GENERATED_BODY()
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Route Assignment")
+	ERouteAssignmentBindingProvenance BindingProvenance =
+		ERouteAssignmentBindingProvenance::MatchedByPosition;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Route Assignment")
 	FRouteAssignmentSourceIdentity SourceIdentity;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Route Assignment")
@@ -321,6 +359,10 @@ USTRUCT(BlueprintType)
 struct DRONESHOWPLATFORM1_API FRouteAssignmentSnapshot
 {
 	GENERATED_BODY()
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Route Assignment")
+	ERouteAssignmentBindingProvenance BindingProvenance =
+		ERouteAssignmentBindingProvenance::MatchedByPosition;
 
 	/** Opaque epoch shared by every assignment issued by one authority lifetime. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Route Assignment")

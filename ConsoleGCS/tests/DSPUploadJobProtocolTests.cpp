@@ -1,29 +1,34 @@
 #define WIN32_LEAN_AND_MEAN
+#include "ConsoleArtifactConsumerV2.h"
 #include "ConsoleUploadJobAuthority.h"
 #include "DSPGCSUploadJobReceiver.h"
-#include "RouteArtifactContract.h"
-#include "RouteArtifactReadLease.h"
+#include "RouteArtifactContractV2.h"
 #include "Wpl110Core.h"
 
 #include <windows.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <functional>
 #include <iostream>
-#include <iomanip>
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <sstream>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace
 {
     namespace fs = std::filesystem;
     namespace artifact = dronegcs::route_artifact;
+    namespace artifact_v2 = dronegcs::route_artifact::v2;
     namespace wpl = dronegcs::wpl110;
 
     void Expect(const bool value, const std::string& message)
@@ -33,602 +38,1096 @@ namespace
 
     std::string Id(const char value) { return std::string(32, value); }
 
-    std::string NumericId(const std::uint64_t value)
+    artifact::Digest256 Hash(const std::string& bytes)
     {
-        std::ostringstream stream;
-        stream << std::hex << std::setfill('0') << std::setw(32) << value;
-        return stream.str();
+        artifact::Digest256 digest;
+        Expect(artifact::Sha256::Hash(bytes.data(), bytes.size(), digest),
+            "SHA-256 fixture failed");
+        return digest;
     }
 
-    artifact::Digest256 Hash(const std::string& text)
-    {
-        artifact::Digest256 value;
-        Expect(artifact::Sha256::Hash(text.data(), text.size(), value), "hash failed");
-        return value;
-    }
-
-    dspgcs::UploadJobDigest WireDigest(const artifact::Digest256& source)
+    dspgcs::UploadJobDigest WireDigest(const artifact::Digest256& digest)
     {
         dspgcs::UploadJobDigest result{};
-        std::copy(source.Bytes.begin(), source.Bytes.end(), result.begin());
+        std::copy(digest.Bytes.begin(), digest.Bytes.end(), result.begin());
         return result;
     }
 
     class TempRoot final
     {
     public:
-        explicit TempRoot(const char* tag)
+        explicit TempRoot(const std::string& tag)
         {
             static std::atomic<unsigned> counter{ 0 };
             root = fs::temp_directory_path() /
-                (std::string("DroneGCS-2GB-") + tag + "-" +
-                 std::to_string(GetCurrentProcessId()) + "-" +
-                 std::to_string(++counter));
+                ("DroneGCS-UploadV2E-" + tag + "-" +
+                    std::to_string(GetCurrentProcessId()) + "-" +
+                    std::to_string(++counter));
             fs::create_directories(root / "Current");
         }
-        ~TempRoot() { std::error_code error; fs::remove_all(root, error); }
+        ~TempRoot()
+        {
+            std::error_code ignored;
+            fs::remove_all(root, ignored);
+        }
         fs::path root;
+    };
+
+    struct ArtifactFixture
+    {
+        std::unique_ptr<TempRoot> workspace;
+        artifact_v2::Manifest manifest;
+        ExpectedRouteArtifactV2Identity expected;
     };
 
     void Write(const fs::path& path, const std::string& bytes)
     {
         fs::create_directories(path.parent_path());
-        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
-        Expect(stream.good(), "fixture open failed");
-        stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-        Expect(stream.good(), "fixture write failed");
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        Expect(output.good(), "fixture file open failed");
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        Expect(output.good(), "fixture file write failed");
     }
 
-    std::string RouteBytes()
+    std::string RouteBytes(
+        const std::int32_t slot,
+        const std::int32_t frameCount,
+        const std::int32_t variant)
     {
-        wpl::Row row;
-        row.Sequence = 0; row.Red = 1; row.Green = 2; row.Blue = 3;
-        row.LatitudeE7 = 399000000; row.LongitudeE7 = 1163000000;
-        row.AltitudeE7 = 500000000;
-        wpl::FormattedRow formatted;
-        Expect(wpl::FormatRow(row, formatted), "row format failed");
-        return std::string(wpl::Header) + "\r\n" +
-            std::string(reinterpret_cast<const char*>(formatted.Bytes.data()), formatted.Size);
+        std::string bytes = std::string(wpl::Header) + "\r\n";
+        for (std::int32_t frame = 0; frame < frameCount; ++frame)
+        {
+            wpl::Row row;
+            row.Sequence = frame;
+            row.Red = static_cast<std::uint8_t>((slot + frame + variant) % 256);
+            row.Green = static_cast<std::uint8_t>((slot * 3 + frame + variant) % 256);
+            row.Blue = static_cast<std::uint8_t>((slot * 7 + frame + variant) % 256);
+            row.LatitudeE7 = 319000000 + slot + frame + variant;
+            row.LongitudeE7 = 1186000000 + slot + frame + variant;
+            row.AltitudeE7 = 500000000LL + slot + frame + variant;
+            wpl::FormattedRow formatted;
+            Expect(wpl::FormatRow(row, formatted), "WPL formatting failed");
+            bytes.append(reinterpret_cast<const char*>(formatted.Bytes.data()),
+                formatted.Size);
+            if (frame + 1 < frameCount) bytes += "\r\n";
+        }
+        return bytes;
     }
 
-    struct ArtifactFixture
+    void Finalize(ArtifactFixture& fixture)
     {
-        std::unique_ptr<TempRoot> root;
-        artifact::Manifest manifest;
-        std::shared_ptr<FrozenAssignmentAcceptedSnapshot> frozen;
-        dspgcs::UploadArtifactIdentityDTO wireIdentity;
-    };
+        artifact::Error error;
+        Expect(artifact_v2::ComputeArtifactSetId(
+            artifact_v2::BuildIdentityFromManifest(fixture.manifest),
+            fixture.manifest.ArtifactSetId, error), error.Detail);
+        Expect(artifact_v2::ComputeArtifactSetDigest(
+            fixture.manifest, fixture.manifest.ArtifactSetDigest, error),
+            error.Detail);
+        std::string manifestBytes;
+        std::string readyBytes;
+        Expect(artifact_v2::SerializeCanonicalManifest(
+            fixture.manifest, manifestBytes, error), error.Detail);
+        Expect(artifact::SerializeReadyMarker(
+            fixture.manifest.ArtifactSetId,
+            fixture.manifest.ArtifactSetDigest,
+            readyBytes, error), error.Detail);
+        Write(fixture.workspace->root / "Current" / "manifest.json", manifestBytes);
+        Write(fixture.workspace->root / "Current" / "READY", readyBytes);
+        fixture.expected.artifactSetId = fixture.manifest.ArtifactSetId;
+        fixture.expected.artifactSetDigest = fixture.manifest.ArtifactSetDigest;
+    }
 
-    ArtifactFixture MakeArtifact(const char* tag)
+    ArtifactFixture MakeArtifact(
+        const std::string& tag,
+        const std::int32_t routeCount = 2,
+        const std::int32_t frameCount = 2,
+        const std::int32_t variant = 0)
     {
         ArtifactFixture fixture;
-        fixture.root = std::make_unique<TempRoot>(tag);
+        fixture.workspace = std::make_unique<TempRoot>(tag);
         auto& manifest = fixture.manifest;
-        manifest.CreatedAtUtc = 1700000000000LL;
-        manifest.Assignment.FleetSessionId = "fleet-2gb";
-        manifest.Assignment.AssignmentAuthoritySessionId = "authority-2gb";
-        manifest.Assignment.AssignmentRevision = 7;
-        manifest.Assignment.AssignmentDigest = Hash("assignment-2gb");
-        manifest.FleetRevisionAtCapture = 9;
-        manifest.RouteDatasetGeneration = 11;
-        manifest.MatchedCount = 1; manifest.RouteSlotCount = 1; manifest.FrameCount = 1;
-        manifest.Source.SourceDatasetDigest = Hash("source-2gb");
-        manifest.Source.SourceByteSize = 100;
-        manifest.Source.SourceDisplayFileName = "source.npz";
-        manifest.WaypointGeneratorVersion = "DroneGCS-WPL110-v1";
-        manifest.GeneratorInputDigest = Hash("generator-2gb");
-        manifest.Mapping.push_back({ "drone-0", 0 });
-        std::string relative; artifact::Error error;
-        Expect(artifact::BuildRouteRelativePath(0, relative, error), "route path failed");
-        const std::string route = RouteBytes();
-        Write(fixture.root->root / "Current" / fs::u8path(relative), route);
-        manifest.Routes.push_back({ 0, relative,
-            static_cast<std::int64_t>(route.size()), Hash(route) });
-        Expect(artifact::ComputeArtifactSetId(
-            artifact::BuildIdentityFromManifest(manifest), manifest.ArtifactSetId, error),
-            "set id failed");
-        Expect(artifact::ComputeArtifactSetDigest(manifest, manifest.ArtifactSetDigest, error),
-            "set digest failed");
-        std::string manifestBytes, readyBytes;
-        Expect(artifact::SerializeCanonicalManifest(manifest, manifestBytes, error),
-            "manifest failed");
-        Expect(artifact::SerializeReadyMarker(manifest.ArtifactSetId,
-            manifest.ArtifactSetDigest, readyBytes, error), "ready failed");
-        Write(fixture.root->root / "Current" / "manifest.json", manifestBytes);
-        Write(fixture.root->root / "Current" / "READY", readyBytes);
-
-        fixture.frozen = std::make_shared<FrozenAssignmentAcceptedSnapshot>();
-        fixture.frozen->identity.fleetSessionId = manifest.Assignment.FleetSessionId;
-        fixture.frozen->identity.assignmentAuthoritySessionId =
-            manifest.Assignment.AssignmentAuthoritySessionId;
-        fixture.frozen->identity.assignmentRevision = 7;
-        fixture.frozen->fleetRevisionAtCapture = 9;
-        fixture.frozen->routeDatasetGeneration = 11;
-        fixture.frozen->routeSlotCount = 1; fixture.frozen->matchedCount = 1;
-        fixture.frozen->matchedMappings.push_back({ "drone-0", 0 });
-        std::copy(manifest.Assignment.AssignmentDigest.Bytes.begin(),
-            manifest.Assignment.AssignmentDigest.Bytes.end(),
-            fixture.frozen->canonicalPayloadDigest.begin());
-
-        fixture.wireIdentity.artifactSetId = manifest.ArtifactSetId;
-        fixture.wireIdentity.artifactSetDigest = WireDigest(manifest.ArtifactSetDigest);
-        fixture.wireIdentity.fleetSessionId = manifest.Assignment.FleetSessionId;
-        fixture.wireIdentity.assignmentAuthoritySessionId =
-            manifest.Assignment.AssignmentAuthoritySessionId;
-        fixture.wireIdentity.assignmentRevision = 7;
-        fixture.wireIdentity.assignmentDigest = WireDigest(manifest.Assignment.AssignmentDigest);
+        manifest.CreatedAtUtc = 1776556800123LL + variant;
+        manifest.Source.SourceDatasetDigest = Hash("dataset-" + tag);
+        manifest.Source.SourceByteSize = 1000 + variant;
+        manifest.Source.SourceDisplayFileName = "show.npz";
+        manifest.FrameCount = frameCount;
+        manifest.RouteSlotCount = routeCount;
+        manifest.ShowOriginLatitudeE7 = 319324710;
+        manifest.ShowOriginLongitudeE7 = 1186385310;
+        manifest.WaypointGeneratorVersion = "generator-v2";
+        manifest.GeneratorInputDigest = Hash("generator-input-" + tag);
+        for (std::int32_t slot = 0; slot < routeCount; ++slot)
+        {
+            std::string relative;
+            artifact::Error error;
+            Expect(artifact::BuildRouteRelativePath(slot, relative, error),
+                error.Detail);
+            const std::string bytes = RouteBytes(slot, frameCount, variant);
+            Write(fixture.workspace->root / "Current" / fs::u8path(relative), bytes);
+            artifact::RouteRecord record;
+            record.RouteSlotIndex = slot;
+            record.RelativePath = relative;
+            record.FileByteSize = static_cast<std::int64_t>(bytes.size());
+            record.RouteArtifactDigest = Hash(bytes);
+            manifest.Routes.push_back(std::move(record));
+        }
+        Finalize(fixture);
         return fixture;
     }
 
-    void ReplaceCurrentWithDifferentIdentity(ArtifactFixture& fixture)
+    void ReplaceCurrent(
+        ArtifactFixture& destination,
+        const ArtifactFixture& replacement)
     {
-        fixture.manifest.CreatedAtUtc += 1;
-        artifact::Error error;
-        Expect(artifact::ComputeArtifactSetId(
-            artifact::BuildIdentityFromManifest(fixture.manifest),
-            fixture.manifest.ArtifactSetId, error), "replacement set id failed");
-        Expect(artifact::ComputeArtifactSetDigest(
-            fixture.manifest, fixture.manifest.ArtifactSetDigest, error),
-            "replacement set digest failed");
-        std::string manifestBytes, readyBytes;
-        Expect(artifact::SerializeCanonicalManifest(
-            fixture.manifest, manifestBytes, error), "replacement manifest failed");
-        Expect(artifact::SerializeReadyMarker(
-            fixture.manifest.ArtifactSetId,
-            fixture.manifest.ArtifactSetDigest, readyBytes, error),
-            "replacement READY failed");
-        Write(fixture.root->root / "Current" / "manifest.json", manifestBytes);
-        Write(fixture.root->root / "Current" / "READY", readyBytes);
+        std::error_code error;
+        fs::remove_all(destination.workspace->root / "Current", error);
+        Expect(!error, "Current removal failed");
+        fs::copy(replacement.workspace->root / "Current",
+            destination.workspace->root / "Current",
+            fs::copy_options::recursive, error);
+        Expect(!error, "Current replacement failed");
+    }
+
+    FrozenAssignmentAcceptedSnapshot MakeFrozen(
+        const ArtifactFixture& artifactFixture,
+        const std::uint32_t matchedCount = 0,
+        const std::uint32_t vacantCount = 0,
+        const std::uint32_t spareCount = 0,
+        const std::uint32_t excludedCount = 0,
+        const std::uint8_t digestSeed = 0x51,
+        const std::string& authoritySession = "authority-a",
+        const std::uint64_t revision = 1)
+    {
+        FrozenAssignmentAcceptedSnapshot frozen;
+        frozen.sourceDatasetDigest = WireDigest(
+            artifactFixture.manifest.Source.SourceDatasetDigest);
+        frozen.normalizedShowOriginLatitudeE7 =
+            artifactFixture.manifest.ShowOriginLatitudeE7;
+        frozen.normalizedShowOriginLongitudeE7 =
+            artifactFixture.manifest.ShowOriginLongitudeE7;
+        frozen.identity.fleetSessionId = "fleet-v2e";
+        frozen.identity.assignmentAuthoritySessionId = authoritySession;
+        frozen.identity.assignmentRevision = revision;
+        frozen.fleetRevisionAtCapture = 100;
+        frozen.routeDatasetGeneration = 999;
+        frozen.routeSlotCount = static_cast<std::uint32_t>(
+            artifactFixture.manifest.RouteSlotCount);
+        frozen.matchedCount = matchedCount == 0
+            ? frozen.routeSlotCount - vacantCount : matchedCount;
+        frozen.vacantCount = vacantCount;
+        frozen.spareCount = spareCount;
+        frozen.excludedCount = excludedCount;
+        frozen.completionMode = vacantCount == 0
+            ? dspgcs::FrozenAssignmentCompletionMode::Full
+            : dspgcs::FrozenAssignmentCompletionMode::Degraded;
+        frozen.freezePolicy = vacantCount == 0
+            ? dspgcs::FrozenAssignmentFreezePolicy::RequireFull
+            : dspgcs::FrozenAssignmentFreezePolicy::AllowDegraded;
+        frozen.frozenAtUtcMs = 1776556801000LL;
+        frozen.canonicalPayloadDigest.fill(digestSeed);
+        for (std::uint32_t slot = 0; slot < frozen.matchedCount; ++slot)
+        {
+            frozen.matchedMappings.push_back({
+                "drone-" + std::to_string(slot),
+                static_cast<std::int32_t>(slot) });
+        }
+        return frozen;
+    }
+
+    std::shared_ptr<const FrozenAssignmentAcceptedSnapshot> AcceptFrozen(
+        FrozenAssignmentStore& store,
+        FrozenAssignmentAcceptedSnapshot frozen)
+    {
+        store.SynchronizeFleetSession(frozen.identity.fleetSessionId);
+        const std::string fleet = frozen.identity.fleetSessionId;
+        const auto accepted = store.Accept(std::move(frozen));
+        Expect(accepted.accepted, "Frozen fixture was not accepted");
+        const auto snapshot = store.GetAcceptedSnapshot(fleet);
+        Expect(snapshot != nullptr, "Frozen accepted snapshot is missing");
+        return snapshot;
     }
 
     dspgcs::UploadJobCommandDTO StartCommand(
         const ArtifactFixture& fixture,
+        const FrozenAssignmentAcceptedSnapshot& frozen,
         const std::string& jobId = Id('1'),
-        const std::string& commandId = Id('2'))
+        const std::string& commandId = Id('2'),
+        const std::uint32_t concurrency = 8)
     {
         dspgcs::UploadJobCommandDTO command;
         command.clientCommandId = commandId;
         command.uploadJobId = jobId;
         command.commandType = dspgcs::UploadJobCommandType::Start;
-        command.requestedMaxConcurrentUploads = 8;
-        command.artifactIdentity = fixture.wireIdentity;
+        command.requestedMaxConcurrentUploads = concurrency;
+        command.artifactBinding.artifactSetId = fixture.manifest.ArtifactSetId;
+        command.artifactBinding.artifactSetDigest =
+            WireDigest(fixture.manifest.ArtifactSetDigest);
+        command.frozenAssignmentBinding.fleetSessionId =
+            frozen.identity.fleetSessionId;
+        command.frozenAssignmentBinding.assignmentAuthoritySessionId =
+            frozen.identity.assignmentAuthoritySessionId;
+        command.frozenAssignmentBinding.assignmentRevision =
+            frozen.identity.assignmentRevision;
+        command.frozenAssignmentBinding.assignmentDigest =
+            frozen.canonicalPayloadDigest;
         return command;
     }
 
-    std::vector<std::uint8_t> EncodeCommand(const dspgcs::UploadJobCommandDTO& command)
+    std::vector<std::uint8_t> EncodeCommand(
+        const dspgcs::UploadJobCommandDTO& command)
     {
-        std::vector<std::uint8_t> bytes; std::string error;
+        std::vector<std::uint8_t> bytes;
+        std::string error;
         Expect(dspgcs::EncodeUploadJobCommand(command, bytes, error), error);
         return bytes;
     }
 
-    void AcceptFrozen(FrozenAssignmentStore& store, const ArtifactFixture& fixture)
+    dspgcs::UploadJobSnapshotDTO WaitForStart(
+        ConsoleUploadJobAuthority& authority,
+        const std::string& jobId,
+        const std::chrono::seconds timeout = std::chrono::seconds(30))
     {
-        store.SynchronizeFleetSession(fixture.frozen->identity.fleetSessionId);
-        Expect(store.Accept(*fixture.frozen).accepted, "frozen assignment not accepted");
-    }
-
-    void WaitForValidation(ConsoleUploadJobAuthority& authority, const std::string& jobId)
-    {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (std::chrono::steady_clock::now() < deadline)
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (authority.GetPendingStartCount() != 0 &&
+            std::chrono::steady_clock::now() < deadline)
         {
             authority.Tick();
-            const auto* snapshot = authority.FindCurrentSnapshotForTest(jobId);
-            if (snapshot && snapshot->jobState != dspgcs::UploadJobState::Validating) return;
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        throw std::runtime_error("Artifact validation timed out");
+        authority.Tick();
+        Expect(authority.GetPendingStartCount() == 0,
+            "PendingStart exceeded its test deadline");
+        dspgcs::UploadJobSnapshotRequestDTO request;
+        request.clientRequestId = Id('e');
+        request.uploadJobId = jobId;
+        return authority.BuildSnapshot(request);
+    }
+
+    void WaitForConsumerAccepted(
+        ConsoleArtifactConsumerV2& consumer,
+        const std::chrono::seconds timeout = std::chrono::seconds(30))
+    {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (!consumer.GetAcceptedSnapshot() &&
+            std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        Expect(consumer.GetAcceptedSnapshot() != nullptr,
+            "Artifact consumer acceptance exceeded its test deadline");
     }
 
     void VerifyWireContract()
     {
         auto fixture = MakeArtifact("wire");
-        const auto command = StartCommand(fixture);
-        std::vector<std::uint8_t> encoded; std::string error;
-        Expect(dspgcs::EncodeUploadJobCommand(command, encoded, error), error);
+        auto frozen = MakeFrozen(fixture);
+        auto command = StartCommand(fixture, frozen);
+        const auto encoded = EncodeCommand(command);
+        std::string error;
         dspgcs::UploadJobCommandDTO decoded;
         Expect(dspgcs::DecodeUploadJobCommand(encoded, decoded, error), error);
-        Expect(decoded.clientCommandId == command.clientCommandId &&
-            dspgcs::UploadArtifactIdentityEqual(decoded.artifactIdentity,
-                command.artifactIdentity), "command round trip changed identity");
-        auto malformed = command;
-        malformed.clientCommandId = "short";
-        Expect(!dspgcs::EncodeUploadJobCommand(malformed, encoded, error),
-            "noncanonical command id accepted");
-        malformed = command; malformed.clientCommandId[0] = 'A';
-        Expect(!dspgcs::EncodeUploadJobCommand(malformed, encoded, error),
-            "uppercase command id accepted");
-        malformed = command; malformed.payloadSchemaVersion = 2;
-        Expect(!dspgcs::EncodeUploadJobCommand(malformed, encoded, error),
-            "version mismatch accepted");
-        std::vector<std::uint8_t> oversized(dspgcs::MaxFrameBytes + 1, 0);
-        dspgcs::MessageEnvelope envelope; std::vector<std::uint8_t> payload;
-        Expect(!dspgcs::DecodeEnvelope(oversized, envelope, payload),
-            "oversize frame accepted");
-        Expect(static_cast<std::uint16_t>(dspgcs::UploadJobMessageTypes::Command) == 9 &&
-            static_cast<std::uint16_t>(dspgcs::UploadJobMessageTypes::RouteStateDelta) == 14,
-            "message type values changed");
-    }
+        Expect(decoded.payloadSchemaVersion == 2 &&
+            dspgcs::UploadArtifactBindingEqual(
+                decoded.artifactBinding, command.artifactBinding) &&
+            dspgcs::UploadFrozenAssignmentBindingEqual(
+                decoded.frozenAssignmentBinding,
+                command.frozenAssignmentBinding),
+            "schema2 command round trip changed a binding");
 
-    void VerifyAuthorityAndArtifactGate()
-    {
-        auto fixture = MakeArtifact("authority");
-        FrozenAssignmentStore store; AcceptFrozen(store, fixture);
-        ConsoleArtifactConsumer consumer(fixture.root->root.u8string());
-        ConsoleUploadJobAuthority authority(
-            fixture.root->root.u8string(), &consumer, &store);
-        auto start = StartCommand(fixture);
-        const auto payload = EncodeCommand(start);
-        const auto first = authority.HandleCommand("client-session", start, payload);
-        Expect(first.status == dspgcs::UploadJobCommandAckStatus::Accepted,
-            "valid Start was rejected");
-        const auto duplicate = authority.HandleCommand("client-session", start, payload);
-        Expect(duplicate.authoritativeJobRevision == first.authoritativeJobRevision &&
-            authority.GetJobCount() == 1, "duplicate Start was not idempotent");
-        auto conflict = start; conflict.requestedMaxConcurrentUploads = 9;
-        const auto conflictAck = authority.HandleCommand(
-            "client-session", conflict, EncodeCommand(conflict));
-        Expect(conflictAck.resultCode == dspgcs::UploadJobErrorCode::IdempotencyConflict,
-            "ClientCommandID conflict not rejected");
-        WaitForValidation(authority, start.uploadJobId);
-        const auto* ready = authority.FindCurrentSnapshotForTest(start.uploadJobId);
-        Expect(ready && ready->jobState == dspgcs::UploadJobState::Ready &&
-            ready->artifactGateState == dspgcs::UploadArtifactGateState::Validated,
-            "valid Artifact did not reach Ready");
+        auto invalid = command;
+        invalid.artifactBinding.artifactSetDigest.fill(0);
+        std::vector<std::uint8_t> ignored;
+        Expect(!dspgcs::EncodeUploadJobCommand(invalid, ignored, error),
+            "zero Artifact digest was accepted");
+        invalid = command;
+        invalid.frozenAssignmentBinding.assignmentDigest.fill(0);
+        Expect(!dspgcs::EncodeUploadJobCommand(invalid, ignored, error),
+            "zero Assignment digest was accepted");
 
-        dspgcs::UploadJobCommandDTO pause;
-        pause.clientCommandId = Id('9');
-        pause.uploadJobId = start.uploadJobId;
-        pause.commandType = dspgcs::UploadJobCommandType::Pause;
-        pause.expectedJobRevision = ready->jobRevision;
-        const auto pausePayload = EncodeCommand(pause);
-        dspgcs::MessageEnvelope pauseEnvelope;
-        pauseEnvelope.messageType = dspgcs::UploadJobMessageTypes::Command;
-        pauseEnvelope.sourceId = "UE-test";
-        pauseEnvelope.sessionId = "loss-retry-client";
-        pauseEnvelope.correlationId = pause.clientCommandId;
-        dspgcs::TransportFrame pauseFrame{ dspgcs::MakeFrame(pauseEnvelope, pausePayload) };
+        auto legacyBytes = encoded;
+        const std::uint16_t legacyVersion = 1;
+        std::memcpy(legacyBytes.data(), &legacyVersion, sizeof(legacyVersion));
+        Expect(!dspgcs::DecodeUploadJobCommand(legacyBytes, decoded, error) &&
+            error.find("Unsupported") != std::string::npos,
+            "schema1 payload was not explicitly rejected");
+
+        dspgcs::MessageEnvelope envelope;
+        envelope.messageType = dspgcs::UploadJobMessageTypes::Command;
+        envelope.sessionId = "legacy-client";
+        envelope.correlationId = command.clientCommandId;
         DSPGCSUploadJobReceiver receiver;
-        // The first send is deliberately lost. The same encoded command is retried.
-        receiver.EnqueueFrame(pauseFrame);
-        std::vector<dspgcs::UploadJobCommandAckDTO> receivedAcks;
+        receiver.EnqueueFrame({ dspgcs::MakeFrame(envelope, legacyBytes) });
+        TempRoot root("legacy-receiver");
+        ConsoleUploadJobAuthority authority(root.root.u8string(), nullptr, nullptr);
+        std::vector<dspgcs::UploadJobCommandAckDTO> acknowledgements;
         receiver.ProcessPending(authority,
-            [&receivedAcks](const auto& ack) { receivedAcks.push_back(ack); return true; },
-            {}, {});
-        receiver.EnqueueFrame(pauseFrame);
-        receiver.ProcessPending(authority,
-            [&receivedAcks](const auto& ack) { receivedAcks.push_back(ack); return true; },
-            {}, {});
-        Expect(receivedAcks.size() == 2 &&
-            receivedAcks[0].authoritativeJobRevision ==
-                receivedAcks[1].authoritativeJobRevision,
-            "lost/retried or duplicate command changed authority twice");
-
-        auto collision = StartCommand(fixture, start.uploadJobId, Id('3'));
-        collision.artifactIdentity.artifactSetDigest[0] ^= 1;
-        const auto collisionAck = authority.HandleCommand(
-            "client-session", collision, EncodeCommand(collision));
-        Expect(collisionAck.resultCode == dspgcs::UploadJobErrorCode::JobIdCollision,
-            "JobID collision not rejected");
-
-        auto stale = start; stale.clientCommandId = Id('4');
-        stale.commandType = dspgcs::UploadJobCommandType::Pause;
-        stale.expectedJobRevision = ready->jobRevision - 1;
-        stale.requestedMaxConcurrentUploads = 0;
-        stale.artifactIdentity = {};
-        const auto staleAck = authority.HandleCommand(
-            "client-session", stale, EncodeCommand(stale));
-        Expect(staleAck.resultCode == dspgcs::UploadJobErrorCode::StaleJobRevision,
-            "stale revision accepted");
-
-        const auto* paused = authority.FindCurrentSnapshotForTest(start.uploadJobId);
-        dspgcs::UploadJobCommandDTO later;
-        later.clientCommandId = Id('c'); later.uploadJobId = start.uploadJobId;
-        later.commandType = dspgcs::UploadJobCommandType::SetMaxConcurrentUploads;
-        later.expectedJobRevision = paused->jobRevision;
-        later.requestedMaxConcurrentUploads = 4;
-        dspgcs::UploadJobCommandDTO earlier;
-        earlier.clientCommandId = Id('d'); earlier.uploadJobId = start.uploadJobId;
-        earlier.commandType = dspgcs::UploadJobCommandType::Resume;
-        earlier.expectedJobRevision = paused->jobRevision;
-        Expect(authority.HandleCommand("reordered-client", later,
-            EncodeCommand(later)).status ==
-            dspgcs::UploadJobCommandAckStatus::Accepted,
-            "later reordered command was not accepted");
-        Expect(authority.HandleCommand("reordered-client", earlier,
-            EncodeCommand(earlier)).resultCode ==
-            dspgcs::UploadJobErrorCode::StaleJobRevision,
-            "reordered earlier command did not become stale");
-
-        ConsoleUploadJobAuthority missing(fixture.root->root.u8string(), nullptr, &store);
-        auto missingStart = StartCommand(fixture, Id('5'), Id('6'));
-        Expect(missing.HandleCommand("client", missingStart, EncodeCommand(missingStart)).resultCode ==
-            dspgcs::UploadJobErrorCode::ArtifactNotValidated,
-            "missing Artifact authority accepted");
-        FrozenAssignmentStore emptyStore;
-        emptyStore.SynchronizeFleetSession(fixture.wireIdentity.fleetSessionId);
-        ConsoleUploadJobAuthority frozenMismatch(
-            fixture.root->root.u8string(), &consumer, &emptyStore);
-        auto frozenStart = StartCommand(fixture, Id('7'), Id('8'));
-        Expect(frozenMismatch.HandleCommand("client", frozenStart,
-            EncodeCommand(frozenStart)).resultCode ==
-            dspgcs::UploadJobErrorCode::FrozenAssignmentMismatch,
-            "Frozen Assignment mismatch accepted");
-
-        {
-            auto identityFixture = MakeArtifact("identity-mismatch");
-            FrozenAssignmentStore identityStore; AcceptFrozen(identityStore, identityFixture);
-            ConsoleArtifactConsumer identityConsumer(identityFixture.root->root.u8string());
-            ConsoleUploadJobAuthority identityAuthority(identityFixture.root->root.u8string(),
-                &identityConsumer, &identityStore);
-            auto identityStart = StartCommand(identityFixture, Id('0'), Id('1'));
-            identityStart.artifactIdentity.artifactSetDigest[0] ^= 1;
-            Expect(identityAuthority.HandleCommand("identity-client", identityStart,
-                EncodeCommand(identityStart)).status ==
-                dspgcs::UploadJobCommandAckStatus::Accepted,
-                "identity mismatch did not enter asynchronous validation");
-            WaitForValidation(identityAuthority, identityStart.uploadJobId);
-            const auto* rejected = identityAuthority.FindCurrentSnapshotForTest(
-                identityStart.uploadJobId);
-            Expect(rejected && rejected->jobState == dspgcs::UploadJobState::Failed &&
-                rejected->firstFailure.jobErrorCode ==
-                    dspgcs::UploadJobErrorCode::ArtifactIdentityMismatch,
-                "Artifact identity mismatch was not rejected authoritatively");
-        }
-
-        {
-            auto replacedFixture = MakeArtifact("current-replaced");
-            FrozenAssignmentStore replacedStore; AcceptFrozen(replacedStore, replacedFixture);
-            ConsoleArtifactConsumer replacedConsumer(replacedFixture.root->root.u8string());
-            ConsoleUploadJobAuthority replacedAuthority(replacedFixture.root->root.u8string(),
-                &replacedConsumer, &replacedStore);
-            const auto replacedStart = StartCommand(replacedFixture, Id('2'), Id('3'));
-            ReplaceCurrentWithDifferentIdentity(replacedFixture);
-            Expect(replacedAuthority.HandleCommand("replaced-client", replacedStart,
-                EncodeCommand(replacedStart)).status ==
-                dspgcs::UploadJobCommandAckStatus::Accepted,
-                "replaced Current did not enter asynchronous validation");
-            WaitForValidation(replacedAuthority, replacedStart.uploadJobId);
-            const auto* rejected = replacedAuthority.FindCurrentSnapshotForTest(
-                replacedStart.uploadJobId);
-            Expect(rejected && rejected->jobState == dspgcs::UploadJobState::Failed &&
-                rejected->firstFailure.jobErrorCode ==
-                    dspgcs::UploadJobErrorCode::ArtifactIdentityMismatch,
-                "Current replaced before Start was not rejected");
-        }
-
-        ConsoleUploadJobAuthority bounded(fixture.root->root.u8string(), nullptr, nullptr);
-        for (std::uint64_t index = 1; index <= 1100; ++index)
-        {
-            dspgcs::UploadJobCommandDTO command;
-            command.clientCommandId = NumericId(index);
-            command.uploadJobId = Id('f');
-            command.commandType = dspgcs::UploadJobCommandType::Pause;
-            command.expectedJobRevision = 1;
-            bounded.HandleCommand("bounded-client", command, EncodeCommand(command));
-        }
-        Expect(bounded.GetIdempotencyEntryCount() <=
-            ConsoleUploadJobAuthority::MaxIdempotencyEntries,
-            "idempotency cache grew without bound");
+            [&acknowledgements](const auto& acknowledgement)
+            {
+                acknowledgements.push_back(acknowledgement);
+                return true;
+            }, {}, {});
+        Expect(acknowledgements.size() == 1 &&
+            acknowledgements.front().resultCode ==
+                dspgcs::UploadJobErrorCode::UnsupportedProtocolVersion,
+            "schema1 receiver rejection did not return UnsupportedProtocolVersion");
+        Expect(static_cast<std::uint16_t>(
+            dspgcs::UploadJobMessageTypes::Command) == 9 &&
+            static_cast<std::uint16_t>(
+                dspgcs::UploadJobMessageTypes::RouteStateDelta) == 14,
+            "Upload Job message type values changed");
     }
 
-    bool TryGateOnAnotherThread(const fs::path& root, bool& recovered)
+    dspgcs::UploadJobSnapshotDTO RunStart(
+        ArtifactFixture& fixture,
+        FrozenAssignmentAcceptedSnapshot frozenValue,
+        const std::string& jobId,
+        const std::string& commandId,
+        const std::function<void(ConsoleArtifactConsumerV2&,
+            FrozenAssignmentStore&, ConsoleUploadJobAuthority&)>& beforeTick = {})
     {
-        bool acquired = false;
-        std::thread thread([&]
+        FrozenAssignmentStore store;
+        const auto frozen = AcceptFrozen(store, std::move(frozenValue));
+        ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+        ConsoleUploadJobAuthority authority(
+            fixture.workspace->root.u8string(), &consumer, &store);
+        const auto start = StartCommand(fixture, *frozen, jobId, commandId);
+        const auto acknowledgement = authority.HandleCommand(
+            "client", start, EncodeCommand(start));
+        Expect(acknowledgement.status ==
+            dspgcs::UploadJobCommandAckStatus::Accepted,
+            "Start was not accepted for validation");
+        Expect(authority.GetJobCount() == 0 &&
+            authority.GetPendingStartCount() == 1,
+            "PendingStart was exposed as an executable Job");
+        if (beforeTick) beforeTick(consumer, store, authority);
+        const auto outcome = WaitForStart(authority, jobId);
+        if (outcome.resultCode != dspgcs::UploadJobErrorCode::None)
         {
-            dronegcs::route_artifact::ArtifactReadLease gate;
-            std::string error; bool localRecovered = false;
-            acquired = gate.TryAcquire(root.wstring(), localRecovered, error) ==
-                artifact::ArtifactReadLeaseAcquireResult::Acquired;
-            recovered = localRecovered;
+            Expect(authority.GetJobCount() == 0,
+                "failed PendingStart published an executable Job");
+            artifact::ArtifactReadLease gate;
+            bool recovered = false;
+            std::string error;
+            Expect(gate.TryAcquire(fixture.workspace->root.wstring(), recovered, error) ==
+                artifact::ArtifactReadLeaseAcquireResult::Acquired,
+                "failed PendingStart leaked an Artifact read lease");
+        }
+        return outcome;
+    }
+
+    void VerifyCompatibilityGate()
+    {
+        {
+            auto fixture = MakeArtifact("compatible");
+            auto frozen = MakeFrozen(fixture);
+            frozen.routeDatasetGeneration = 123456789;
+            FrozenAssignmentStore store;
+            const auto accepted = AcceptFrozen(store, frozen);
+            ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+            ConsoleUploadJobAuthority authority(
+                fixture.workspace->root.u8string(), &consumer, &store);
+            const auto start = StartCommand(fixture, *accepted);
+            const auto payload = EncodeCommand(start);
+            const auto first = authority.HandleCommand("client", start, payload);
+            const auto duplicate = authority.HandleCommand("client", start, payload);
+            Expect(first.status == dspgcs::UploadJobCommandAckStatus::Accepted &&
+                duplicate.authoritativeJobRevision == first.authoritativeJobRevision &&
+                authority.GetPendingStartCount() == 1,
+                "PendingStart idempotency created duplicate validation");
+            auto conflictingPayload = start;
+            ++conflictingPayload.requestedMaxConcurrentUploads;
+            Expect(authority.HandleCommand("client", conflictingPayload,
+                EncodeCommand(conflictingPayload)).resultCode ==
+                    dspgcs::UploadJobErrorCode::IdempotencyConflict,
+                "same idempotency key accepted a different Start payload");
+            dspgcs::UploadJobCommandDTO pendingCancel;
+            pendingCancel.clientCommandId = Id('0');
+            pendingCancel.uploadJobId = start.uploadJobId;
+            pendingCancel.commandType = dspgcs::UploadJobCommandType::Cancel;
+            pendingCancel.expectedJobRevision = first.authoritativeJobRevision;
+            Expect(authority.HandleCommand("client", pendingCancel,
+                EncodeCommand(pendingCancel)).resultCode ==
+                    dspgcs::UploadJobErrorCode::UnknownJob &&
+                authority.GetPendingStartCount() == 1 &&
+                authority.GetJobCount() == 0,
+                "PendingStart cancellation was confused with executable Job cancellation");
+            const auto ready = WaitForStart(authority, start.uploadJobId);
+            Expect(ready.resultCode == dspgcs::UploadJobErrorCode::None &&
+                ready.jobState == dspgcs::UploadJobState::Ready &&
+                ready.matchedCount == 2 && authority.GetJobCount() == 1,
+                "matching StableSource did not materialize one Ready Job");
+            auto conflict = start;
+            conflict.clientCommandId = Id('3');
+            conflict.artifactBinding.artifactSetDigest[0] ^= 1;
+            Expect(authority.HandleCommand("client", conflict,
+                EncodeCommand(conflict)).resultCode ==
+                    dspgcs::UploadJobErrorCode::JobIdCollision,
+                "different binding reused an existing JobID");
+        }
+        {
+            auto fixture = MakeArtifact("fleet-session-stale");
+            FrozenAssignmentStore store;
+            const auto frozen = MakeFrozen(fixture);
+            store.SynchronizeFleetSession("different-current-fleet");
+            ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+            ConsoleUploadJobAuthority authority(
+                fixture.workspace->root.u8string(), &consumer, &store);
+            const auto start = StartCommand(fixture, frozen, Id('1'), Id('2'));
+            Expect(authority.HandleCommand("client", start,
+                EncodeCommand(start)).resultCode ==
+                    dspgcs::UploadJobErrorCode::FleetSessionStale,
+                "stale FleetSession was not distinguished at Start");
+        }
+        {
+            auto fixture = MakeArtifact("frozen-missing");
+            FrozenAssignmentStore store;
+            const auto frozen = MakeFrozen(fixture);
+            store.SynchronizeFleetSession(frozen.identity.fleetSessionId);
+            ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+            ConsoleUploadJobAuthority authority(
+                fixture.workspace->root.u8string(), &consumer, &store);
+            const auto start = StartCommand(fixture, frozen, Id('3'), Id('4'));
+            Expect(authority.HandleCommand("client", start,
+                EncodeCommand(start)).resultCode ==
+                    dspgcs::UploadJobErrorCode::FrozenAssignmentMissing,
+                "missing Frozen Assignment was not distinguished at Start");
+        }
+        {
+            auto fixture = MakeArtifact("frozen-exact-mismatch");
+            FrozenAssignmentStore store;
+            const auto frozen = AcceptFrozen(store, MakeFrozen(fixture));
+            ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+            ConsoleUploadJobAuthority authority(
+                fixture.workspace->root.u8string(), &consumer, &store);
+            auto start = StartCommand(fixture, *frozen, Id('5'), Id('6'));
+            start.frozenAssignmentBinding.assignmentDigest[0] ^= 1;
+            Expect(authority.HandleCommand("client", start,
+                EncodeCommand(start)).resultCode ==
+                    dspgcs::UploadJobErrorCode::FrozenAssignmentIdentityMismatch,
+                "exact Frozen identity mismatch was not distinguished at Start");
+        }
+        {
+            auto fixture = MakeArtifact("artifact-exact-mismatch");
+            FrozenAssignmentStore store;
+            const auto frozen = AcceptFrozen(store, MakeFrozen(fixture));
+            ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+            ConsoleUploadJobAuthority authority(
+                fixture.workspace->root.u8string(), &consumer, &store);
+            auto start = StartCommand(fixture, *frozen, Id('7'), Id('8'));
+            start.artifactBinding.artifactSetDigest[0] ^= 1;
+            authority.HandleCommand("client", start, EncodeCommand(start));
+            const auto outcome = WaitForStart(authority, start.uploadJobId);
+            Expect(outcome.resultCode ==
+                    dspgcs::UploadJobErrorCode::ArtifactIdentityMismatch &&
+                authority.GetJobCount() == 0,
+                "exact Artifact identity mismatch did not reject Start");
+        }
+        {
+            auto fixture = MakeArtifact("dataset-mismatch");
+            auto frozen = MakeFrozen(fixture);
+            frozen.sourceDatasetDigest[0] ^= 1;
+            const auto outcome = RunStart(
+                fixture, frozen, Id('4'), Id('5'));
+            Expect(outcome.resultCode ==
+                dspgcs::UploadJobErrorCode::StableSourceDatasetMismatch,
+                "dataset mismatch did not fail distinctly");
+        }
+        {
+            auto fixture = MakeArtifact("lat-mismatch");
+            auto frozen = MakeFrozen(fixture);
+            ++frozen.normalizedShowOriginLatitudeE7;
+            const auto outcome = RunStart(
+                fixture, frozen, Id('6'), Id('7'));
+            Expect(outcome.resultCode ==
+                dspgcs::UploadJobErrorCode::StableSourceOriginMismatch,
+                "latitude mismatch did not fail distinctly");
+        }
+        {
+            auto fixture = MakeArtifact("lon-mismatch");
+            auto frozen = MakeFrozen(fixture);
+            ++frozen.normalizedShowOriginLongitudeE7;
+            const auto outcome = RunStart(
+                fixture, frozen, Id('8'), Id('9'));
+            Expect(outcome.resultCode ==
+                dspgcs::UploadJobErrorCode::StableSourceOriginMismatch,
+                "longitude mismatch did not fail distinctly");
+        }
+        {
+            auto fixture = MakeArtifact("domain-mismatch");
+            auto frozen = MakeFrozen(fixture);
+            ++frozen.routeSlotCount;
+            ++frozen.vacantCount;
+            frozen.completionMode = dspgcs::FrozenAssignmentCompletionMode::Degraded;
+            frozen.freezePolicy = dspgcs::FrozenAssignmentFreezePolicy::AllowDegraded;
+            const auto outcome = RunStart(
+                fixture, frozen, Id('a'), Id('b'));
+            Expect(outcome.resultCode ==
+                dspgcs::UploadJobErrorCode::RouteDomainMismatch,
+                "route domain mismatch did not fail distinctly");
+        }
+        {
+            auto fixture = MakeArtifact("degraded", 5, 1);
+            auto frozen = MakeFrozen(fixture, 3, 2, 4, 1);
+            FrozenAssignmentStore store;
+            const auto accepted = AcceptFrozen(store, frozen);
+            ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+            ConsoleUploadJobAuthority authority(
+                fixture.workspace->root.u8string(), &consumer, &store);
+            const auto start = StartCommand(fixture, *accepted, Id('c'), Id('d'));
+            authority.HandleCommand("client", start, EncodeCommand(start));
+            const auto ready = WaitForStart(authority, start.uploadJobId);
+            Expect(ready.resultCode == dspgcs::UploadJobErrorCode::None &&
+                ready.matchedCount == 3 && ready.vacantCount == 2 &&
+                ready.spareCount == 4 && ready.excludedCount == 1 &&
+                ready.waitingCount == 3,
+                "degraded Frozen policy did not create matched-only targets");
+        }
+    }
+
+    void VerifyMissingRouteRecord()
+    {
+        auto fixture = MakeArtifact("missing-route", 3, 1);
+        FrozenAssignmentStore store;
+        const auto frozen = AcceptFrozen(store, MakeFrozen(fixture));
+        ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+        ConsoleUploadJobAuthority authority(
+            fixture.workspace->root.u8string(), &consumer, &store);
+        const auto start = StartCommand(fixture, *frozen, Id('1'), Id('2'));
+        authority.HandleCommand("client", start, EncodeCommand(start));
+        WaitForConsumerAccepted(consumer);
+        auto mutableAccepted = std::const_pointer_cast<AcceptedRouteArtifactV2>(
+            consumer.GetAcceptedSnapshot());
+        mutableAccepted->routes.erase(mutableAccepted->routes.begin() + 1);
+        const auto outcome = WaitForStart(authority, start.uploadJobId);
+        Expect(outcome.resultCode ==
+            dspgcs::UploadJobErrorCode::RouteRecordMissing &&
+            authority.GetJobCount() == 0,
+            "missing held RouteRecord created a partial Job");
+    }
+
+    void VerifyToctouAndImmutableOwnership()
+    {
+        {
+            auto fixture = MakeArtifact("frozen-swap", 2, 2);
+            FrozenAssignmentStore store;
+            const auto frozenA = AcceptFrozen(store, MakeFrozen(fixture));
+            ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+            ConsoleUploadJobAuthority authority(
+                fixture.workspace->root.u8string(), &consumer, &store);
+            const auto start = StartCommand(fixture, *frozenA, Id('3'), Id('4'));
+            authority.HandleCommand("client", start, EncodeCommand(start));
+            auto frozenB = MakeFrozen(
+                fixture, 0, 0, 0, 0, 0x62, "authority-b", 1);
+            Expect(store.Accept(std::move(frozenB)).accepted,
+                "replacement Frozen was not accepted");
+            const auto outcome = WaitForStart(authority, start.uploadJobId);
+            Expect(outcome.resultCode ==
+                dspgcs::UploadJobErrorCode::FrozenAssignmentIdentityMismatch &&
+                authority.GetJobCount() == 0,
+                "Frozen replacement during validation was not rejected");
+        }
+        {
+            auto fixtureA = MakeArtifact("artifact-swap-a", 2, 2, 1);
+            auto fixtureB = MakeArtifact("artifact-swap-b", 2, 2, 9);
+            FrozenAssignmentStore store;
+            const auto frozen = AcceptFrozen(store, MakeFrozen(fixtureA));
+            ConsoleArtifactConsumerV2 consumer(fixtureA.workspace->root.u8string());
+            ConsoleUploadJobAuthority authority(
+                fixtureA.workspace->root.u8string(), &consumer, &store);
+            const auto start = StartCommand(fixtureA, *frozen, Id('5'), Id('6'));
+            authority.HandleCommand("client", start, EncodeCommand(start));
+            WaitForConsumerAccepted(consumer);
+            ReplaceCurrent(fixtureA, fixtureB);
+            const auto outcome = WaitForStart(authority, start.uploadJobId);
+            Expect((outcome.resultCode ==
+                    dspgcs::UploadJobErrorCode::ArtifactCurrentChanged ||
+                outcome.resultCode ==
+                    dspgcs::UploadJobErrorCode::ArtifactIdentityMismatch) &&
+                authority.GetJobCount() == 0,
+                "Artifact replacement before lease was not rejected");
+        }
+        {
+            auto fixtureA = MakeArtifact("immutable-a", 2, 2, 2);
+            auto fixtureB = MakeArtifact("immutable-b", 2, 2, 17);
+            FrozenAssignmentStore store;
+            const auto frozenA = AcceptFrozen(store, MakeFrozen(fixtureA));
+            ConsoleArtifactConsumerV2 consumer(fixtureA.workspace->root.u8string());
+            ConsoleUploadJobAuthority authority(
+                fixtureA.workspace->root.u8string(), &consumer, &store);
+            const auto start = StartCommand(fixtureA, *frozenA, Id('7'), Id('8'));
+            authority.HandleCommand("client", start, EncodeCommand(start));
+            const auto ready = WaitForStart(authority, start.uploadJobId);
+            Expect(ready.jobState == dspgcs::UploadJobState::Ready,
+                "immutable ownership fixture did not reach Ready");
+            const auto targetA = authority.FindTargetMetadataForTest(
+                start.uploadJobId, 0);
+            Expect(targetA.has_value(), "Job A target metadata is missing");
+            auto executionViewA = authority.GetExecutionView(start.uploadJobId);
+            Expect(executionViewA.has_value() &&
+                executionViewA->artifactSnapshot &&
+                executionViewA->frozenSnapshot &&
+                executionViewA->artifactReadLease &&
+                executionViewA->targets.size() == 2,
+                "production immutable execution view is incomplete");
+            const auto heldArtifactA = executionViewA->artifactSnapshot;
+            const auto heldFrozenA = executionViewA->frozenSnapshot;
+            const std::string authoritativeDroneA =
+                executionViewA->targets.front().droneId;
+            executionViewA->targets.front().droneId = "caller-mutated-copy";
+
+            ReplaceCurrent(fixtureA, fixtureB);
+            const std::uint64_t generation =
+                consumer.RequestValidation(fixtureB.expected, std::chrono::seconds(30));
+            ConsoleArtifactV2ValidationResult result;
+            const auto deadline = std::chrono::steady_clock::now() +
+                std::chrono::seconds(30);
+            while (!consumer.PollCompleted(result) &&
+                std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            Expect(result.generation == generation && result.success,
+                "Consumer did not accept replacement Artifact B");
+
+            auto frozenB = MakeFrozen(
+                fixtureA, 0, 0, 0, 0, 0x72, "authority-c", 1);
+            std::swap(frozenB.matchedMappings[0].droneId,
+                frozenB.matchedMappings[1].droneId);
+            Expect(store.Accept(std::move(frozenB)).accepted,
+                "Frozen B was not accepted after Job A");
+            const auto targetAfter = authority.FindTargetMetadataForTest(
+                start.uploadJobId, 0);
+            const auto executionViewAfter =
+                authority.GetExecutionView(start.uploadJobId);
+            Expect(targetAfter.has_value() &&
+                targetAfter->droneId == targetA->droneId &&
+                targetAfter->relativePath == targetA->relativePath &&
+                targetAfter->routeArtifactDigest == targetA->routeArtifactDigest,
+                "existing Job rebound to latest Artifact or Frozen authority");
+            Expect(executionViewAfter.has_value() &&
+                executionViewAfter->artifactSnapshot == heldArtifactA &&
+                executionViewAfter->frozenSnapshot == heldFrozenA &&
+                executionViewAfter->targets.front().droneId == authoritativeDroneA,
+                "execution view queried latest authority or exposed mutable Job storage");
+        }
+    }
+
+    void VerifyMissionPayloadByteAuthority()
+    {
+        for (const auto item : std::array<std::pair<std::int32_t, std::uint64_t>, 2>{
+            std::pair<std::int32_t, std::uint64_t>{1, 48},
+            std::pair<std::int32_t, std::uint64_t>{9000, 342010}})
+        {
+            auto fixture = MakeArtifact(
+                "payload-" + std::to_string(item.first), 1, item.first);
+            FrozenAssignmentStore store;
+            const auto frozen = AcceptFrozen(store, MakeFrozen(fixture));
+            ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+            ConsoleUploadJobAuthority authority(
+                fixture.workspace->root.u8string(), &consumer, &store);
+            const auto start = StartCommand(
+                fixture, *frozen, Id(item.first == 1 ? '1' : '3'),
+                Id(item.first == 1 ? '2' : '4'));
+            authority.HandleCommand("client", start, EncodeCommand(start));
+            const auto ready = WaitForStart(
+                authority, start.uploadJobId, std::chrono::seconds(120));
+            const auto view = authority.GetExecutionView(start.uploadJobId);
+            Expect(ready.jobState == dspgcs::UploadJobState::Ready &&
+                ready.totalBytes == item.second && view.has_value() &&
+                view->targets.size() == 1 &&
+                view->targets.front().missionItemCount ==
+                    static_cast<std::uint32_t>(item.first) &&
+                view->targets.front().missionPayloadByteSize == item.second &&
+                view->targets.front().fileByteSize !=
+                    static_cast<std::int64_t>(item.second),
+                "UploadJob TotalBytes did not use authoritative Mission payload bytes");
+        }
+    }
+
+    bool TryGateOnAnotherThread(const fs::path& root)
+    {
+        std::promise<bool> promise;
+        auto future = promise.get_future();
+        std::thread thread([root, promise = std::move(promise)]() mutable
+        {
+            try
+            {
+                artifact::ArtifactReadLease gate;
+                std::string error;
+                bool recovered = false;
+                promise.set_value(gate.TryAcquire(root.wstring(), recovered, error) ==
+                    artifact::ArtifactReadLeaseAcquireResult::Acquired);
+            }
+            catch (...)
+            {
+                promise.set_value(false);
+            }
         });
+        if (future.wait_for(std::chrono::seconds(5)) !=
+            std::future_status::ready)
+        {
+            thread.detach();
+            throw std::runtime_error(
+                "Artifact lease probe exceeded its 5 second deadline");
+        }
+        const bool acquired = future.get();
         thread.join();
         return acquired;
     }
 
-    void VerifyLeaseLifecycle()
+    void VerifyLifecycleAndLease()
     {
-        TempRoot root("lease");
-        dspgcs::UploadArtifactIdentityDTO identity;
-        identity.artifactSetId = std::string(64, 'a');
-        identity.fleetSessionId = "fleet";
-        identity.assignmentAuthoritySessionId = "authority";
-        identity.assignmentRevision = 1;
-        std::vector<dspgcs::UploadRouteStateDTO> routes(1);
-        routes[0].routeSlotIndex = 0; routes[0].droneId = "drone-0";
-        routes[0].totalBytes = 100;
-        ConsoleUploadJobAuthority authority(root.root.u8string(), nullptr, nullptr);
-        std::string error;
-        Expect(authority.InstallSyntheticReadyJobForTest(
-            Id('a'), identity, routes, 0, 0, 0, 1, error), error);
-        bool recovered = false;
-        Expect(!TryGateOnAnotherThread(root.root, recovered),
-            "promotion gate acquired while Upload Job lease was active");
-        const auto* snapshot = authority.FindCurrentSnapshotForTest(Id('a'));
-        dspgcs::UploadJobCommandDTO cancel;
-        cancel.clientCommandId = Id('b'); cancel.uploadJobId = Id('a');
-        cancel.commandType = dspgcs::UploadJobCommandType::Cancel;
-        cancel.expectedJobRevision = snapshot->jobRevision;
-        authority.HandleCommand("client", cancel, EncodeCommand(cancel));
-        Expect(TryGateOnAnotherThread(root.root, recovered),
-            "promotion gate remained locked after Cancelled");
+        auto fixture = MakeArtifact("lifecycle", 2, 2);
+        FrozenAssignmentStore store;
+        const auto frozen = AcceptFrozen(store, MakeFrozen(fixture));
+        ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+        ConsoleUploadJobAuthority authority(
+            fixture.workspace->root.u8string(), &consumer, &store);
+        const auto start = StartCommand(fixture, *frozen, Id('9'), Id('a'));
+        authority.HandleCommand("client", start, EncodeCommand(start));
+        auto snapshot = WaitForStart(authority, start.uploadJobId);
+        Expect(!TryGateOnAnotherThread(fixture.workspace->root),
+            "Job did not hold the Artifact read lease");
+        const auto originalTarget = authority.FindTargetMetadataForTest(
+            start.uploadJobId, 0);
+        Expect(originalTarget.has_value(), "lifecycle target metadata is missing");
 
-        const std::wstring name = artifact::ArtifactReadLease::BuildMutexName(root.root.wstring());
-        HANDLE abandonedHandle = nullptr;
-        std::thread abandoned([&]
+        dspgcs::UploadJobCommandDTO pause;
+        pause.clientCommandId = Id('b');
+        pause.uploadJobId = start.uploadJobId;
+        pause.commandType = dspgcs::UploadJobCommandType::Pause;
+        pause.expectedJobRevision = snapshot.jobRevision;
+        auto acknowledgement = authority.HandleCommand(
+            "client", pause, EncodeCommand(pause));
+        Expect(acknowledgement.status ==
+            dspgcs::UploadJobCommandAckStatus::Accepted,
+            "Pause was rejected");
+        dspgcs::UploadJobCommandDTO resume;
+        resume.clientCommandId = Id('c');
+        resume.uploadJobId = start.uploadJobId;
+        resume.commandType = dspgcs::UploadJobCommandType::Resume;
+        resume.expectedJobRevision = acknowledgement.authoritativeJobRevision;
+        acknowledgement = authority.HandleCommand(
+            "client", resume, EncodeCommand(resume));
+        Expect(acknowledgement.status ==
+            dspgcs::UploadJobCommandAckStatus::Accepted,
+            "Resume was rejected");
+        dspgcs::UploadJobCommandDTO setConcurrency;
+        setConcurrency.clientCommandId = Id('f');
+        setConcurrency.uploadJobId = start.uploadJobId;
+        setConcurrency.commandType =
+            dspgcs::UploadJobCommandType::SetMaxConcurrentUploads;
+        setConcurrency.expectedJobRevision =
+            acknowledgement.authoritativeJobRevision;
+        setConcurrency.requestedMaxConcurrentUploads = 3;
+        acknowledgement = authority.HandleCommand(
+            "client", setConcurrency, EncodeCommand(setConcurrency));
+        const auto targetAfterConcurrency = authority.FindTargetMetadataForTest(
+            start.uploadJobId, 0);
+        Expect(acknowledgement.status ==
+                dspgcs::UploadJobCommandAckStatus::Accepted &&
+            acknowledgement.effectiveMaxConcurrentUploads == 3 &&
+            targetAfterConcurrency.has_value() &&
+            targetAfterConcurrency->routeArtifactDigest ==
+                originalTarget->routeArtifactDigest &&
+            targetAfterConcurrency->droneId == originalTarget->droneId,
+            "SetMaxConcurrentUploads rebound immutable Job authorities");
+
+        auto failed = dspgcs::UploadRouteStateDTO{};
+        failed.routeSlotIndex = 0;
+        failed.droneId = "drone-0";
+        failed.state = dspgcs::UploadRouteState::Failed;
+        failed.totalBytes = originalTarget->missionPayloadByteSize;
+        failed.errorCode = dspgcs::RouteUploadErrorCode::UploadTimedOut;
+        failed.retryable = true;
+        std::string error;
+        Expect(authority.ApplyExecutorRouteUpdates(
+            start.uploadJobId, { failed }, 0, 0, 0, error), error);
+        Expect(authority.TransitionJobForExecutor(
+            start.uploadJobId, dspgcs::UploadJobState::Failed, error), error);
+        Expect(!TryGateOnAnotherThread(fixture.workspace->root),
+            "retryable Failed Job did not retain its Artifact read lease");
+        const auto* failedSnapshot = authority.FindCurrentSnapshotForTest(
+            start.uploadJobId);
+        dspgcs::UploadJobCommandDTO retry;
+        retry.clientCommandId = Id('d');
+        retry.uploadJobId = start.uploadJobId;
+        retry.commandType = dspgcs::UploadJobCommandType::RetryFailed;
+        retry.expectedJobRevision = failedSnapshot->jobRevision;
+        acknowledgement = authority.HandleCommand(
+            "client", retry, EncodeCommand(retry));
+        Expect(acknowledgement.status ==
+            dspgcs::UploadJobCommandAckStatus::Accepted,
+            "RetryFailed was rejected");
+        const auto targetAfterRetry = authority.FindTargetMetadataForTest(
+            start.uploadJobId, 0);
+        Expect(targetAfterRetry.has_value() && originalTarget.has_value() &&
+            targetAfterRetry->routeArtifactDigest ==
+                originalTarget->routeArtifactDigest &&
+            targetAfterRetry->droneId == originalTarget->droneId,
+            "Retry rebound immutable Job authorities");
+
+        const auto* retrySnapshot = authority.FindCurrentSnapshotForTest(
+            start.uploadJobId);
+        Expect(authority.TransitionJobForExecutor(
+            start.uploadJobId, dspgcs::UploadJobState::Running, error), error);
+        auto uploading = dspgcs::UploadRouteStateDTO{};
+        uploading.routeSlotIndex = 0;
+        uploading.droneId = originalTarget->droneId;
+        uploading.state = dspgcs::UploadRouteState::Uploading;
+        uploading.totalBytes = originalTarget->missionPayloadByteSize;
+        uploading.bytesCompleted = 1;
+        Expect(authority.ApplyExecutorRouteUpdates(
+            start.uploadJobId, { uploading }, 10, 1000, 1, error), error);
+        retrySnapshot = authority.FindCurrentSnapshotForTest(start.uploadJobId);
+        dspgcs::UploadJobCommandDTO cancel;
+        cancel.clientCommandId = Id('e');
+        cancel.uploadJobId = start.uploadJobId;
+        cancel.commandType = dspgcs::UploadJobCommandType::Cancel;
+        cancel.expectedJobRevision = retrySnapshot->jobRevision;
+        acknowledgement = authority.HandleCommand(
+            "client", cancel, EncodeCommand(cancel));
+        Expect(acknowledgement.status ==
+                dspgcs::UploadJobCommandAckStatus::Accepted &&
+            authority.IsCancellationRequested(start.uploadJobId),
+            "Cancel did not publish a cancellation request");
+        Expect(!TryGateOnAnotherThread(fixture.workspace->root),
+            "Cancel request prematurely released the Artifact read lease");
+        Expect(authority.FinalizeExecutorCancellation(
+            start.uploadJobId, error), error);
+        Expect(!authority.IsCancellationRequested(start.uploadJobId) &&
+            TryGateOnAnotherThread(fixture.workspace->root),
+            "quiesced cancellation did not release the Artifact read lease");
+        Expect(authority.FinalizeExecutorCancellation(
+            start.uploadJobId, error),
+            "repeated cancellation finalization was not idempotent");
+
         {
-            abandonedHandle = CreateMutexW(nullptr, FALSE, name.c_str());
-            Expect(abandonedHandle != nullptr &&
-                WaitForSingleObject(abandonedHandle, 0) == WAIT_OBJECT_0,
-                "abandoned lease setup failed");
-            // Thread exit without ReleaseMutex deliberately models owner death.
-        });
-        abandoned.join();
-        artifact::ArtifactReadLease recoveredLease;
-        Expect(recoveredLease.TryAcquire(root.root.wstring(), recovered, error) ==
-            artifact::ArtifactReadLeaseAcquireResult::Acquired && recovered,
-            "abandoned lease was not recoverable");
-        CloseHandle(abandonedHandle);
-        std::size_t entryCount = 0;
-        for (const auto& ignored : fs::directory_iterator(root.root))
-        {
-            (void)ignored; ++entryCount;
+            auto idleCancelFixture = MakeArtifact("idle-cancel", 1, 1);
+            FrozenAssignmentStore idleCancelStore;
+            const auto idleCancelFrozen = AcceptFrozen(
+                idleCancelStore, MakeFrozen(idleCancelFixture));
+            ConsoleArtifactConsumerV2 idleCancelConsumer(
+                idleCancelFixture.workspace->root.u8string());
+            ConsoleUploadJobAuthority idleCancelAuthority(
+                idleCancelFixture.workspace->root.u8string(),
+                &idleCancelConsumer, &idleCancelStore);
+            const auto idleStart = StartCommand(
+                idleCancelFixture, *idleCancelFrozen, Id('5'), Id('6'));
+            idleCancelAuthority.HandleCommand(
+                "client", idleStart, EncodeCommand(idleStart));
+            const auto idleReady = WaitForStart(
+                idleCancelAuthority, idleStart.uploadJobId);
+            dspgcs::UploadJobCommandDTO idleCancel;
+            idleCancel.clientCommandId = Id('7');
+            idleCancel.uploadJobId = idleStart.uploadJobId;
+            idleCancel.commandType = dspgcs::UploadJobCommandType::Cancel;
+            idleCancel.expectedJobRevision = idleReady.jobRevision;
+            idleCancelAuthority.HandleCommand(
+                "client", idleCancel, EncodeCommand(idleCancel));
+            Expect(idleCancelAuthority.IsCancellationRequested(
+                idleStart.uploadJobId),
+                "Cancel without an active executor was not observable");
+            Expect(idleCancelAuthority.FinalizeExecutorCancellation(
+                idleStart.uploadJobId, error), error);
+            Expect(TryGateOnAnotherThread(idleCancelFixture.workspace->root),
+                "idle cancellation finalization retained its lease");
         }
-        Expect(entryCount == 1 && fs::exists(root.root / "Current"),
-            "lease created a historical Artifact archive");
+        {
+            auto completedFixture = MakeArtifact("completed-lease", 1, 1);
+            FrozenAssignmentStore completedStore;
+            const auto completedFrozen = AcceptFrozen(
+                completedStore, MakeFrozen(completedFixture));
+            ConsoleArtifactConsumerV2 completedConsumer(
+                completedFixture.workspace->root.u8string());
+            ConsoleUploadJobAuthority completedAuthority(
+                completedFixture.workspace->root.u8string(),
+                &completedConsumer, &completedStore);
+            const auto completedStart = StartCommand(
+                completedFixture, *completedFrozen, Id('1'), Id('2'));
+            completedAuthority.HandleCommand(
+                "client", completedStart, EncodeCommand(completedStart));
+            WaitForStart(completedAuthority, completedStart.uploadJobId);
+            Expect(completedAuthority.TransitionJobForExecutor(
+                completedStart.uploadJobId,
+                dspgcs::UploadJobState::Running, error), error);
+            Expect(completedAuthority.TransitionJobForExecutor(
+                completedStart.uploadJobId,
+                dspgcs::UploadJobState::Completed, error), error);
+            Expect(TryGateOnAnotherThread(completedFixture.workspace->root),
+                "Completed Job did not release the Artifact read lease");
+        }
+        {
+            auto destroyFixture = MakeArtifact("destroy-failed-lease", 1, 1);
+            FrozenAssignmentStore destroyStore;
+            const auto destroyFrozen = AcceptFrozen(
+                destroyStore, MakeFrozen(destroyFixture));
+            ConsoleArtifactConsumerV2 destroyConsumer(
+                destroyFixture.workspace->root.u8string());
+            ConsoleUploadJobAuthority destroyAuthority(
+                destroyFixture.workspace->root.u8string(),
+                &destroyConsumer, &destroyStore);
+            const auto destroyStart = StartCommand(
+                destroyFixture, *destroyFrozen, Id('3'), Id('4'));
+            destroyAuthority.HandleCommand(
+                "client", destroyStart, EncodeCommand(destroyStart));
+            WaitForStart(destroyAuthority, destroyStart.uploadJobId);
+            Expect(destroyAuthority.TransitionJobForExecutor(
+                destroyStart.uploadJobId,
+                dspgcs::UploadJobState::Running, error), error);
+            Expect(destroyAuthority.TransitionJobForExecutor(
+                destroyStart.uploadJobId,
+                dspgcs::UploadJobState::Failed, error), error);
+            Expect(!TryGateOnAnotherThread(destroyFixture.workspace->root),
+                "Failed Job did not retain its Artifact read lease");
+            Expect(destroyAuthority.DestroyFailedJob(destroyStart.uploadJobId),
+                "DestroyFailed rejected a Failed Job");
+            Expect(TryGateOnAnotherThread(destroyFixture.workspace->root),
+                "DestroyFailed did not release the Artifact read lease");
+        }
+        {
+            auto shutdownFixture = MakeArtifact("shutdown-cancel", 1, 1);
+            FrozenAssignmentStore shutdownStore;
+            const auto shutdownFrozen = AcceptFrozen(
+                shutdownStore, MakeFrozen(shutdownFixture));
+            ConsoleArtifactConsumerV2 shutdownConsumer(
+                shutdownFixture.workspace->root.u8string());
+            {
+                ConsoleUploadJobAuthority shutdownAuthority(
+                    shutdownFixture.workspace->root.u8string(),
+                    &shutdownConsumer, &shutdownStore);
+                const auto shutdownStart = StartCommand(
+                    shutdownFixture, *shutdownFrozen, Id('7'), Id('8'));
+                shutdownAuthority.HandleCommand(
+                    "client", shutdownStart, EncodeCommand(shutdownStart));
+                const auto shutdownReady = WaitForStart(
+                    shutdownAuthority, shutdownStart.uploadJobId);
+                dspgcs::UploadJobCommandDTO shutdownCancel;
+                shutdownCancel.clientCommandId = Id('9');
+                shutdownCancel.uploadJobId = shutdownStart.uploadJobId;
+                shutdownCancel.commandType = dspgcs::UploadJobCommandType::Cancel;
+                shutdownCancel.expectedJobRevision = shutdownReady.jobRevision;
+                shutdownAuthority.HandleCommand(
+                    "client", shutdownCancel, EncodeCommand(shutdownCancel));
+                Expect(!TryGateOnAnotherThread(shutdownFixture.workspace->root),
+                    "Cancelling Job did not retain lease before shutdown");
+            }
+            Expect(TryGateOnAnotherThread(shutdownFixture.workspace->root),
+                "Authority shutdown did not clean up a Cancelling Job lease");
+        }
     }
 
     struct ScaleMetric
     {
-        std::size_t routeCount = 0;
+        std::size_t targetCount = 0;
+        std::size_t approximateBytes = 0;
         std::size_t snapshotBytes = 0;
-        std::size_t deltaBytes = 0;
-        std::size_t maximumPackedDeltaBytes = 0;
         std::size_t pageBytes = 0;
-        std::size_t pageRoutes = 0;
-        std::size_t estimatedStateBytes = 0;
-        double codecMegabytesPerSecond = 0.0;
+        double seconds = 0.0;
     };
 
-    ScaleMetric VerifyScale(const std::size_t routeCount, const char idCharacter)
+    ScaleMetric VerifyMaterializationScale(
+        const std::int32_t routeCount,
+        const char idCharacter)
     {
-        TempRoot root("scale");
-        dspgcs::UploadArtifactIdentityDTO identity;
-        identity.artifactSetId = std::string(64, 'c');
-        identity.fleetSessionId = "fleet-scale";
-        identity.assignmentAuthoritySessionId = "authority-scale";
-        identity.assignmentRevision = 1;
+        auto fixture = MakeArtifact(
+            "scale-" + std::to_string(routeCount), routeCount, 1);
+        FrozenAssignmentStore store;
+        const auto frozen = AcceptFrozen(store, MakeFrozen(fixture));
+        ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+        ConsoleUploadJobAuthority authority(
+            fixture.workspace->root.u8string(), &consumer, &store);
+        const auto start = StartCommand(
+            fixture, *frozen, Id(idCharacter), Id(idCharacter + 1), 32);
+        const auto started = std::chrono::steady_clock::now();
+        authority.HandleCommand("scale-client", start, EncodeCommand(start));
+        const auto snapshot = WaitForStart(
+            authority, start.uploadJobId, std::chrono::seconds(120));
+        const double seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started).count();
+        Expect(snapshot.resultCode == dspgcs::UploadJobErrorCode::None &&
+            snapshot.matchedCount == static_cast<std::uint32_t>(routeCount) &&
+            snapshot.waitingCount == static_cast<std::uint32_t>(routeCount),
+            "scale materialization target count mismatch");
+        std::vector<std::uint8_t> snapshotBytes;
+        std::string error;
+        Expect(dspgcs::EncodeUploadJobSnapshot(
+            snapshot, snapshotBytes, error), error);
+        dspgcs::UploadJobSnapshotRequestDTO pageRequest;
+        pageRequest.clientRequestId = Id('f');
+        pageRequest.uploadJobId = start.uploadJobId;
+        pageRequest.requestKind = dspgcs::UploadJobSnapshotRequestKind::RoutePage;
+        pageRequest.snapshotToken = snapshot.snapshotToken;
+        pageRequest.maximumRouteEntries = 20000;
+        dspgcs::UploadJobRouteStatePageDTO page;
+        dspgcs::UploadJobErrorCode pageError;
+        Expect(authority.BuildRoutePage(pageRequest, page, pageError),
+            "scale route page build failed");
+        std::vector<std::uint8_t> pageBytes;
+        Expect(dspgcs::EncodeUploadJobRouteStatePage(page, pageBytes, error), error);
+        ScaleMetric metric;
+        metric.targetCount = routeCount;
+        metric.approximateBytes = static_cast<std::size_t>(routeCount) *
+            (sizeof(UploadJobTargetMetadata) +
+                sizeof(dspgcs::UploadRouteStateDTO) + 64);
+        metric.snapshotBytes = snapshotBytes.size();
+        metric.pageBytes = pageBytes.size();
+        metric.seconds = seconds;
+        return metric;
+    }
+
+    void VerifyScaleAndSnapshotDelta()
+    {
+        const auto thousand = VerifyMaterializationScale(1000, '4');
+        const auto tenThousand = VerifyMaterializationScale(10000, '6');
+        Expect(tenThousand.approximateBytes < thousand.approximateBytes * 11,
+            "10K materialization memory estimate is not O(N)");
+
+        TempRoot root("existing-20k-state");
+        dspgcs::UploadArtifactBindingDTO artifactBinding;
+        artifactBinding.artifactSetId = std::string(64, 'a');
+        artifactBinding.artifactSetDigest.fill(1);
+        dspgcs::UploadFrozenAssignmentBindingDTO frozenBinding;
+        frozenBinding.fleetSessionId = "fleet-scale";
+        frozenBinding.assignmentAuthoritySessionId = "authority-scale";
+        frozenBinding.assignmentRevision = 1;
+        frozenBinding.assignmentDigest.fill(2);
+        dspgcs::UploadStableSourceDTO stableSource;
+        stableSource.sourceDatasetDigest.fill(3);
+        stableSource.normalizedShowOriginLatitudeE7 = 300000000;
+        stableSource.normalizedShowOriginLongitudeE7 = 1200000000;
+        stableSource.routeSlotCount = 20000;
         std::vector<dspgcs::UploadRouteStateDTO> routes;
-        routes.reserve(routeCount);
-        for (std::size_t index = 0; index < routeCount; ++index)
+        routes.reserve(20000);
+        for (std::int32_t slot = 0; slot < 20000; ++slot)
         {
             dspgcs::UploadRouteStateDTO route;
-            route.routeSlotIndex = static_cast<std::int32_t>(index);
-            route.droneId = "drone-" + std::to_string(index);
-            route.totalBytes = 4096; route.updatedAtUtcMs = 1;
+            route.routeSlotIndex = slot;
+            route.droneId = "drone-" + std::to_string(slot);
+            route.totalBytes = 4096;
             routes.push_back(std::move(route));
         }
         ConsoleUploadJobAuthority authority(root.root.u8string(), nullptr, nullptr);
         std::string error;
-        const std::string jobId = Id(idCharacter);
         Expect(authority.InstallSyntheticReadyJobForTest(
-            jobId, identity, routes, 0, 0, 0, 32, error), error);
-        dspgcs::UploadJobSnapshotRequestDTO request;
-        request.clientRequestId = Id('d'); request.uploadJobId = jobId;
-        const auto snapshot = authority.BuildSnapshot(request);
-        Expect(authority.GetFrozenPageRouteCountForTest(jobId) == 0,
-            "aggregate snapshot copied route detail instead of remaining O(1)");
-        std::vector<std::uint8_t> snapshotBytes;
-        Expect(dspgcs::EncodeUploadJobSnapshot(snapshot, snapshotBytes, error), error);
-
-        request.clientRequestId = Id('e');
-        request.requestKind = dspgcs::UploadJobSnapshotRequestKind::RoutePage;
-        request.snapshotToken = snapshot.snapshotToken;
-        request.maximumRouteEntries = static_cast<std::uint32_t>(routeCount);
-        dspgcs::UploadJobRouteStatePageDTO page; dspgcs::UploadJobErrorCode pageError;
-        Expect(authority.BuildRoutePage(request, page, pageError), "page build failed");
-        std::vector<std::uint8_t> pageBytes;
-        Expect(dspgcs::EncodeUploadJobRouteStatePage(page, pageBytes, error), error);
-
-        routes[0].state = dspgcs::UploadRouteState::Uploading;
-        routes[0].bytesCompleted = 512;
+            Id('8'), artifactBinding, frozenBinding, stableSource,
+            routes, 0, 0, 0, 32, error), error);
+        routes.front().state = dspgcs::UploadRouteState::Uploading;
+        routes.front().bytesCompleted = 10;
         Expect(authority.ApplyExecutorRouteUpdates(
-            jobId, { routes[0] }, 0, 0, 0, error), error);
-        auto deltas = authority.DrainRouteDeltas();
-        Expect(deltas.size() == 1, "one route update did not produce one delta");
-        std::vector<std::uint8_t> deltaBytes;
-        Expect(dspgcs::EncodeUploadJobRouteStateDelta(deltas[0], deltaBytes, error), error);
+            Id('8'), { routes.front() }, 100, 1000, 10, error), error);
+        const auto deltas = authority.DrainRouteDeltas();
+        Expect(deltas.size() == 1 && deltas.front().routes.size() == 1,
+            "existing 20K state Delta regression failed");
 
-        request.clientRequestId = Id('f');
-        request.routePageStart = page.nextPageStart;
-        dspgcs::UploadJobRouteStatePageDTO nextPage;
-        Expect(authority.BuildRoutePage(request, nextPage, pageError) &&
-            nextPage.jobRevision == snapshot.jobRevision,
-            "paged snapshot changed after live route state mutation");
-
-        std::vector<dspgcs::UploadRouteStateDTO> bulkUpdates;
-        bulkUpdates.reserve(routeCount > 0 ? routeCount - 1 : 0);
-        for (std::size_t index = 1; index < routeCount; ++index)
-        {
-            routes[index].state = dspgcs::UploadRouteState::Uploading;
-            routes[index].bytesCompleted = 512;
-            bulkUpdates.push_back(routes[index]);
-        }
-        Expect(authority.ApplyExecutorRouteUpdates(
-            jobId, bulkUpdates, 0, 0, 0, error), error);
-        auto packedDeltas = authority.DrainRouteDeltas();
-        std::size_t packedRouteCount = 0;
-        std::size_t maximumPackedDeltaBytes = 0;
-        for (const auto& packedDelta : packedDeltas)
-        {
-            std::vector<std::uint8_t> encoded;
-            Expect(dspgcs::EncodeUploadJobRouteStateDelta(
-                packedDelta, encoded, error), error);
-            maximumPackedDeltaBytes = std::max(
-                maximumPackedDeltaBytes, encoded.size());
-            packedRouteCount += packedDelta.routes.size();
-            Expect(encoded.size() < 900, "packed route Delta exceeded byte budget");
-        }
-        Expect(packedRouteCount == bulkUpdates.size(),
-            "bulk route Delta split lost or duplicated routes");
-
-        const auto started = std::chrono::steady_clock::now();
-        std::size_t codecBytes = 0;
-        for (int iteration = 0; iteration < 200; ++iteration)
-        {
-            std::vector<std::uint8_t> encoded;
-            dspgcs::UploadJobRouteStatePageDTO decoded;
-            Expect(dspgcs::EncodeUploadJobRouteStatePage(page, encoded, error), error);
-            Expect(dspgcs::DecodeUploadJobRouteStatePage(encoded, decoded, error), error);
-            codecBytes += encoded.size() * 2;
-        }
-        const double seconds = std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - started).count();
-        ScaleMetric metric;
-        metric.routeCount = routeCount;
-        metric.snapshotBytes = snapshotBytes.size();
-        metric.deltaBytes = deltaBytes.size();
-        metric.maximumPackedDeltaBytes = maximumPackedDeltaBytes;
-        metric.pageBytes = pageBytes.size();
-        metric.pageRoutes = page.routes.size();
-        metric.estimatedStateBytes = routeCount * sizeof(dspgcs::UploadRouteStateDTO);
-        for (const auto& route : routes) metric.estimatedStateBytes += route.droneId.capacity();
-        metric.codecMegabytesPerSecond = codecBytes / seconds / (1024.0 * 1024.0);
-        Expect(metric.snapshotBytes < 1000 && metric.deltaBytes < 900 &&
-            metric.pageBytes < 900, "wire payload budget exceeded");
-        return metric;
-    }
-
-    void VerifySnapshotRecoveryAndScale()
-    {
-        const auto thousand = VerifyScale(1000, '4');
-        const auto tenThousand = VerifyScale(10000, '5');
-        const auto twentyThousand = VerifyScale(20000, '6');
-        Expect(thousand.snapshotBytes == tenThousand.snapshotBytes &&
-            tenThousand.snapshotBytes == twentyThousand.snapshotBytes,
-            "aggregate snapshot is not O(1)");
-        Expect(twentyThousand.estimatedStateBytes <
-            tenThousand.estimatedStateBytes * 3, "state memory is not O(N)");
-        std::cout << "UploadJob scale PASS\n";
-        for (const auto& metric : { thousand, tenThousand, twentyThousand })
-            std::cout << "routes=" << metric.routeCount
-                << " snapshotBytes=" << metric.snapshotBytes
-                << " deltaBytes=" << metric.deltaBytes
-                << " maxPackedDeltaBytes=" << metric.maximumPackedDeltaBytes
-                << " pageBytes=" << metric.pageBytes
-                << " pageRoutes=" << metric.pageRoutes
-                << " stateBytes=" << metric.estimatedStateBytes
-                << " codecMBps=" << metric.codecMegabytesPerSecond << '\n';
-
-        TempRoot restartRoot("restart");
-        ConsoleUploadJobAuthority restarted(restartRoot.root.u8string(), nullptr, nullptr);
-        dspgcs::UploadJobSnapshotRequestDTO request;
-        request.clientRequestId = Id('7'); request.uploadJobId = Id('8');
-        const auto missing = restarted.BuildSnapshot(request);
-        Expect(missing.resultCode == dspgcs::UploadJobErrorCode::UnknownJob,
-            "Console restart/no job did not return UnknownJob");
+        std::cout << "UploadJob v2-E materialization scale PASS\n"
+            << "routes=" << thousand.targetCount
+            << " seconds=" << thousand.seconds
+            << " approxBytes=" << thousand.approximateBytes
+            << " snapshotBytes=" << thousand.snapshotBytes
+            << " pageBytes=" << thousand.pageBytes << '\n'
+            << "routes=" << tenThousand.targetCount
+            << " seconds=" << tenThousand.seconds
+            << " approxBytes=" << tenThousand.approximateBytes
+            << " snapshotBytes=" << tenThousand.snapshotBytes
+            << " pageBytes=" << tenThousand.pageBytes << '\n'
+            << "routes=20000 existingStateRegression=PASS\n";
     }
 }
 
@@ -637,15 +1136,18 @@ int RunDSPUploadJobProtocolTests()
     try
     {
         VerifyWireContract();
-        VerifyAuthorityAndArtifactGate();
-        VerifyLeaseLifecycle();
-        VerifySnapshotRecoveryAndScale();
-        std::cout << "DSP Upload Job protocol/reliability tests passed\n";
+        VerifyCompatibilityGate();
+        VerifyMissingRouteRecord();
+        VerifyToctouAndImmutableOwnership();
+        VerifyMissionPayloadByteAuthority();
+        VerifyLifecycleAndLease();
+        VerifyScaleAndSnapshotDelta();
+        std::cout << "DSP Upload Job schema2 dual-binding tests passed\n";
         return 0;
     }
     catch (const std::exception& error)
     {
-        std::cerr << "DSP Upload Job protocol/reliability tests failed: "
+        std::cerr << "DSP Upload Job schema2 tests failed: "
             << error.what() << '\n';
         return 1;
     }

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ConsoleArtifactConsumer.h"
+#include "ConsoleArtifactConsumerV2.h"
 #include "DSPGCSUploadJobProtocol.h"
 #include "FrozenAssignmentStore.h"
 #include "RouteArtifactReadLease.h"
@@ -9,9 +9,36 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+struct UploadJobTargetMetadata
+{
+    std::string droneId;
+    std::int32_t routeSlotIndex = -1;
+    std::string relativePath;
+    std::int64_t fileByteSize = 0;
+    std::uint32_t missionItemCount = 0;
+    std::uint64_t missionPayloadByteSize = 0;
+    dronegcs::route_artifact::Digest256 routeArtifactDigest;
+};
+
+/** Value-copy execution contract; it never queries latest Artifact/Frozen authorities. */
+struct UploadJobExecutionView
+{
+    std::string uploadJobId;
+    std::uint64_t jobRevision = 0;
+    dspgcs::UploadArtifactBindingDTO artifactBinding;
+    dspgcs::UploadFrozenAssignmentBindingDTO frozenBinding;
+    std::uint32_t effectiveMaxConcurrentUploads = 0;
+    std::shared_ptr<const AcceptedRouteArtifactV2> artifactSnapshot;
+    std::shared_ptr<const FrozenAssignmentAcceptedSnapshot> frozenSnapshot;
+    RouteArtifactV2CurrentDirectoryIdentity currentDirectoryIdentity;
+    const dronegcs::route_artifact::ArtifactReadLease* artifactReadLease = nullptr;
+    std::vector<UploadJobTargetMetadata> targets;
+};
 
 class ConsoleUploadJobAuthority final
 {
@@ -21,7 +48,7 @@ public:
 
     ConsoleUploadJobAuthority(
         std::string workspaceRoot,
-        ConsoleArtifactConsumer* artifactConsumer,
+        ConsoleArtifactConsumerV2* artifactConsumer,
         FrozenAssignmentStore* frozenAssignmentStore);
 
     dspgcs::UploadJobCommandAckDTO HandleCommand(
@@ -51,13 +78,24 @@ public:
         const std::string& uploadJobId,
         dspgcs::UploadJobState newState,
         std::string& error);
+    std::optional<UploadJobExecutionView> GetExecutionView(
+        const std::string& uploadJobId) const;
+    bool IsCancellationRequested(const std::string& uploadJobId) const;
+    bool FinalizeExecutorCancellation(
+        const std::string& uploadJobId,
+        std::string& error);
     bool DestroyFailedJob(const std::string& uploadJobId);
 
     const dspgcs::UploadJobSnapshotDTO* FindCurrentSnapshotForTest(
         const std::string& uploadJobId);
+    std::optional<UploadJobTargetMetadata> FindTargetMetadataForTest(
+        const std::string& uploadJobId,
+        std::int32_t routeSlotIndex) const;
     bool InstallSyntheticReadyJobForTest(
         const std::string& uploadJobId,
-        const dspgcs::UploadArtifactIdentityDTO& identity,
+        const dspgcs::UploadArtifactBindingDTO& artifactBinding,
+        const dspgcs::UploadFrozenAssignmentBindingDTO& frozenBinding,
+        const dspgcs::UploadStableSourceDTO& stableSource,
         std::vector<dspgcs::UploadRouteStateDTO> routes,
         std::uint32_t vacantCount,
         std::uint32_t spareCount,
@@ -65,22 +103,46 @@ public:
         std::uint32_t maxConcurrentUploads,
         std::string& error);
     std::size_t GetJobCount() const { return jobs_.size(); }
+    std::size_t GetPendingStartCount() const { return pendingStarts_.size(); }
     std::size_t GetIdempotencyEntryCount() const { return idempotency_.size(); }
     std::size_t GetFrozenPageRouteCountForTest(const std::string& uploadJobId) const;
 
 private:
+    struct Target
+    {
+        UploadJobTargetMetadata metadata;
+        dspgcs::UploadRouteStateDTO state;
+    };
+
     struct Job
     {
         dspgcs::UploadJobSnapshotDTO snapshot;
-        std::vector<dspgcs::UploadRouteStateDTO> routes;
+        std::vector<Target> targets;
         std::vector<dspgcs::UploadRouteStateDTO> pageSnapshot;
         std::uint64_t pageSnapshotRevision = 0;
         std::uint64_t snapshotTokenRevision = 0;
         std::string pageSnapshotToken;
         std::uint64_t nextDeltaSequence = 0;
-        std::uint64_t validationGeneration = 0;
-        std::shared_ptr<const ValidatedArtifactSnapshot> validatedArtifact;
+        std::shared_ptr<const AcceptedRouteArtifactV2> artifactSnapshot;
+        std::shared_ptr<const FrozenAssignmentAcceptedSnapshot> frozenSnapshot;
+        RouteArtifactV2CurrentDirectoryIdentity currentDirectoryIdentity;
         std::unique_ptr<dronegcs::route_artifact::ArtifactReadLease> artifactLease;
+    };
+
+    struct PendingStart
+    {
+        dspgcs::UploadJobSnapshotDTO snapshot;
+        std::uint64_t validationGeneration = 0;
+        std::string idempotencyKey;
+        dspgcs::UploadJobCommandDTO command;
+        ExpectedRouteArtifactV2Identity expectedArtifact;
+        std::shared_ptr<const FrozenAssignmentAcceptedSnapshot> frozenSnapshot;
+    };
+
+    struct StartOutcome
+    {
+        dspgcs::UploadJobErrorCode errorCode = dspgcs::UploadJobErrorCode::None;
+        std::string safeDiagnostic;
     };
 
     struct IdempotencyRecord
@@ -90,16 +152,15 @@ private:
     };
 
     static std::string MakeCanonicalId();
-    static bool SameBinding(
-        const dronegcs::route_artifact::AssignmentBinding& binding,
-        const dspgcs::UploadArtifactIdentityDTO& identity);
     static bool SameFrozenBinding(
         const FrozenAssignmentAcceptedSnapshot& frozen,
-        const dspgcs::UploadArtifactIdentityDTO& identity);
-    static ExpectedArtifactIdentity ToExpectedIdentity(
-        const dspgcs::UploadArtifactIdentityDTO& identity);
-    static dspgcs::UploadArtifactIdentityDTO ToWireIdentity(
-        const ValidatedArtifactSnapshot& snapshot);
+        const dspgcs::UploadFrozenAssignmentBindingDTO& binding);
+    static ExpectedRouteArtifactV2Identity ToExpectedIdentity(
+        const dspgcs::UploadArtifactBindingDTO& binding);
+    static dspgcs::UploadArtifactBindingDTO ToWireArtifactBinding(
+        const AcceptedRouteArtifactV2& snapshot);
+    static dspgcs::UploadStableSourceDTO ToWireStableSource(
+        const AcceptedRouteArtifactV2StableSource& stableSource);
     static std::int64_t UtcNowMs();
 
     dspgcs::UploadJobCommandAckDTO Reject(
@@ -110,26 +171,38 @@ private:
         std::uint32_t effectiveConcurrency = 0) const;
     dspgcs::UploadJobCommandAckDTO Accept(
         const dspgcs::UploadJobCommandDTO& command,
-        const Job& job) const;
+        std::uint64_t revision,
+        std::uint32_t effectiveConcurrency) const;
     void RememberCommand(
         const std::string& key,
         std::vector<std::uint8_t> canonicalPayload,
         const dspgcs::UploadJobCommandAckDTO& acknowledgement);
-    void CompleteValidation(
-        Job& job,
-        const ConsoleArtifactValidationResult& result);
-    void FailJob(Job& job, dspgcs::UploadJobErrorCode code, const char* diagnostic);
+    void CompletePendingStart(
+        const std::string& uploadJobId,
+        PendingStart pending,
+        const ConsoleArtifactV2ValidationResult& result);
+    void FailPendingStart(
+        const std::string& uploadJobId,
+        dspgcs::UploadJobErrorCode code,
+        const char* diagnostic,
+        const PendingStart* pending = nullptr);
+    bool AcquireArtifactLease(
+        const PendingStart& pending,
+        const RouteArtifactV2CurrentDirectoryIdentity& currentDirectoryIdentity,
+        std::unique_ptr<dronegcs::route_artifact::ArtifactReadLease>& lease,
+        ConsoleArtifactV2Diagnostic& diagnostic);
     void RecalculateAggregate(Job& job);
     void QueueRouteDeltas(Job& job, const std::vector<dspgcs::UploadRouteStateDTO>& updates);
-    bool AcquireArtifactLease(Job& job, ConsoleArtifactDiagnostic& diagnostic);
+    void FinalizeCancellation(Job& job);
     Job* FindJob(const std::string& uploadJobId);
 
     std::string workspaceRoot_;
-    ConsoleArtifactConsumer* artifactConsumer_ = nullptr;
+    ConsoleArtifactConsumerV2* artifactConsumer_ = nullptr;
     FrozenAssignmentStore* frozenAssignmentStore_ = nullptr;
-    std::shared_ptr<const ValidatedArtifactSnapshot> latestValidatedArtifact_;
     std::unordered_map<std::string, Job> jobs_;
-    std::unordered_map<std::uint64_t, std::string> validationJobs_;
+    std::unordered_map<std::string, PendingStart> pendingStarts_;
+    std::unordered_map<std::uint64_t, std::string> validationStarts_;
+    std::unordered_map<std::string, StartOutcome> startOutcomes_;
     std::unordered_map<std::string, IdempotencyRecord> idempotency_;
     std::deque<std::string> idempotencyOrder_;
     std::vector<dspgcs::UploadJobRouteStateDeltaDTO> pendingDeltas_;

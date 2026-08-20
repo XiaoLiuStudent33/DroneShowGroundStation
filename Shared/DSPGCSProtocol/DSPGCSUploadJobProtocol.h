@@ -12,7 +12,7 @@
 
 namespace dspgcs
 {
-    inline constexpr std::uint16_t UploadJobSchemaVersion = 1;
+    inline constexpr std::uint16_t UploadJobSchemaVersion = 2;
     inline constexpr std::size_t UploadJobCanonicalIdBytes = 32;
     inline constexpr std::size_t UploadJobDigestBytes = 32;
     inline constexpr std::size_t UploadJobMaxSafeDiagnosticBytes = 512;
@@ -105,7 +105,18 @@ namespace dspgcs
         ArtifactLeaseUnavailable = 14,
         FrozenAssignmentMismatch = 15,
         NoFailedRoutes = 16,
-        InternalError = 17
+        InternalError = 17,
+        ArtifactNotAccepted = 18,
+        ArtifactCurrentChanged = 19,
+        FrozenAssignmentMissing = 20,
+        FrozenAssignmentIdentityMismatch = 21,
+        StableSourceDatasetMismatch = 22,
+        StableSourceOriginMismatch = 23,
+        RouteDomainMismatch = 24,
+        InvalidMapping = 25,
+        RouteRecordMissing = 26,
+        FleetSessionStale = 27,
+        LeaseAcquireFailed = 28
     };
 
     enum class RouteUploadErrorCode : std::uint16_t
@@ -123,14 +134,26 @@ namespace dspgcs
         InternalError = 10
     };
 
-    struct UploadArtifactIdentityDTO
+    struct UploadArtifactBindingDTO
     {
         std::string artifactSetId;
         UploadJobDigest artifactSetDigest{};
+    };
+
+    struct UploadFrozenAssignmentBindingDTO
+    {
         std::string fleetSessionId;
         std::string assignmentAuthoritySessionId;
         std::uint64_t assignmentRevision = 0;
         UploadJobDigest assignmentDigest{};
+    };
+
+    struct UploadStableSourceDTO
+    {
+        UploadJobDigest sourceDatasetDigest{};
+        std::int32_t normalizedShowOriginLatitudeE7 = 0;
+        std::int32_t normalizedShowOriginLongitudeE7 = 0;
+        std::uint32_t routeSlotCount = 0;
     };
 
     struct UploadJobFailureDTO
@@ -152,7 +175,8 @@ namespace dspgcs
         UploadJobCommandType commandType = UploadJobCommandType::Start;
         std::uint64_t expectedJobRevision = 0;
         std::uint32_t requestedMaxConcurrentUploads = 0;
-        UploadArtifactIdentityDTO artifactIdentity;
+        UploadArtifactBindingDTO artifactBinding;
+        UploadFrozenAssignmentBindingDTO frozenAssignmentBinding;
     };
 
     struct UploadJobCommandAckDTO
@@ -188,7 +212,9 @@ namespace dspgcs
         std::string snapshotToken;
         UploadJobErrorCode resultCode = UploadJobErrorCode::None;
         std::string safeDiagnostic;
-        UploadArtifactIdentityDTO artifactIdentity;
+        UploadArtifactBindingDTO artifactBinding;
+        UploadFrozenAssignmentBindingDTO frozenAssignmentBinding;
+        UploadStableSourceDTO stableSource;
         UploadArtifactGateState artifactGateState = UploadArtifactGateState::NotChecked;
         UploadJobState jobState = UploadJobState::Created;
         std::uint64_t jobRevision = 0;
@@ -327,31 +353,105 @@ namespace dspgcs
             for (std::uint8_t& byte : digest) if (!reader.U8(byte)) return false;
             return true;
         }
-        inline void Identity(detail::Writer& writer, const UploadArtifactIdentityDTO& value)
+        inline bool DigestIsSet(const UploadJobDigest& value)
+        {
+            return std::any_of(value.begin(), value.end(),
+                [](const std::uint8_t byte) { return byte != 0; });
+        }
+
+        inline void ArtifactBinding(
+            detail::Writer& writer,
+            const UploadArtifactBindingDTO& value)
         {
             writer.String(value.artifactSetId);
             Digest(writer, value.artifactSetDigest);
+        }
+
+        inline bool ArtifactBinding(
+            detail::Reader& reader,
+            UploadArtifactBindingDTO& value)
+        {
+            return reader.String(value.artifactSetId) &&
+                Digest(reader, value.artifactSetDigest);
+        }
+
+        inline bool ValidateArtifactBinding(
+            const UploadArtifactBindingDTO& value,
+            std::string& error)
+        {
+            if (!IsCanonicalArtifactSetId(value.artifactSetId))
+                return Fail(error, "ArtifactSetID is not canonical lowercase hex.");
+            if (!DigestIsSet(value.artifactSetDigest))
+                return Fail(error, "ArtifactSetDigest is not set.");
+            return true;
+        }
+
+        inline void FrozenBinding(
+            detail::Writer& writer,
+            const UploadFrozenAssignmentBindingDTO& value)
+        {
             writer.String(value.fleetSessionId);
             writer.String(value.assignmentAuthoritySessionId);
             writer.U64(value.assignmentRevision);
             Digest(writer, value.assignmentDigest);
         }
-        inline bool Identity(detail::Reader& reader, UploadArtifactIdentityDTO& value)
+
+        inline bool FrozenBinding(
+            detail::Reader& reader,
+            UploadFrozenAssignmentBindingDTO& value)
         {
-            return reader.String(value.artifactSetId) && Digest(reader, value.artifactSetDigest) &&
-                reader.String(value.fleetSessionId) &&
+            return reader.String(value.fleetSessionId) &&
                 reader.String(value.assignmentAuthoritySessionId) &&
                 reader.U64(value.assignmentRevision) && Digest(reader, value.assignmentDigest);
         }
-        inline bool ValidateIdentity(const UploadArtifactIdentityDTO& value, std::string& error)
+
+        inline bool ValidateFrozenBinding(
+            const UploadFrozenAssignmentBindingDTO& value,
+            std::string& error)
         {
-            if (!IsCanonicalArtifactSetId(value.artifactSetId))
-                return Fail(error, "ArtifactSetID is not canonical lowercase hex.");
             if (value.fleetSessionId.empty() || value.fleetSessionId.size() > MaxStringBytes ||
                 value.assignmentAuthoritySessionId.empty() ||
                 value.assignmentAuthoritySessionId.size() > MaxStringBytes ||
                 value.assignmentRevision == 0)
-                return Fail(error, "Artifact Assignment identity is incomplete or oversized.");
+                return Fail(error, "Frozen Assignment binding is incomplete or oversized.");
+            if (!DigestIsSet(value.assignmentDigest))
+                return Fail(error, "AssignmentDigest is not set.");
+            return true;
+        }
+
+        inline void StableSource(
+            detail::Writer& writer,
+            const UploadStableSourceDTO& value)
+        {
+            Digest(writer, value.sourceDatasetDigest);
+            writer.I32(value.normalizedShowOriginLatitudeE7);
+            writer.I32(value.normalizedShowOriginLongitudeE7);
+            writer.U32(value.routeSlotCount);
+        }
+
+        inline bool StableSource(
+            detail::Reader& reader,
+            UploadStableSourceDTO& value)
+        {
+            return Digest(reader, value.sourceDatasetDigest) &&
+                reader.I32(value.normalizedShowOriginLatitudeE7) &&
+                reader.I32(value.normalizedShowOriginLongitudeE7) &&
+                reader.U32(value.routeSlotCount);
+        }
+
+        inline bool ValidateStableSource(
+            const UploadStableSourceDTO& value,
+            std::string& error)
+        {
+            if (!DigestIsSet(value.sourceDatasetDigest))
+                return Fail(error, "SourceDatasetDigest is not set.");
+            if (value.normalizedShowOriginLatitudeE7 < -900000000 ||
+                value.normalizedShowOriginLatitudeE7 > 900000000 ||
+                value.normalizedShowOriginLongitudeE7 < -1800000000 ||
+                value.normalizedShowOriginLongitudeE7 > 1800000000)
+                return Fail(error, "Stable Source origin is outside the WGS84 domain.");
+            if (value.routeSlotCount == 0)
+                return Fail(error, "Stable Source RouteSlotCount must be positive.");
             return true;
         }
         inline void Failure(detail::Writer& writer, const UploadJobFailureDTO& value)
@@ -415,7 +515,8 @@ namespace dspgcs
         if (value.commandType == UploadJobCommandType::Start)
         {
             if (value.expectedJobRevision != 0 || value.requestedMaxConcurrentUploads == 0 ||
-                !ValidateIdentity(value.artifactIdentity, error))
+                !ValidateArtifactBinding(value.artifactBinding, error) ||
+                !ValidateFrozenBinding(value.frozenAssignmentBinding, error))
                 return false;
         }
         else
@@ -441,7 +542,8 @@ namespace dspgcs
         writer.String(value.clientCommandId); writer.String(value.uploadJobId);
         writer.U8(static_cast<std::uint8_t>(value.commandType));
         writer.U64(value.expectedJobRevision); writer.U32(value.requestedMaxConcurrentUploads);
-        upload_job_detail::Identity(writer, value.artifactIdentity);
+        upload_job_detail::ArtifactBinding(writer, value.artifactBinding);
+        upload_job_detail::FrozenBinding(writer, value.frozenAssignmentBinding);
         output = writer.Take(); return true;
     }
     inline bool DecodeUploadJobCommand(const std::vector<std::uint8_t>& input,
@@ -452,9 +554,12 @@ namespace dspgcs
             !reader.String(value.uploadJobId) || !reader.U8(type) ||
             !reader.U64(value.expectedJobRevision) ||
             !reader.U32(value.requestedMaxConcurrentUploads) ||
-            !upload_job_detail::Identity(reader, value.artifactIdentity) || !reader.Done())
+            !upload_job_detail::ArtifactBinding(reader, value.artifactBinding) ||
+            !upload_job_detail::FrozenBinding(reader, value.frozenAssignmentBinding) ||
+            !reader.Done())
             return upload_job_detail::Fail(error, "Malformed Upload Job command payload.");
         value.commandType = static_cast<UploadJobCommandType>(type);
+        if (!upload_job_detail::Schema(value.payloadSchemaVersion, error)) return false;
         return ValidateUploadJobCommand(value, error);
     }
 
@@ -543,12 +648,17 @@ namespace dspgcs
             value.preparingCount + value.uploadingCount + value.retryWaitingCount +
             value.succeededCount + value.failedCount + value.cancelledCount;
         const bool errorSnapshot = value.resultCode != UploadJobErrorCode::None;
+        const bool validatingSnapshot = !errorSnapshot &&
+            value.jobState == UploadJobState::Validating &&
+            value.artifactGateState == UploadArtifactGateState::Validating;
         if (!Schema(value.payloadSchemaVersion, error) ||
             !IsCanonicalUploadJobId(value.uploadJobId) ||
             (!value.clientRequestId.empty() && !IsCanonicalUploadJobId(value.clientRequestId)) ||
             value.safeDiagnostic.size() > UploadJobMaxSafeDiagnosticBytes ||
             (!errorSnapshot && (!IsCanonicalUploadJobId(value.snapshotToken) ||
-             !ValidateIdentity(value.artifactIdentity, error) ||
+             !ValidateArtifactBinding(value.artifactBinding, error) ||
+             !ValidateFrozenBinding(value.frozenAssignmentBinding, error) ||
+             (!validatingSnapshot && !ValidateStableSource(value.stableSource, error)) ||
              !ValidArtifactGate(value.artifactGateState) || !ValidJobState(value.jobState) ||
              value.jobRevision == 0 || value.snapshotSequence == 0 ||
              stateTotal != value.matchedCount || value.bytesCompleted > value.totalBytes ||
@@ -562,7 +672,9 @@ namespace dspgcs
         writer.String(value.snapshotToken);
         writer.U16(static_cast<std::uint16_t>(value.resultCode));
         writer.String(value.safeDiagnostic);
-        Identity(writer, value.artifactIdentity);
+        ArtifactBinding(writer, value.artifactBinding);
+        FrozenBinding(writer, value.frozenAssignmentBinding);
+        StableSource(writer, value.stableSource);
         writer.U8(static_cast<std::uint8_t>(value.artifactGateState));
         writer.U8(static_cast<std::uint8_t>(value.jobState));
         writer.U64(value.jobRevision); writer.U64(value.snapshotSequence);
@@ -587,7 +699,9 @@ namespace dspgcs
         if (!reader.U16(value.payloadSchemaVersion) || !reader.String(value.clientRequestId) ||
             !reader.String(value.uploadJobId) || !reader.String(value.snapshotToken) ||
             !reader.U16(resultCode) || !reader.String(value.safeDiagnostic) ||
-            !upload_job_detail::Identity(reader, value.artifactIdentity) || !reader.U8(gate) ||
+            !upload_job_detail::ArtifactBinding(reader, value.artifactBinding) ||
+            !upload_job_detail::FrozenBinding(reader, value.frozenAssignmentBinding) ||
+            !upload_job_detail::StableSource(reader, value.stableSource) || !reader.U8(gate) ||
             !reader.U8(state) || !reader.U64(value.jobRevision) ||
             !reader.U64(value.snapshotSequence) ||
             !reader.U64(value.routeDeltaSequence) || !reader.I64(value.updatedAtUtcMs) ||
@@ -683,14 +797,32 @@ namespace dspgcs
         return EncodeUploadJobRouteStateDelta(value, ignored, error);
     }
 
-    inline bool UploadArtifactIdentityEqual(const UploadArtifactIdentityDTO& left,
-        const UploadArtifactIdentityDTO& right)
+    inline bool UploadArtifactBindingEqual(const UploadArtifactBindingDTO& left,
+        const UploadArtifactBindingDTO& right)
     {
         return left.artifactSetId == right.artifactSetId &&
-            left.artifactSetDigest == right.artifactSetDigest &&
-            left.fleetSessionId == right.fleetSessionId &&
+            left.artifactSetDigest == right.artifactSetDigest;
+    }
+
+    inline bool UploadFrozenAssignmentBindingEqual(
+        const UploadFrozenAssignmentBindingDTO& left,
+        const UploadFrozenAssignmentBindingDTO& right)
+    {
+        return left.fleetSessionId == right.fleetSessionId &&
             left.assignmentAuthoritySessionId == right.assignmentAuthoritySessionId &&
             left.assignmentRevision == right.assignmentRevision &&
             left.assignmentDigest == right.assignmentDigest;
+    }
+
+    inline bool UploadStableSourceEqual(
+        const UploadStableSourceDTO& left,
+        const UploadStableSourceDTO& right)
+    {
+        return left.sourceDatasetDigest == right.sourceDatasetDigest &&
+            left.normalizedShowOriginLatitudeE7 ==
+                right.normalizedShowOriginLatitudeE7 &&
+            left.normalizedShowOriginLongitudeE7 ==
+                right.normalizedShowOriginLongitudeE7 &&
+            left.routeSlotCount == right.routeSlotCount;
     }
 }

@@ -12,6 +12,50 @@
 #include "DSPGCSUploadJobSubsystem.generated.h"
 
 class UDSPGCSProductionTelemetryProviderSubsystem;
+class UDSPGCSFrozenAssignmentSyncSubsystem;
+class URouteArtifactWorkspaceSubsystem;
+
+USTRUCT(BlueprintType)
+struct DRONESHOWPLATFORM1_API FDSPGCSUploadJobCommandStatus
+{
+	GENERATED_BODY()
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DSP-GCS|Upload Job")
+	bool bCommandInFlight = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DSP-GCS|Upload Job")
+	bool bCommandTimedOut = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DSP-GCS|Upload Job")
+	bool bHasCommandAck = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DSP-GCS|Upload Job")
+	bool bHasActiveJobBinding = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DSP-GCS|Upload Job")
+	bool bHasExecutableJob = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DSP-GCS|Upload Job")
+	bool bHasAuthoritativeFailure = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DSP-GCS|Upload Job")
+	bool bRecoveryRequired = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DSP-GCS|Upload Job")
+	int32 CurrentCommandType = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DSP-GCS|Upload Job")
+	int32 LastCommandAckStatus = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DSP-GCS|Upload Job")
+	int32 LastCommandResultCode = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DSP-GCS|Upload Job")
+	FString ActiveUploadJobID;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DSP-GCS|Upload Job")
+	FString LastSafeDiagnostic;
+};
 
 USTRUCT(BlueprintType)
 struct DRONESHOWPLATFORM1_API FDSPGCSUploadJobMirrorStatus
@@ -84,6 +128,17 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
+	/** Captures Current Artifact and ConsoleAccepted Frozen identities internally. */
+	UFUNCTION(BlueprintCallable, Category = "DSP-GCS|Upload Job")
+	bool StartUploadJobFromCurrentAuthorities(
+		int32 RequestedMaxConcurrentUploads,
+		FString& OutUploadJobID,
+		FString& OutError);
+
+	/** Explicit terminal/error-to-NoJob transition. Never attaches an unknown Console Job. */
+	UFUNCTION(BlueprintCallable, Category = "DSP-GCS|Upload Job")
+	bool PrepareForNewUploadJob(FString& OutError);
+
 	UFUNCTION(BlueprintCallable, Category = "DSP-GCS|Upload Job")
 	bool StartUploadJob(
 		const FString& RequestedUploadJobID,
@@ -114,10 +169,16 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "DSP-GCS|Upload Job")
 	FDSPGCSUploadJobMirrorStatus GetMirrorStatus() const;
+	UFUNCTION(BlueprintPure, Category = "DSP-GCS|Upload Job")
+	FDSPGCSUploadJobCommandStatus GetCommandStatus() const;
 
 	const FDSPGCSUploadJobStateMirror& GetStateMirror() const { return Mirror; }
 
 private:
+	bool CaptureCurrentAuthorityBindings(
+		dspgcs::UploadArtifactBindingDTO& OutArtifactBinding,
+		dspgcs::UploadFrozenAssignmentBindingDTO& OutFrozenBinding,
+		FString& OutError);
 	bool SendSimpleCommand(
 		dspgcs::UploadJobCommandType CommandType,
 		std::uint32_t RequestedConcurrency,
@@ -138,11 +199,17 @@ private:
 		const dspgcs::MessageEnvelope& Envelope,
 		const std::vector<std::uint8_t>& Payload);
 	void ProcessIncoming();
+	void ClearPendingSnapshotRequest();
+	void SetLocalCommandFailure(
+		dspgcs::UploadJobCommandType CommandType,
+		const FString& SafeDiagnostic);
 	bool TickClient(float DeltaSeconds);
 	static std::string MakeCanonicalID();
 	static bool ParseDigestHex(const FString& Hex, dspgcs::UploadJobDigest& OutDigest);
 
 	TWeakObjectPtr<UDSPGCSProductionTelemetryProviderSubsystem> ProviderRef;
+	TWeakObjectPtr<URouteArtifactWorkspaceSubsystem> WorkspaceRef;
+	TWeakObjectPtr<UDSPGCSFrozenAssignmentSyncSubsystem> FrozenSyncRef;
 	FDSPGCSUploadJobStateMirror Mirror;
 	TQueue<FDSPGCSUploadJobIncomingFrame, EQueueMode::Mpsc> IncomingFrames;
 	FTSTicker::FDelegateHandle TickHandle;
@@ -158,6 +225,25 @@ private:
 	int32 PendingAttemptCount = 0;
 	int32 PendingSnapshotAttemptCount = 0;
 	bool bSnapshotRequestInFlight = false;
+	bool bCommandInFlight = false;
+	bool bCommandTimedOut = false;
+	bool bHasCommandAck = false;
+	dspgcs::UploadJobCommandType CurrentCommandType =
+		dspgcs::UploadJobCommandType::Start;
+	dspgcs::UploadJobCommandAckStatus LastCommandAckStatus =
+		dspgcs::UploadJobCommandAckStatus::Rejected;
+	dspgcs::UploadJobErrorCode LastCommandResultCode =
+		dspgcs::UploadJobErrorCode::None;
+	FString LastSafeDiagnostic;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FDSPGCSUploadJobClientHardeningTest;
+	TFunction<bool(
+		dspgcs::UploadArtifactBindingDTO&,
+		dspgcs::UploadFrozenAssignmentBindingDTO&,
+		FString&)> StartAuthorityCaptureForTest;
+	TFunction<bool(const std::vector<std::uint8_t>&)> FrameSenderForTest;
+#endif
 
 	static constexpr int32 MaxCommandAttempts = 3;
 	static constexpr int32 MaxSnapshotRequestAttempts = 3;

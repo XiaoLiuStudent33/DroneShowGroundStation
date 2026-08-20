@@ -138,7 +138,6 @@
     <ClCompile Include="AppConfig.cpp" />
     <ClCompile Include="CommandDispatcher.cpp" />
     <ClCompile Include="CommandManager.cpp" />
-    <ClCompile Include="ConsoleArtifactConsumer.cpp" />
     <ClCompile Include="ConsoleArtifactConsumerV2.cpp" />
     <ClCompile Include="ConsoleUploadJobAuthority.cpp" />
     <ClCompile Include="ConsoleGCSApplication.cpp" />
@@ -171,7 +170,6 @@
     <ClInclude Include="AppConfig.h" />
     <ClInclude Include="CommandDispatcher.h" />
     <ClInclude Include="CommandManager.h" />
-    <ClInclude Include="ConsoleArtifactConsumer.h" />
     <ClInclude Include="ConsoleArtifactConsumerV2.h" />
     <ClInclude Include="ConsoleUploadJobAuthority.h" />
     <ClInclude Include="ConsoleGCSApplication.h" />

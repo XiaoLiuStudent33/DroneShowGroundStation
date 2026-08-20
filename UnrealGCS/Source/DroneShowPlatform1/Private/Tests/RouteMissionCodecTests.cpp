@@ -44,6 +44,18 @@ bool FRouteMissionCodecGoldenTest::RunTest(const FString& Parameters)
 	(void)Parameters;
 	static_assert(Mission::MissionItemRecordBytesV1 == 38);
 	static_assert(Mission::LegacyMissionFtpContainerBytesV1 == 10);
+	Mission::Error SizeError;
+	std::size_t PayloadBytes = 0;
+	TestTrue(TEXT("One-item upload payload size checked"),
+		Mission::CheckedLegacyMissionFtpUploadPayloadSizeV1(
+			1, PayloadBytes, SizeError));
+	TestEqual(TEXT("One-item upload payload is header plus record"),
+		static_cast<int64>(PayloadBytes), static_cast<int64>(48));
+	TestTrue(TEXT("9000-item upload payload size checked"),
+		Mission::CheckedLegacyMissionFtpUploadPayloadSizeV1(
+			9000, PayloadBytes, SizeError));
+	TestEqual(TEXT("9000-item upload payload size"),
+		static_cast<int64>(PayloadBytes), static_cast<int64>(342010));
 
 	Wpl::Row Row;
 	Row.Sequence = 0x1234;

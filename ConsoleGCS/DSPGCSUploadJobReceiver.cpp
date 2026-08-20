@@ -42,6 +42,24 @@ DSPGCSUploadJobProcessStats DSPGCSUploadJobReceiver::ProcessPending(
             std::string error;
             if (!dspgcs::DecodeUploadJobCommand(payload, command, error))
             {
+                if (command.payloadSchemaVersion !=
+                        dspgcs::UploadJobSchemaVersion &&
+                    dspgcs::IsCanonicalUploadJobId(command.clientCommandId) &&
+                    dspgcs::IsCanonicalUploadJobId(command.uploadJobId))
+                {
+                    dspgcs::UploadJobCommandAckDTO acknowledgement;
+                    acknowledgement.clientCommandId = command.clientCommandId;
+                    acknowledgement.uploadJobId = command.uploadJobId;
+                    acknowledgement.commandType = command.commandType;
+                    acknowledgement.status =
+                        dspgcs::UploadJobCommandAckStatus::Rejected;
+                    acknowledgement.resultCode =
+                        dspgcs::UploadJobErrorCode::UnsupportedProtocolVersion;
+                    acknowledgement.safeDiagnostic =
+                        "Unsupported Upload Job payload schema version.";
+                    if (sendAck && sendAck(acknowledgement))
+                        ++stats.acknowledgementsSent;
+                }
                 ++stats.framesRejected;
                 continue;
             }

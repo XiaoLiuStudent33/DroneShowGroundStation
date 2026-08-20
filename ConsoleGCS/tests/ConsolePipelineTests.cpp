@@ -34,11 +34,9 @@ int RunDSPCommandTests();
 int RunDSPFrozenAssignmentProtocolTests();
 int RunDSPFrozenAssignmentReceiverTests();
 int RunDSPFrozenAssignmentE2EServer(int argc, char** argv);
-int RunConsoleArtifactConsumerTests();
 int RunConsoleArtifactConsumerV2Tests();
 int RunConsoleArtifactConsumerV2Scale10K();
 int RunRouteArtifactV2ContractTests();
-int RunConsoleArtifactBenchmark(int argc, char** argv);
 int RunRouteMissionCodecTests();
 int RunRouteMissionBenchmarks(int argc, char** argv);
 int RunDSPUploadJobProtocolTests();
@@ -1433,15 +1431,6 @@ int main(const int argc, char** argv)
     {
         return RunDSPFrozenAssignmentE2EServer(argc, argv);
     }
-    if (argc > 1 && (std::string(argv[1]) == "--artifact-benchmark"
-        || std::string(argv[1]) == "--artifact-scale-10k"))
-    {
-        return RunConsoleArtifactBenchmark(argc, argv);
-    }
-    if (argc > 1 && std::string(argv[1]) == "--artifact-tests")
-    {
-        return RunConsoleArtifactConsumerTests();
-    }
     if (argc > 1 && std::string(argv[1]) == "--artifact-v2-contract-tests")
     {
         return RunRouteArtifactV2ContractTests();
@@ -1473,7 +1462,6 @@ int main(const int argc, char** argv)
     const int frozenAssignmentResult = RunDSPFrozenAssignmentProtocolTests();
     const int frozenAssignmentReceiverResult =
         RunDSPFrozenAssignmentReceiverTests();
-    const int artifactConsumerResult = RunConsoleArtifactConsumerTests();
     const int artifactConsumerV2Result = RunConsoleArtifactConsumerV2Tests();
     const int artifactV2ContractResult = RunRouteArtifactV2ContractTests();
     const int missionCodecResult = RunRouteMissionCodecTests();
@@ -1481,7 +1469,7 @@ int main(const int argc, char** argv)
 
     if (pipelineResult == 0 && commandResult == 0 && dspCommandResult == 0 &&
         frozenAssignmentResult == 0 && frozenAssignmentReceiverResult == 0
-        && artifactConsumerResult == 0 && artifactConsumerV2Result == 0
+        && artifactConsumerV2Result == 0
         && artifactV2ContractResult == 0
         && missionCodecResult == 0
         && uploadJobResult == 0)
@@ -1496,7 +1484,6 @@ int main(const int argc, char** argv)
         << " dspCommand=" << dspCommandResult
         << " frozenAssignment=" << frozenAssignmentResult
         << " frozenAssignmentReceiver=" << frozenAssignmentReceiverResult
-        << " artifactConsumer=" << artifactConsumerResult
         << " artifactConsumerV2=" << artifactConsumerV2Result
         << " artifactV2Contract=" << artifactV2ContractResult
         << " missionCodec=" << missionCodecResult

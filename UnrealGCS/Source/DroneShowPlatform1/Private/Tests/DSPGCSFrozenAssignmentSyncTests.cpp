@@ -109,14 +109,19 @@ namespace
 	FRouteAssignmentCandidate ToCandidate(const FRouteAssignmentSnapshot& Snapshot)
 	{
 		FRouteAssignmentCandidate Candidate;
+		Candidate.BindingProvenance = Snapshot.BindingProvenance;
 		Candidate.SourceIdentity = Snapshot.SourceIdentity;
 		Candidate.CandidateDroneCount = Snapshot.CandidateDroneCount;
 		Candidate.RouteSlotCount = Snapshot.RouteSlotCount;
 		Candidate.MatchedEntries = Snapshot.MatchedEntries;
 		for (FRouteAssignmentEntry& Entry : Candidate.MatchedEntries)
 		{
-			Entry.HorizontalDistanceMeters = 0.1;
-			Entry.bHorizontalDistanceValid = true;
+			Entry.HorizontalDistanceMeters =
+				Candidate.BindingProvenance
+					== ERouteAssignmentBindingProvenance::Explicit ? 0.0 : 0.1;
+			Entry.bHorizontalDistanceValid =
+				Candidate.BindingProvenance
+					== ERouteAssignmentBindingProvenance::MatchedByPosition;
 		}
 		Candidate.SpareDrones = Snapshot.SpareDrones;
 		Candidate.ExcludedDrones = Snapshot.ExcludedDrones;
@@ -886,14 +891,16 @@ bool FDSPGCSFrozenAssignmentSyncTests::RunTest(const FString& Parameters)
 	}
 
 	FRouteAssignmentSnapshot NonWireFieldsChanged = Full;
+	NonWireFieldsChanged.BindingProvenance =
+		ERouteAssignmentBindingProvenance::Explicit;
 	NonWireFieldsChanged.SourceIdentity.Latitude = -12.5;
 	NonWireFieldsChanged.SourceIdentity.Longitude = 80.25;
 	NonWireFieldsChanged.SourceIdentity.Altitude = 900.0;
 	NonWireFieldsChanged.SourceIdentity.CapturedAtUtc = FDateTime(2030, 1, 1);
 	for (FRouteAssignmentEntry& Entry : NonWireFieldsChanged.MatchedEntries)
 	{
-		Entry.HorizontalDistanceMeters += 99999.0;
-		Entry.bHorizontalDistanceValid = !Entry.bHorizontalDistanceValid;
+		Entry.HorizontalDistanceMeters = 0.0;
+		Entry.bHorizontalDistanceValid = false;
 	}
 	FDSPGCSFrozenAssignmentWireTransaction NonWireChangedTransaction;
 	TestTrue(TEXT("Non-wire source fields do not block projection"),
@@ -903,7 +910,7 @@ bool FDSPGCSFrozenAssignmentSyncTests::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Non-wire changed transaction decodes"),
 		DecodeWireTransaction(
 			NonWireChangedTransaction, NonWireChangedDecoded, Error));
-	TestTrue(TEXT("HorizontalDistance, raw ShowOrigin doubles and Geo are absent from canonical wire"),
+	TestTrue(TEXT("Binding provenance, HorizontalDistance, raw ShowOrigin doubles and Geo are absent from canonical wire"),
 		FullDecoded.CanonicalBytes == NonWireChangedDecoded.CanonicalBytes);
 	TestTrue(TEXT("Non-wire fields do not alter digest"),
 		FullTransaction.Digest == NonWireChangedTransaction.Digest);
