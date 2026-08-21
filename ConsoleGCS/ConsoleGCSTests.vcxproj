@@ -46,7 +46,10 @@
     <ClCompile Include="tests\RouteArtifactV2ContractTests.cpp" />
     <ClCompile Include="tests\DSPUploadJobProtocolTests.cpp" />
     <ClCompile Include="tests\RouteMissionCodecTests.cpp" />
+    <ClCompile Include="tests\MissionFtpCompilerTests.cpp" />
     <ClCompile Include="tests\MavFtpProbeTests.cpp" />
+    <ClCompile Include="tests\MAVFTPMissionWriterTests.cpp" />
+    <ClCompile Include="tests\MAVFTPMissionHardwareTestTests.cpp" />
     <ClCompile Include="tests\MissionUploadTests.cpp" />
     <ClCompile Include="tests\DSPCommandTests.cpp" />
     <ClCompile Include="tests\DSPFrozenAssignmentProtocolTests.cpp" />
@@ -83,6 +86,9 @@
     <ClCompile Include="MavlinkParser.cpp" />
     <ClCompile Include="MissionProfileProbe.cpp" />
     <ClCompile Include="MissionPreparationWorker.cpp" />
+    <ClCompile Include="MissionFtpCompiler.cpp" />
+    <ClCompile Include="MAVFTPMissionTransport.cpp" />
+    <ClCompile Include="MAVFTPMissionHardwareTest.cpp" />
     <ClCompile Include="MissionProtocolTransport.cpp" />
     <ClCompile Include="MissionUploadTransaction.cpp" />
     <ClCompile Include="RouteUploadManager.cpp" />
@@ -104,6 +110,9 @@
     <ClInclude Include="MavlinkUdpReceiver.h" />
     <ClInclude Include="MissionProfileProbe.h" />
     <ClInclude Include="MissionPreparationWorker.h" />
+    <ClInclude Include="MissionFtpCompiler.h" />
+    <ClInclude Include="MAVFTPMissionTransport.h" />
+    <ClInclude Include="MAVFTPMissionHardwareTest.h" />
     <ClInclude Include="MissionProtocolTransport.h" />
     <ClInclude Include="MissionTransport.h" />
     <ClInclude Include="MissionUploadTransaction.h" />

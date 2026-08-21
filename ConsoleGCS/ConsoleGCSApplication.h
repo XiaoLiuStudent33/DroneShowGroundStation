@@ -10,6 +10,7 @@
 
 struct AppConfig;
 struct MissionProfileProbeOptions;
+struct MAVFTPMissionHardwareTestOptions;
 
 class ConsoleGCSApplication
 {
@@ -19,5 +20,6 @@ public:
 private:
     int RunProductionMavlink(
         const AppConfig& appConfig,
-        const MissionProfileProbeOptions& probeOptions);
+        const MissionProfileProbeOptions& probeOptions,
+        const MAVFTPMissionHardwareTestOptions& hardwareTestOptions);
 };

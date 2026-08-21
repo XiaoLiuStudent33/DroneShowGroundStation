@@ -57,7 +57,22 @@ namespace dronegcs::mavftp
         std::optional<std::uint32_t> remoteCrc32;
         std::vector<std::uint8_t> bytes;
         std::string safeDiagnostic;
+        Opcode terminalRequestOpcode = Opcode::None;
+        std::uint64_t writeBytes = 0;
+        std::uint64_t writeBlocks = 0;
+        std::uint64_t retryCount = 0;
+        std::uint64_t createDurationMs = 0;
+        std::uint64_t writeDurationMs = 0;
+        std::uint64_t terminateDurationMs = 0;
+        std::uint64_t totalDurationMs = 0;
     };
+
+    using WriteChunkReader = bool (*)(
+        std::size_t offset,
+        std::uint8_t* destination,
+        std::size_t size,
+        void* context,
+        std::string& error);
 
     struct ClientStats
     {
@@ -87,6 +102,12 @@ namespace dronegcs::mavftp
         bool StartCalculateCrc32(const std::string& path, std::string& error);
         bool StartWriteFile(const std::string& path,
             std::vector<std::uint8_t> bytes, std::string& error);
+        bool StartWriteFileStream(const std::string& path,
+            std::uint32_t totalBytes,
+            std::size_t maximumChunkBytes,
+            WriteChunkReader reader,
+            void* readerContext,
+            std::string& error);
 
         void Tick(std::chrono::steady_clock::time_point now);
         bool HandleResponse(
@@ -98,6 +119,7 @@ namespace dronegcs::mavftp
 
         bool IsBusy() const;
         bool HasOpenSession() const;
+        bool IsAwaitingWriteCommit() const;
         std::optional<OperationResult> ConsumeResult();
         const PeerIdentity& GetPeer() const { return peer_; }
         const ClientStats& GetStats() const { return stats_; }
@@ -134,6 +156,8 @@ namespace dronegcs::mavftp
         void BestEffortTerminate() noexcept;
         bool StartNextRead(std::string& error);
         bool StartNextWrite(std::string& error);
+        void PopulateOperationMetrics(OperationResult& result) const;
+        void ResetWriteSource();
 
         IRequestTransport& transport_;
         PeerIdentity peer_;
@@ -152,8 +176,17 @@ namespace dronegcs::mavftp
         std::string path_;
         std::uint32_t remoteFileSize_ = 0;
         std::vector<std::uint8_t> operationBytes_;
+        WriteChunkReader writeChunkReader_ = nullptr;
+        void* writeChunkReaderContext_ = nullptr;
+        std::size_t operationSize_ = 0;
+        std::size_t maximumWriteChunkBytes_ = MaximumDataBytes;
         std::size_t transferred_ = 0;
         std::size_t pendingChunkSize_ = 0;
+        std::uint64_t writeBlocksCompleted_ = 0;
+        std::uint64_t operationRetriesAtStart_ = 0;
+        std::chrono::steady_clock::time_point operationStartedAt_{};
+        std::chrono::steady_clock::time_point createConfirmedAt_{};
+        std::chrono::steady_clock::time_point terminateStartedAt_{};
         std::optional<OperationResult> completed_;
     };
 }

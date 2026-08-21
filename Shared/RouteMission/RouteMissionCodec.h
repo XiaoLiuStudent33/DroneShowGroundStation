@@ -231,6 +231,28 @@ namespace dronegcs::route_mission
 		return Result;
 	}
 
+	inline void EncodeMissionItemRecordV1(
+		const MissionItemIntV1& Item,
+		std::array<Byte, MissionItemRecordBytesV1>& Out)
+	{
+		Out.fill(0);
+		WriteU32LittleEndian(Out.data() + 0, Binary32ToBits(Item.Param1));
+		WriteU32LittleEndian(Out.data() + 4, Binary32ToBits(Item.Param2));
+		WriteU32LittleEndian(Out.data() + 8, Binary32ToBits(Item.Param3));
+		WriteU32LittleEndian(Out.data() + 12, Binary32ToBits(Item.Param4));
+		WriteU32LittleEndian(Out.data() + 16, static_cast<std::uint32_t>(Item.X));
+		WriteU32LittleEndian(Out.data() + 20, static_cast<std::uint32_t>(Item.Y));
+		WriteU32LittleEndian(Out.data() + 24, Binary32ToBits(Item.Z));
+		WriteU16LittleEndian(Out.data() + 28, Item.Sequence);
+		WriteU16LittleEndian(Out.data() + 30, Item.Command);
+		Out[32] = 0; // target_system is not authoritative inside mission.dat.
+		Out[33] = 0; // target_component is not authoritative inside mission.dat.
+		Out[34] = Item.Frame;
+		Out[35] = Item.Current;
+		Out[36] = Item.AutoContinue;
+		Out[37] = Item.MissionType;
+	}
+
 	inline bool BuildMissionItemIntV1(
 		const wpl110::Row& Row,
 		MissionItemIntV1& Out,
@@ -269,25 +291,9 @@ namespace dronegcs::route_mission
 		std::array<Byte, MissionItemRecordBytesV1>& Out,
 		Error& OutError)
 	{
-		Out.fill(0);
 		MissionItemIntV1 Item;
 		if (!BuildMissionItemIntV1(Row, Item, OutError)) return false;
-
-		WriteU32LittleEndian(Out.data() + 0, Binary32ToBits(Item.Param1));
-		WriteU32LittleEndian(Out.data() + 4, Binary32ToBits(Item.Param2));
-		WriteU32LittleEndian(Out.data() + 8, Binary32ToBits(Item.Param3));
-		WriteU32LittleEndian(Out.data() + 12, Binary32ToBits(Item.Param4));
-		WriteU32LittleEndian(Out.data() + 16, static_cast<std::uint32_t>(Item.X));
-		WriteU32LittleEndian(Out.data() + 20, static_cast<std::uint32_t>(Item.Y));
-		WriteU32LittleEndian(Out.data() + 24, Binary32ToBits(Item.Z));
-		WriteU16LittleEndian(Out.data() + 28, Item.Sequence);
-		WriteU16LittleEndian(Out.data() + 30, Item.Command);
-		Out[32] = 0; // target_system
-		Out[33] = 0; // target_component
-		Out[34] = Item.Frame;
-		Out[35] = Item.Current;
-		Out[36] = Item.AutoContinue;
-		Out[37] = Item.MissionType;
+		EncodeMissionItemRecordV1(Item, Out);
 		OutError = {};
 		return true;
 	}

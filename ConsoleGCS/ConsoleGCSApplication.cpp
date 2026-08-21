@@ -24,6 +24,7 @@
 #include "MavlinkDiscoveryService.h"
 #include "MavlinkReadOnlyIngress.h"
 #include "MavlinkUdpReceiver.h"
+#include "MAVFTPMissionHardwareTest.h"
 #include "MissionProfileProbe.h"
 #include "RouteUploadManager.h"
 #include "SafetyConfig.h"
@@ -32,6 +33,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -41,6 +43,33 @@
 
 namespace
 {
+    template <typename Integer>
+    bool ParseInteger(const std::string& text, Integer& output)
+    {
+        if (text.empty()) return false;
+        const char* const begin = text.data();
+        const char* const end = begin + text.size();
+        const auto parsed = std::from_chars(begin, end, output);
+        return parsed.ec == std::errc{} && parsed.ptr == end;
+    }
+
+    bool ReadOptionValue(
+        const char* const option,
+        int& index,
+        const int argc,
+        char* argv[],
+        std::string& value)
+    {
+        if (index + 1 >= argc || argv[index + 1] == nullptr ||
+            std::string(argv[index + 1]).empty())
+        {
+            std::cerr << option << " requires one value.\n";
+            return false;
+        }
+        value = argv[++index];
+        return true;
+    }
+
     std::string FormatBytes(const int bytes)
     {
         constexpr int bytesPerMiB = 1024 * 1024;
@@ -133,6 +162,10 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
     std::string configPath = "gcs-config.ini";
     bool configPathSet = false;
     MissionProfileProbeOptions probeOptions;
+    MAVFTPMissionHardwareTestOptions hardwareTestOptions;
+    bool quickOnlyOptionSeen = false;
+    bool quickRouteSlotSeen = false;
+    bool legacyHardwareEntrySeen = false;
     for (int index = 1; index < argc; ++index)
     {
         const std::string argument = argv[index] ? argv[index] : "";
@@ -150,6 +183,120 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
         else if (argument == "--allow-mission-write-probe")
         {
             probeOptions.allowWriteProbe = true;
+        }
+        else if (argument == "--mission-transport")
+        {
+            std::string value;
+            if (!ReadOptionValue("--mission-transport", index, argc, argv, value))
+                return -1;
+            if (value == "mission-protocol")
+                hardwareTestOptions.transportMode = MissionTransportMode::MissionProtocol;
+            else if (value == "mavftp")
+                hardwareTestOptions.transportMode = MissionTransportMode::MAVFTP;
+            else
+            {
+                std::cerr << "--mission-transport accepts mission-protocol or mavftp.\n";
+                return -1;
+            }
+        }
+        else if (argument == "--mavftp-test")
+        {
+            quickOnlyOptionSeen = true;
+            hardwareTestOptions.enabled = true;
+            hardwareTestOptions.quickTest = true;
+            hardwareTestOptions.transportMode = MissionTransportMode::MAVFTP;
+            if (!ReadOptionValue("--mavftp-test", index, argc, argv,
+                hardwareTestOptions.droneId))
+                return -1;
+            hardwareTestOptions.confirmedDroneId = hardwareTestOptions.droneId;
+        }
+        else if (argument == "--route-slot")
+        {
+            quickOnlyOptionSeen = true;
+            quickRouteSlotSeen = true;
+            std::string value;
+            if (!ReadOptionValue("--route-slot", index, argc, argv, value) ||
+                !ParseInteger(value, hardwareTestOptions.routeSlotIndex))
+            {
+                std::cerr << "--route-slot requires an int32 value.\n";
+                return -1;
+            }
+        }
+        else if (argument == "--items")
+        {
+            quickOnlyOptionSeen = true;
+            std::string value;
+            if (!ReadOptionValue("--items", index, argc, argv, value) ||
+                !ParseInteger(value, hardwareTestOptions.artifactItemLimit))
+            {
+                std::cerr << "--items requires a uint32 value.\n";
+                return -1;
+            }
+        }
+        else if (argument == "--mavftp-hardware-test")
+        {
+            legacyHardwareEntrySeen = true;
+            hardwareTestOptions.enabled = true;
+            if (!ReadOptionValue("--mavftp-hardware-test", index, argc, argv,
+                hardwareTestOptions.droneId))
+                return -1;
+        }
+        else if (argument == "--mavftp-hardware-confirm")
+        {
+            if (!ReadOptionValue("--mavftp-hardware-confirm", index, argc, argv,
+                hardwareTestOptions.confirmedDroneId))
+                return -1;
+        }
+        else if (argument == "--mavftp-artifact-set-id")
+        {
+            if (!ReadOptionValue("--mavftp-artifact-set-id", index, argc, argv,
+                hardwareTestOptions.artifactSetId))
+                return -1;
+        }
+        else if (argument == "--mavftp-artifact-set-digest")
+        {
+            std::string value;
+            if (!ReadOptionValue("--mavftp-artifact-set-digest", index, argc,
+                argv, value))
+                return -1;
+            dronegcs::route_artifact::Error digestError;
+            if (!dronegcs::route_artifact::ParseLowerHexDigest(
+                value, hardwareTestOptions.artifactSetDigest, digestError))
+            {
+                std::cerr << "--mavftp-artifact-set-digest must be 64 lowercase hex characters.\n";
+                return -1;
+            }
+        }
+        else if (argument == "--mavftp-route-slot")
+        {
+            std::string value;
+            if (!ReadOptionValue("--mavftp-route-slot", index, argc, argv, value) ||
+                !ParseInteger(value, hardwareTestOptions.routeSlotIndex))
+            {
+                std::cerr << "--mavftp-route-slot requires an int32 value.\n";
+                return -1;
+            }
+        }
+        else if (argument == "--mavftp-artifact-items")
+        {
+            std::string value;
+            if (!ReadOptionValue("--mavftp-artifact-items", index, argc, argv,
+                value) || !ParseInteger(value, hardwareTestOptions.artifactItemLimit))
+            {
+                std::cerr << "--mavftp-artifact-items requires a uint32 value.\n";
+                return -1;
+            }
+        }
+        else if (argument == "--mavftp-segment-items")
+        {
+            std::string value;
+            if (!ReadOptionValue("--mavftp-segment-items", index, argc, argv,
+                value) || !ParseInteger(value,
+                    hardwareTestOptions.segmentItemCapacity))
+            {
+                std::cerr << "--mavftp-segment-items requires a uint32 value.\n";
+                return -1;
+            }
         }
         else if (!argument.empty() && argument[0] == '-')
         {
@@ -172,7 +319,23 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
         std::cerr << "--allow-mission-write-probe requires --mission-profile-probe <DroneID>.\n";
         return -1;
     }
-
+    if (probeOptions.enabled && hardwareTestOptions.enabled)
+    {
+        std::cerr << "MissionProfileProbe and MAVFTP hardware test are mutually exclusive.\n";
+        return -1;
+    }
+    if ((quickOnlyOptionSeen && !hardwareTestOptions.quickTest) ||
+        (hardwareTestOptions.quickTest && legacyHardwareEntrySeen))
+    {
+        std::cerr
+            << "Quick MAVFTP options require exactly one --mavftp-test entry "
+               "and cannot be combined with the legacy hardware entry.\n";
+        return -1;
+    }
+    if (hardwareTestOptions.quickTest && !quickRouteSlotSeen)
+        hardwareTestOptions.routeSlotIndex = 0;
+    if (hardwareTestOptions.quickTest && !configPathSet)
+        configPath = "gcs-config-upload.ini";
     AppConfig appConfig;
     std::string configError;
 
@@ -182,6 +345,18 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
             << configError
             << "\nCopy gcs-config.ini.example to gcs-config.ini "
                "and review the network settings before running.\n";
+        return -1;
+    }
+
+    std::string hardwareOptionsError;
+    if (!ResolveMAVFTPQuickTestOptionsFromCurrent(
+            appConfig.artifactWorkspaceRoot,
+            hardwareTestOptions,
+            hardwareOptionsError) ||
+        !ValidateMAVFTPMissionHardwareTestOptions(
+            hardwareTestOptions, hardwareOptionsError))
+    {
+        std::cerr << hardwareOptionsError << '\n';
         return -1;
     }
 
@@ -241,12 +416,24 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
         return -2;
     }
 
-    return RunProductionMavlink(appConfig, probeOptions);
+    if (hardwareTestOptions.enabled &&
+        (!appConfig.safeTestMode || !appConfig.realCommandEnabled ||
+            !appConfig.routeUploadEnabled))
+    {
+        std::cerr
+            << "MAVFTP hardware validation requires the existing safe-test, "
+               "real-command, and route-upload safety gates; configuration was not changed.\n";
+        return -6;
+    }
+
+    return RunProductionMavlink(
+        appConfig, probeOptions, hardwareTestOptions);
 }
 
 int ConsoleGCSApplication::RunProductionMavlink(
     const AppConfig& appConfig,
-    const MissionProfileProbeOptions& probeOptions)
+    const MissionProfileProbeOptions& probeOptions,
+    const MAVFTPMissionHardwareTestOptions& hardwareTestOptions)
 {
     if (probeOptions.enabled && appConfig.realCommandEnabled)
     {
@@ -326,7 +513,8 @@ int ConsoleGCSApplication::RunProductionMavlink(
         !appConfig.dspgcsCommandEnabled || !appConfig.realCommandEnabled;
     discoveredSessionDefaults.realCommandEnabled =
         appConfig.realCommandEnabled;
-    discoveredSessionDefaults.mavFtpServiceEnabled = probeOptions.enabled;
+    discoveredSessionDefaults.mavFtpServiceEnabled =
+        probeOptions.enabled || hardwareTestOptions.enabled;
     discoveredSessionDefaults.missionUploadServiceEnabled =
         appConfig.routeUploadEnabled;
 
@@ -342,7 +530,8 @@ int ConsoleGCSApplication::RunProductionMavlink(
             [&commandReceiver,
              &frozenAssignmentReceiver,
              &uploadJobReceiver,
-             commandEnabled = appConfig.dspgcsCommandEnabled](
+             commandEnabled = appConfig.dspgcsCommandEnabled &&
+                !hardwareTestOptions.enabled](
                 dspgcs::TransportFrame frame)
             {
                 dspgcs::MessageEnvelope envelope;
@@ -408,6 +597,20 @@ int ConsoleGCSApplication::RunProductionMavlink(
     const auto probeDiscoveryDeadline = std::chrono::steady_clock::now() +
         std::chrono::seconds(30);
     std::unique_ptr<MissionProfileProbe> missionProfileProbe;
+    std::unique_ptr<MAVFTPMissionHardwareTest> hardwareTest;
+    if (hardwareTestOptions.enabled)
+    {
+        hardwareTest = std::make_unique<MAVFTPMissionHardwareTest>(
+            artifactConsumer, droneManager, hardwareTestOptions);
+        std::string hardwareTestError;
+        if (!hardwareTest->Start(
+            std::chrono::steady_clock::now(), hardwareTestError))
+        {
+            std::cerr << "MAVFTP hardware test rejected: "
+                << hardwareTestError << '\n';
+            return -6;
+        }
+    }
     while (true)
     {
         // Drain a full synchronized thousand-aircraft telemetry burst before
@@ -488,7 +691,19 @@ int ConsoleGCSApplication::RunProductionMavlink(
             }
         }
 
-        if (appConfig.dspgcsCommandEnabled)
+        if (hardwareTest)
+        {
+            hardwareTest->Tick(now);
+            if (hardwareTest->IsComplete())
+            {
+                const MAVFTPMissionHardwareTestReport& report =
+                    hardwareTest->GetReport();
+                std::cout << report.ToHumanSummary() << '\n';
+                return report.succeeded ? 0 : -6;
+            }
+        }
+
+        if (appConfig.dspgcsCommandEnabled && !hardwareTestOptions.enabled)
         {
             commandReceiver.ProcessPending(
                 commandManager,
@@ -499,7 +714,7 @@ int ConsoleGCSApplication::RunProductionMavlink(
                 });
         }
 
-        if (telemetryProvider.IsRunning())
+        if (telemetryProvider.IsRunning() && !hardwareTestOptions.enabled)
         {
             const DSPGCSFrozenAssignmentProcessStats assignmentStats =
                 frozenAssignmentReceiver.ProcessPending(

@@ -38,9 +38,12 @@ int RunConsoleArtifactConsumerV2Tests();
 int RunConsoleArtifactConsumerV2Scale10K();
 int RunRouteArtifactV2ContractTests();
 int RunRouteMissionCodecTests();
+int RunMissionFtpCompilerTests();
 int RunRouteMissionBenchmarks(int argc, char** argv);
 int RunDSPUploadJobProtocolTests();
 int RunMavFtpProbeTests();
+int RunMAVFTPMissionWriterTests();
+int RunMAVFTPMissionHardwareTestTests();
 int RunMissionUploadTests();
 
 namespace
@@ -1468,7 +1471,9 @@ int main(const int argc, char** argv)
     }
     if (argc > 1 && std::string(argv[1]) == "--mission-tests")
     {
-        return RunRouteMissionCodecTests();
+        const int codecResult = RunRouteMissionCodecTests();
+        const int compilerResult = RunMissionFtpCompilerTests();
+        return codecResult == 0 && compilerResult == 0 ? 0 : 1;
     }
     if (argc > 1 && std::string(argv[1]) == "--mission-benchmark")
     {
@@ -1480,7 +1485,11 @@ int main(const int argc, char** argv)
     }
     if (argc > 1 && std::string(argv[1]) == "--mavftp-probe-tests")
     {
-        return RunMavFtpProbeTests();
+        const int probeResult = RunMavFtpProbeTests();
+        const int writerResult = RunMAVFTPMissionWriterTests();
+        const int harnessResult = RunMAVFTPMissionHardwareTestTests();
+        return probeResult == 0 && writerResult == 0 && harnessResult == 0
+            ? 0 : 1;
     }
     if (argc > 1 && std::string(argv[1]) == "--mission-upload-tests")
     {
@@ -1496,8 +1505,11 @@ int main(const int argc, char** argv)
     const int artifactConsumerV2Result = RunConsoleArtifactConsumerV2Tests();
     const int artifactV2ContractResult = RunRouteArtifactV2ContractTests();
     const int missionCodecResult = RunRouteMissionCodecTests();
+    const int missionCompilerResult = RunMissionFtpCompilerTests();
     const int uploadJobResult = RunDSPUploadJobProtocolTests();
     const int mavFtpProbeResult = RunMavFtpProbeTests();
+    const int mavFtpWriterResult = RunMAVFTPMissionWriterTests();
+    const int mavFtpHarnessResult = RunMAVFTPMissionHardwareTestTests();
     const int missionUploadResult = RunMissionUploadTests();
 
     if (pipelineResult == 0 && commandResult == 0 && dspCommandResult == 0 &&
@@ -1505,8 +1517,11 @@ int main(const int argc, char** argv)
         && artifactConsumerV2Result == 0
         && artifactV2ContractResult == 0
         && missionCodecResult == 0
+        && missionCompilerResult == 0
         && uploadJobResult == 0
         && mavFtpProbeResult == 0
+        && mavFtpWriterResult == 0
+        && mavFtpHarnessResult == 0
         && missionUploadResult == 0)
     {
         std::cout << "ConsoleGCS regression suite passed\n";
@@ -1522,8 +1537,11 @@ int main(const int argc, char** argv)
         << " artifactConsumerV2=" << artifactConsumerV2Result
         << " artifactV2Contract=" << artifactV2ContractResult
         << " missionCodec=" << missionCodecResult
+        << " missionCompiler=" << missionCompilerResult
         << " uploadJob=" << uploadJobResult
         << " mavFtpProbe=" << mavFtpProbeResult
+        << " mavFtpWriter=" << mavFtpWriterResult
+        << " mavFtpHarness=" << mavFtpHarnessResult
         << " missionUpload=" << missionUploadResult
         << '\n';
     return 1;

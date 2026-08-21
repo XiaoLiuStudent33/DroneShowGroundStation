@@ -16,6 +16,17 @@ namespace dronegcs::mavftp
                 peer.remotePort != 0 && peer.systemId != 0 &&
                 peer.componentId != 0;
         }
+
+        std::uint64_t ElapsedMilliseconds(
+            const std::chrono::steady_clock::time_point begin,
+            const std::chrono::steady_clock::time_point end)
+        {
+            if (begin == std::chrono::steady_clock::time_point{} || end < begin)
+                return 0;
+            return static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    end - begin).count());
+        }
     }
 
     bool SamePeer(const PeerIdentity& left, const PeerIdentity& right)
@@ -73,16 +84,20 @@ namespace dronegcs::mavftp
         completed_.reset();
         operation_ = kind;
         operationBytes_.clear();
+        ResetWriteSource();
         transferred_ = 0;
         pendingChunkSize_ = 0;
         remoteFileSize_ = 0;
         sessionOpen_ = false;
         activeSession_ = 0;
+        operationRetriesAtStart_ = stats_.retriesSent;
+        operationStartedAt_ = std::chrono::steady_clock::now();
         if (!SendNewRequest(phase, opcode, session, offset,
             std::move(data), error))
         {
             operation_ = OperationKind::None;
             phase_ = Phase::Idle;
+            pending_ = false;
             return false;
         }
         return true;
@@ -149,6 +164,46 @@ namespace dronegcs::mavftp
             return false;
         }
         operationBytes_ = std::move(bytes);
+        operationSize_ = operationBytes_.size();
+        return true;
+    }
+
+    bool Client::StartWriteFileStream(
+        const std::string& path,
+        const std::uint32_t totalBytes,
+        const std::size_t maximumChunkBytes,
+        const WriteChunkReader reader,
+        void* const readerContext,
+        std::string& error)
+    {
+        if (totalBytes == 0 || totalBytes > config_.maximumFileBytes)
+        {
+            error = "MAVFTP stream size must be non-zero and within the configured file bound.";
+            return false;
+        }
+        if (!reader || maximumChunkBytes == 0 ||
+            maximumChunkBytes > MaximumDataBytes)
+        {
+            error = "MAVFTP stream reader or write block bound is invalid.";
+            return false;
+        }
+        std::vector<std::uint8_t> pathData;
+        Error protocolError;
+        if (!MakePathData(path, pathData, protocolError))
+        {
+            error = protocolError.detail;
+            return false;
+        }
+        path_ = path;
+        if (!Begin(OperationKind::WriteFile, Phase::AwaitCreate,
+            Opcode::CreateFile, 0, 0, std::move(pathData), error))
+        {
+            return false;
+        }
+        operationSize_ = totalBytes;
+        maximumWriteChunkBytes_ = maximumChunkBytes;
+        writeChunkReader_ = reader;
+        writeChunkReaderContext_ = readerContext;
         return true;
     }
 
@@ -339,7 +394,12 @@ namespace dronegcs::mavftp
             activeSession_ = response.session;
             sessionOpen_ = true;
             transferred_ = 0;
-            if (!StartNextWrite(error)) CompleteFailure(error);
+            createConfirmedAt_ = std::chrono::steady_clock::now();
+            if (!StartNextWrite(error))
+            {
+                BestEffortTerminate();
+                CompleteFailure(error);
+            }
             return;
         case Phase::AwaitTruncate:
         {
@@ -352,21 +412,39 @@ namespace dronegcs::mavftp
             return;
         }
         case Phase::AwaitWrite:
-            if (response.offset != transferred_ || response.data.size() != 4 ||
-                ReadU32LittleEndian(response.data.data()) != pendingChunkSize_)
+            if (response.offset != transferred_)
             {
                 BestEffortTerminate();
-                CompleteFailure("WriteFile ACK byte count or offset is invalid.");
+                CompleteFailure("OffsetMismatch: MAVFTP WriteFile ACK offset differs from the pending block.");
+                return;
+            }
+            // ArduPilot's canonical WriteFile ACK has no data payload. Retain
+            // compatibility with servers that return a uint32 written count.
+            if (!response.data.empty() &&
+                (response.data.size() != 4 ||
+                    ReadU32LittleEndian(response.data.data()) != pendingChunkSize_))
+            {
+                BestEffortTerminate();
+                CompleteFailure("MAVFTP WriteFile ACK byte count is invalid.");
                 return;
             }
             transferred_ += pendingChunkSize_;
-            if (transferred_ == operationBytes_.size())
+            ++writeBlocksCompleted_;
+            if (transferred_ == operationSize_)
             {
+                terminateStartedAt_ = std::chrono::steady_clock::now();
                 if (!SendNewRequest(Phase::AwaitTerminateWrite,
                     Opcode::TerminateSession, activeSession_, 0, {}, error))
+                {
+                    BestEffortTerminate();
                     CompleteFailure(error);
+                }
             }
-            else if (!StartNextWrite(error)) CompleteFailure(error);
+            else if (!StartNextWrite(error))
+            {
+                BestEffortTerminate();
+                CompleteFailure(error);
+            }
             return;
         case Phase::AwaitTerminateWrite:
             sessionOpen_ = false;
@@ -416,11 +494,34 @@ namespace dronegcs::mavftp
 
     bool Client::StartNextWrite(std::string& error)
     {
-        const std::size_t remaining = operationBytes_.size() - transferred_;
-        pendingChunkSize_ = (std::min)(remaining, MaximumDataBytes);
-        std::vector<std::uint8_t> chunk(
-            operationBytes_.begin() + transferred_,
-            operationBytes_.begin() + transferred_ + pendingChunkSize_);
+        if (transferred_ >= operationSize_)
+        {
+            error = "MAVFTP write source has no remaining bytes.";
+            return false;
+        }
+        const std::size_t remaining = operationSize_ - transferred_;
+        pendingChunkSize_ = (std::min)(remaining, maximumWriteChunkBytes_);
+        std::vector<std::uint8_t> chunk(pendingChunkSize_);
+        if (writeChunkReader_)
+        {
+            if (!writeChunkReader_(transferred_, chunk.data(), chunk.size(),
+                writeChunkReaderContext_, error))
+            {
+                if (error.empty())
+                    error = "MAVFTP write stream rejected the requested range.";
+                return false;
+            }
+        }
+        else
+        {
+            if (operationBytes_.size() != operationSize_)
+            {
+                error = "MAVFTP write source size changed during the operation.";
+                return false;
+            }
+            std::copy_n(operationBytes_.begin() + transferred_,
+                pendingChunkSize_, chunk.begin());
+        }
         return SendNewRequest(Phase::AwaitWrite, Opcode::WriteFile,
             activeSession_, static_cast<std::uint32_t>(transferred_),
             std::move(chunk), error);
@@ -432,15 +533,17 @@ namespace dronegcs::mavftp
         result.kind = operation_;
         result.success = true;
         result.remoteFileSize = operation_ == OperationKind::ReadFile
-            ? remoteFileSize_ : static_cast<std::uint32_t>(operationBytes_.size());
+            ? remoteFileSize_ : static_cast<std::uint32_t>(operationSize_);
         if (operation_ == OperationKind::ReadFile)
             result.bytes = operationBytes_;
         if (operation_ == OperationKind::CalculateCrc32)
             result.remoteCrc32 = remoteFileSize_;
+        PopulateOperationMetrics(result);
         completed_ = std::move(result);
         pending_ = false;
         phase_ = Phase::Idle;
         operation_ = OperationKind::None;
+        ResetWriteSource();
     }
 
     void Client::CompleteFailure(
@@ -453,12 +556,15 @@ namespace dronegcs::mavftp
         result.nakError = nakError;
         result.unsupported = unsupported;
         result.safeDiagnostic = std::move(diagnostic);
+        result.terminalRequestOpcode = pendingRequest_.opcode;
+        PopulateOperationMetrics(result);
         completed_ = std::move(result);
         pending_ = false;
         phase_ = Phase::Idle;
         operation_ = OperationKind::None;
         sessionOpen_ = false;
         activeSession_ = 0;
+        ResetWriteSource();
     }
 
     void Client::CompleteCancelled()
@@ -467,12 +573,15 @@ namespace dronegcs::mavftp
         result.kind = operation_;
         result.cancelled = true;
         result.safeDiagnostic = "MAVFTP operation cancelled.";
+        result.terminalRequestOpcode = pendingRequest_.opcode;
+        PopulateOperationMetrics(result);
         completed_ = std::move(result);
         pending_ = false;
         phase_ = Phase::Idle;
         operation_ = OperationKind::None;
         sessionOpen_ = false;
         activeSession_ = 0;
+        ResetWriteSource();
     }
 
     void Client::BestEffortTerminate() noexcept
@@ -516,6 +625,38 @@ namespace dronegcs::mavftp
     bool Client::HasOpenSession() const
     {
         return sessionOpen_;
+    }
+
+    bool Client::IsAwaitingWriteCommit() const
+    {
+        return phase_ == Phase::AwaitTerminateWrite;
+    }
+
+    void Client::PopulateOperationMetrics(OperationResult& result) const
+    {
+        const auto completedAt = std::chrono::steady_clock::now();
+        result.writeBytes = transferred_;
+        result.writeBlocks = writeBlocksCompleted_;
+        result.retryCount = stats_.retriesSent - operationRetriesAtStart_;
+        result.createDurationMs = ElapsedMilliseconds(
+            operationStartedAt_, createConfirmedAt_);
+        result.writeDurationMs = ElapsedMilliseconds(
+            createConfirmedAt_, terminateStartedAt_);
+        result.terminateDurationMs = ElapsedMilliseconds(
+            terminateStartedAt_, completedAt);
+        result.totalDurationMs = ElapsedMilliseconds(
+            operationStartedAt_, completedAt);
+    }
+
+    void Client::ResetWriteSource()
+    {
+        writeChunkReader_ = nullptr;
+        writeChunkReaderContext_ = nullptr;
+        operationSize_ = 0;
+        maximumWriteChunkBytes_ = MaximumDataBytes;
+        writeBlocksCompleted_ = 0;
+        createConfirmedAt_ = {};
+        terminateStartedAt_ = {};
     }
 
     std::optional<OperationResult> Client::ConsumeResult()
