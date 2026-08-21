@@ -3,7 +3,7 @@
 #include "ConsoleUploadJobAuthority.h"
 #include "DroneManager.h"
 #include "MissionPreparationWorker.h"
-#include "MissionUploadTransaction.h"
+#include "MissionTransport.h"
 
 #include <chrono>
 #include <cstddef>
@@ -18,7 +18,10 @@ struct RouteUploadTargetMetrics
     std::string droneId;
     std::int32_t routeSlotIndex = -1;
     std::uint32_t missionItemCount = 0;
+    std::uint64_t artifactRouteItems = 0;
+    std::uint64_t wireMissionItems = 0;
     std::uint64_t logicalPayloadBytes = 0;
+	std::uint64_t uniqueItemsServed = 0;
     std::uint64_t wireBytesSent = 0;
     std::uint64_t missionMessagesSent = 0;
     std::uint64_t missionRequestsReceived = 0;
@@ -29,7 +32,10 @@ struct RouteUploadTargetMetrics
     std::uint64_t verificationDurationMs = 0;
     std::uint64_t totalDurationMs = 0;
     std::string result;
+    std::string terminalPhase;
+	dspgcs::RouteUploadErrorCode resultCode = dspgcs::RouteUploadErrorCode::None;
     std::string safeDiagnostic;
+    std::string verificationMismatchDiagnostic;
 };
 
 struct RouteUploadJobMetrics
@@ -72,6 +78,9 @@ public:
         { return preparationWorker_.GetWorkerThreadCountForTest(); }
     std::size_t GetSocketCountForTest() const { return 0; }
     std::size_t GetTimerCountForTest() const { return 0; }
+	const std::string& GetLastTerminalDiagnosticForTest() const
+		{ return lastTerminalDiagnostic_; }
+	const std::string& GetLastJobSummaryForTest() const { return lastJobSummary_; }
 
 private:
     struct RuntimeTarget
@@ -79,12 +88,11 @@ private:
         UploadJobTargetMetadata metadata;
         dspgcs::UploadRouteStateDTO state;
         std::vector<dronegcs::route_mission::MissionItemIntV1> prepared;
-        std::unique_ptr<MissionUploadTransaction> transaction;
+        std::unique_ptr<IMissionTransport> transport;
         DroneSession* session = nullptr;
         std::uint64_t generation = 0;
         std::chrono::steady_clock::time_point admittedAt{};
         std::chrono::steady_clock::time_point uploadStartedAt{};
-        std::chrono::steady_clock::time_point verificationStartedAt{};
         RouteUploadTargetMetrics metrics;
     };
 
@@ -118,6 +126,8 @@ private:
     std::uint64_t ElapsedMs(std::chrono::steady_clock::time_point now) const;
     std::uint64_t LogicalThroughput(std::chrono::steady_clock::time_point now) const;
     void RefreshMetrics(std::chrono::steady_clock::time_point now);
+	void PersistTargetTerminal(const RuntimeTarget& target);
+	void PersistJobSummary(const dspgcs::UploadJobFailureDTO* firstFailure);
 
     ConsoleUploadJobAuthority& authority_;
     DroneManager& droneManager_;
@@ -127,5 +137,6 @@ private:
     std::optional<RuntimeJob> activeJob_;
     RouteUploadJobMetrics jobMetrics_;
     std::vector<RouteUploadTargetMetrics> targetMetrics_;
+	std::string lastTerminalDiagnostic_;
+	std::string lastJobSummary_;
 };
-

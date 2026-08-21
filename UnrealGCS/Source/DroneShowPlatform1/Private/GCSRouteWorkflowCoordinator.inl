@@ -988,6 +988,12 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	SetText(UploadWidgets,TEXT("TXT_ConsoleValidatedValue"),ConsoleState);
 	FString JobPresentation = Job
 		? TEXT("Protocol: ") + JobState(Job->jobState) : TEXT("Protocol: --");
+	if (Job && Job->jobState == dspgcs::UploadJobState::Failed &&
+		!Job->firstFailure.safeSummary.empty())
+	{
+		JobPresentation += TEXT(" / ") +
+			WorkflowFromUtf8(Job->firstFailure.safeSummary).Left(320);
+	}
 	const FDSPGCSUploadJobCommandStatus CommandStatus =
 		Upload ? Upload->GetCommandStatus() : FDSPGCSUploadJobCommandStatus{};
 	if (!CommandStatus.LastSafeDiagnostic.IsEmpty() &&
@@ -1199,6 +1205,7 @@ void UGCSRouteWorkflowCoordinator::ClearRouteListModel()
 	RouteListJobID.Reset();
 	RouteListSnapshotToken.Reset();
 	ValidatedRouteRows.Reset();
+	RouteRowDiagnostics.Reset();
 }
 
 void UGCSRouteWorkflowCoordinator::RefreshVisibleRouteRows()
@@ -1216,29 +1223,41 @@ void UGCSRouteWorkflowCoordinator::RefreshVisibleRouteRows()
 	for (UUserWidget* Row : List->GetDisplayedEntryWidgets())
 	{
 		if (!Row || !Row->WidgetTree) continue;
+		TArray<FString> Issues;
 		if (!ValidatedRouteRows.Contains(Row))
 		{
-			TArray<FString> Missing;
-			for (const FName Name : {FName(TEXT("TXT_Route")), FName(TEXT("TXT_Drone")),
-				FName(TEXT("TXT_State")), FName(TEXT("TXT_Progress")), FName(TEXT("TXT_Retry"))})
-			{
-				if (!Cast<UTextBlock>(Row->WidgetTree->FindWidget(Name))) Missing.Add(Name.ToString());
-			}
-			if (!Cast<IUserObjectListEntry>(Row) || !Missing.IsEmpty())
-			{
-				UE_LOG(LogGCSRouteWorkflow, Error,
-					TEXT("Route upload row binding invalid. Missing/wrong widgets: %s"),
-					*FString::Join(Missing, TEXT(", ")));
-				bBindingValid = false;
-				StopRefreshTicker();
-				return;
-			}
-			ValidatedRouteRows.Add(Row);
+			const FString StructureDiagnostic = DiagnoseRouteRowStructure(Row);
+			StructureDiagnostic.ParseIntoArray(Issues, TEXT(", "), true);
 		}
 
-		IUserObjectListEntry* Entry = Cast<IUserObjectListEntry>(Row);
-		const UGCSRouteUploadListItem* Item =
-			Entry ? Entry->GetListItem<UGCSRouteUploadListItem>() : nullptr;
+		UObject* ListObject = List->GetListObjectFromEntry(*Row);
+		if (!ListObject) Issues.Add(TEXT("ListItemMissing"));
+		const UGCSRouteUploadListItem* Item = Cast<UGCSRouteUploadListItem>(ListObject);
+		if (ListObject && !Item) Issues.Add(TEXT("WrongListItemType"));
+		if (!Issues.IsEmpty())
+		{
+			const FString Diagnostic = FString::Join(Issues, TEXT(", "));
+			const FString* Previous = RouteRowDiagnostics.Find(Row);
+			if (!Previous || *Previous != Diagnostic)
+			{
+				UE_LOG(LogGCSRouteWorkflow, Error,
+					TEXT("Route upload row binding invalid: %s"), *Diagnostic);
+				RouteRowDiagnostics.Add(Row, Diagnostic);
+			}
+			if (UTextBlock* Text = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_Route"))))
+				Text->SetText(FText::FromString(TEXT("--")));
+			if (UTextBlock* Text = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_Drone"))))
+				Text->SetText(FText::FromString(TEXT("--")));
+			if (UTextBlock* Text = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_State"))))
+				Text->SetText(FText::FromString(TEXT("Error")));
+			if (UTextBlock* Text = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_Progress"))))
+				Text->SetText(FText::FromString(TEXT("--")));
+			if (UTextBlock* Text = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_Retry"))))
+				Text->SetText(FText::FromString(TEXT("--")));
+			continue;
+		}
+		ValidatedRouteRows.Add(Row);
+		RouteRowDiagnostics.Remove(Row);
 		if (!Item || Item->UploadJobID != RouteListJobID
 			|| Item->SnapshotToken != RouteListSnapshotToken) continue;
 		const dspgcs::UploadRouteStateDTO* State = Mirror.FindRoute(Item->RouteSlotIndex);
@@ -1257,7 +1276,17 @@ void UGCSRouteWorkflowCoordinator::RefreshVisibleRouteRows()
 		RouteText->SetToolTipText(FText::FromString(FullRoute));
 		const FString DroneID = WorkflowFromUtf8(State->droneId);
 		DroneText->SetText(FText::FromString(DroneID.IsEmpty() ? TEXT("--") : DroneID));
-		StateText->SetText(FText::FromString(FormatRouteState(static_cast<uint8>(State->state))));
+		FString RouteStateText = FormatRouteState(static_cast<uint8>(State->state));
+		if (State->state == dspgcs::UploadRouteState::Failed &&
+			State->errorCode != dspgcs::RouteUploadErrorCode::None)
+		{
+			RouteStateText += TEXT(" / ") +
+				FormatRouteErrorCode(static_cast<uint16>(State->errorCode));
+		}
+		StateText->SetText(FText::FromString(RouteStateText));
+		StateText->SetToolTipText(FText::FromString(
+			State->safeFailureSummary.empty()
+				? RouteStateText : WorkflowFromUtf8(State->safeFailureSummary).Left(512)));
 		ProgressText->SetText(FText::FromString(FormatPercent(
 			ComputeProgressRatio(State->bytesCompleted, State->totalBytes))));
 		RetryText->SetText(FText::AsNumber(ComputeRetryCount(State->attemptCount)));
@@ -1290,6 +1319,38 @@ FString UGCSRouteWorkflowCoordinator::FormatRouteState(const uint8 RouteStateVal
 	case dspgcs::UploadRouteState::Cancelled: return TEXT("Cancelled");
 	default: return TEXT("--");
 	}
+}
+FString UGCSRouteWorkflowCoordinator::FormatRouteErrorCode(const uint16 ErrorCodeValue)
+{
+	switch (static_cast<dspgcs::RouteUploadErrorCode>(ErrorCodeValue))
+	{
+	case dspgcs::RouteUploadErrorCode::None: return TEXT("None");
+	case dspgcs::RouteUploadErrorCode::RouteDescriptorMissing: return TEXT("RouteDescriptorMissing");
+	case dspgcs::RouteUploadErrorCode::RouteFileUnavailable: return TEXT("RouteFileUnavailable");
+	case dspgcs::RouteUploadErrorCode::RouteIdentityMismatch: return TEXT("RouteIdentityMismatch");
+	case dspgcs::RouteUploadErrorCode::WaypointValidationFailed: return TEXT("WaypointValidationFailed");
+	case dspgcs::RouteUploadErrorCode::MissionEncodingFailed: return TEXT("MissionEncodingFailed");
+	case dspgcs::RouteUploadErrorCode::TransportUnavailable: return TEXT("TransportUnavailable");
+	case dspgcs::RouteUploadErrorCode::UploadRejected: return TEXT("UploadRejected");
+	case dspgcs::RouteUploadErrorCode::UploadTimedOut: return TEXT("UploadTimedOut");
+	case dspgcs::RouteUploadErrorCode::Cancelled: return TEXT("Cancelled");
+	case dspgcs::RouteUploadErrorCode::InternalError: return TEXT("InternalError");
+	default: return TEXT("Unknown");
+	}
+}
+FString UGCSRouteWorkflowCoordinator::DiagnoseRouteRowStructure(const UUserWidget* Row)
+{
+	if (!Row || !Row->WidgetTree) return TEXT("RowMissing");
+	TArray<FString> Issues;
+	if (!Row->Implements<UUserObjectListEntry>()) Issues.Add(TEXT("InterfaceMissing"));
+	for (const FName Name : {FName(TEXT("TXT_Route")), FName(TEXT("TXT_Drone")),
+		FName(TEXT("TXT_State")), FName(TEXT("TXT_Progress")), FName(TEXT("TXT_Retry"))})
+	{
+		UWidget* Widget = Row->WidgetTree->FindWidget(Name);
+		if (!Widget) Issues.Add(Name.ToString() + TEXT(" Missing"));
+		else if (!Cast<UTextBlock>(Widget)) Issues.Add(Name.ToString() + TEXT(" WrongType"));
+	}
+	return FString::Join(Issues, TEXT(", "));
 }
 FString UGCSRouteWorkflowCoordinator::FormatRouteFileDisplay(
 	const FString& ManifestRelativePath)

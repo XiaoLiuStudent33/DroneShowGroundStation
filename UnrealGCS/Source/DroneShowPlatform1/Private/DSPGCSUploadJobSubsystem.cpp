@@ -474,6 +474,7 @@ void UDSPGCSUploadJobSubsystem::ClearPendingSnapshotRequest()
 {
 	PendingSnapshotRequestFrame.clear();
 	PendingSnapshotRequestID.clear();
+	PendingSnapshotRequestKind = dspgcs::UploadJobSnapshotRequestKind::Aggregate;
 	PendingSnapshotAttemptCount = 0;
 	bSnapshotRequestInFlight = false;
 }
@@ -524,6 +525,7 @@ bool UDSPGCSUploadJobSubsystem::SendSnapshotRequest(
 	{
 		PendingSnapshotRequestFrame = std::move(Frame);
 		PendingSnapshotRequestID = Request.clientRequestId;
+		PendingSnapshotRequestKind = Kind;
 		PendingSnapshotAttemptCount = 1;
 		SnapshotRetryAtSeconds = FPlatformTime::Seconds() +
 			SnapshotRequestRetrySeconds;
@@ -574,9 +576,21 @@ void UDSPGCSUploadJobSubsystem::ProcessIncoming()
 		{
 			dspgcs::UploadJobSnapshotDTO Snapshot;
 			if (dspgcs::DecodeUploadJobSnapshot(Frame.Payload, Snapshot, Error) &&
-				Snapshot.clientRequestId == PendingSnapshotRequestID &&
-				Mirror.ApplySnapshot(Snapshot))
+				Snapshot.clientRequestId == PendingSnapshotRequestID)
 			{
+				const bool bStaleRoutePage =
+					PendingSnapshotRequestKind ==
+						dspgcs::UploadJobSnapshotRequestKind::RoutePage &&
+					Snapshot.resultCode ==
+						dspgcs::UploadJobErrorCode::StaleJobRevision;
+				if (bStaleRoutePage)
+				{
+					ClearPendingSnapshotRequest();
+					Mirror.MarkRoutePageStale();
+					NextSnapshotPollSeconds = 0.0;
+					continue;
+				}
+				if (!Mirror.ApplySnapshot(Snapshot)) continue;
 				ClearPendingSnapshotRequest();
 				if (Snapshot.resultCode != dspgcs::UploadJobErrorCode::None)
 				{

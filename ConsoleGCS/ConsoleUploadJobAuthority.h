@@ -133,7 +133,6 @@ private:
         std::vector<Target> targets;
         std::vector<dspgcs::UploadRouteStateDTO> pageSnapshot;
         std::uint64_t pageSnapshotRevision = 0;
-        std::uint64_t snapshotTokenRevision = 0;
         std::string pageSnapshotToken;
         std::uint64_t nextDeltaSequence = 0;
         std::shared_ptr<const AcceptedRouteArtifactV2> artifactSnapshot;
@@ -205,6 +204,7 @@ private:
         std::unique_ptr<dronegcs::route_artifact::ArtifactReadLease>& lease,
         ConsoleArtifactV2Diagnostic& diagnostic);
     void RecalculateAggregate(Job& job);
+    void RecalculateFirstFailure(Job& job);
     void QueueRouteDeltas(Job& job, const std::vector<dspgcs::UploadRouteStateDTO>& updates);
     void FinalizeCancellation(Job& job);
     Job* FindJob(const std::string& uploadJobId);

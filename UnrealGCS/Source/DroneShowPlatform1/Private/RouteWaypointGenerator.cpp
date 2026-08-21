@@ -5,6 +5,8 @@
 #include "RouteArtifactWorkspaceManager.h"
 #include "Wpl110Core.h"
 
+DEFINE_LOG_CATEGORY_STATIC(LogRouteWaypointAltitudeAudit, Log, All);
+
 namespace
 {
 	constexpr uint8 CrLf[] = { '\r', '\n' };
@@ -420,6 +422,16 @@ FRouteWaypointGenerationResult RouteWaypointGenerator::GenerateRoute(
 			return MakeFailure(Input.RouteSlotIndex, RowCount, BytesWritten,
 				ERouteWaypointGeneratorErrorCode::NumericOverflow,
 				TEXT("Waypoint coordinate cannot be represented by the v1 E7 contract."));
+		}
+		if (Input.RouteSlotIndex == 0 && FrameIndex == 0)
+		{
+			UE_LOG(LogRouteWaypointAltitudeAudit, Display,
+				TEXT("[RouteWaypoint] AltitudeConversion: InputAltitude=%.9f "
+					"OriginAltitude=%.9f TerrainOffset=0.000000000 "
+					"ComputedWaypointAltitude=%s Semantics=RelativeLocalZ"),
+				UpMeters,
+				RouteData->ShowOriginAltitude,
+				*FormatScaledDecimal(AltitudeE7));
 		}
 
 		FRouteWaypointGeneratorError RowError;

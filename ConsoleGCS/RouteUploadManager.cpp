@@ -1,9 +1,15 @@
 #include "RouteUploadManager.h"
 
 #include "ConsoleUI.h"
+#include "MissionProtocolTransport.h"
 
 #include <algorithm>
 #include <chrono>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <sstream>
 #include <utility>
 
 namespace
@@ -20,6 +26,79 @@ namespace
             state == dspgcs::UploadRouteState::Failed ||
             state == dspgcs::UploadRouteState::Cancelled;
     }
+
+	const char* RouteStateName(const dspgcs::UploadRouteState state)
+	{
+		switch (state)
+		{
+		case dspgcs::UploadRouteState::Waiting: return "Waiting";
+		case dspgcs::UploadRouteState::Preparing: return "Preparing";
+		case dspgcs::UploadRouteState::Uploading: return "Uploading";
+		case dspgcs::UploadRouteState::RetryWaiting: return "RetryWaiting";
+		case dspgcs::UploadRouteState::Succeeded: return "Succeeded";
+		case dspgcs::UploadRouteState::Failed: return "Failed";
+		case dspgcs::UploadRouteState::Cancelled: return "Cancelled";
+		default: return "Unknown";
+		}
+	}
+
+	const char* RouteErrorName(const dspgcs::RouteUploadErrorCode code)
+	{
+		switch (code)
+		{
+		case dspgcs::RouteUploadErrorCode::None: return "None";
+		case dspgcs::RouteUploadErrorCode::RouteDescriptorMissing: return "RouteDescriptorMissing";
+		case dspgcs::RouteUploadErrorCode::RouteFileUnavailable: return "RouteFileUnavailable";
+		case dspgcs::RouteUploadErrorCode::RouteIdentityMismatch: return "RouteIdentityMismatch";
+		case dspgcs::RouteUploadErrorCode::WaypointValidationFailed: return "WaypointValidationFailed";
+		case dspgcs::RouteUploadErrorCode::MissionEncodingFailed: return "MissionEncodingFailed";
+		case dspgcs::RouteUploadErrorCode::TransportUnavailable: return "TransportUnavailable";
+		case dspgcs::RouteUploadErrorCode::UploadRejected: return "UploadRejected";
+		case dspgcs::RouteUploadErrorCode::UploadTimedOut: return "UploadTimedOut";
+		case dspgcs::RouteUploadErrorCode::Cancelled: return "Cancelled";
+		case dspgcs::RouteUploadErrorCode::InternalError: return "InternalError";
+		default: return "Unknown";
+		}
+	}
+
+	std::string SafeLogValue(std::string value, const std::size_t maximum)
+	{
+		if (value.size() > maximum) value.resize(maximum);
+		for (char& character : value)
+		{
+			const unsigned char byte = static_cast<unsigned char>(character);
+			if (byte < 0x20 || byte == 0x7f) character = ' ';
+		}
+		return value;
+	}
+
+	void AppendPersistentRouteUploadLog(const std::string& line)
+	{
+		try
+		{
+			static std::mutex logMutex;
+			std::lock_guard<std::mutex> lock(logMutex);
+			wchar_t executablePath[MAX_PATH]{};
+			const DWORD length = GetModuleFileNameW(nullptr, executablePath, MAX_PATH);
+			const std::filesystem::path directory = length > 0 && length < MAX_PATH
+				? std::filesystem::path(executablePath).parent_path()
+				: std::filesystem::current_path();
+			std::ofstream output(directory / "DroneGCS-route-upload.log",
+				std::ios::binary | std::ios::app);
+			if (!output) return;
+			const auto now = std::chrono::system_clock::to_time_t(
+				std::chrono::system_clock::now());
+			tm local{};
+			localtime_s(&local, &now);
+			char timestamp[32]{};
+			strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", &local);
+			output << '[' << timestamp << "] " << line << '\n';
+		}
+		catch (...)
+		{
+			// Diagnostics must never alter upload authority or terminal semantics.
+		}
+	}
 }
 
 RouteUploadManager::RouteUploadManager(
@@ -46,12 +125,13 @@ void RouteUploadManager::Shutdown()
     if (activeJob_)
     {
         activeJobId = activeJob_->view.uploadJobId;
+        const auto now = std::chrono::steady_clock::now();
         for (RuntimeTarget& target : activeJob_->targets)
         {
-            if (target.transaction) target.transaction->Cancel();
+            if (target.transport) target.transport->Cancel(now);
             if (target.session)
                 target.session->SetMissionProtocolMessageSink(nullptr);
-            target.transaction.reset();
+            target.transport.reset();
             target.session = nullptr;
             target.prepared.clear();
         }
@@ -102,7 +182,7 @@ std::size_t RouteUploadManager::GetPreparedMissionCountForTest() const
     return static_cast<std::size_t>(std::count_if(
         activeJob_->targets.begin(), activeJob_->targets.end(),
         [](const RuntimeTarget& target)
-        { return !target.prepared.empty() || target.transaction != nullptr; }));
+        { return !target.prepared.empty() || target.transport != nullptr; }));
 }
 
 bool RouteUploadManager::AttachJob(
@@ -137,6 +217,8 @@ bool RouteUploadManager::AttachJob(
     jobMetrics_ = {};
     jobMetrics_.targetCount = activeJob_->targets.size();
     targetMetrics_.clear();
+	lastTerminalDiagnostic_.clear();
+	lastJobSummary_.clear();
     return true;
 }
 
@@ -147,7 +229,7 @@ void RouteUploadManager::DetachJob()
     {
         if (target.session)
             target.session->SetMissionProtocolMessageSink(nullptr);
-        target.transaction.reset();
+        target.transport.reset();
         target.prepared.clear();
     }
     activeJob_.reset();
@@ -180,16 +262,20 @@ void RouteUploadManager::FailTarget(
     const bool retryable,
     const std::chrono::steady_clock::time_point now)
 {
+	const dspgcs::UploadRouteState sourceState = target.state.state;
     if (target.session)
         target.session->SetMissionProtocolMessageSink(nullptr);
     target.session = nullptr;
-    target.transaction.reset();
+    target.transport.reset();
     target.prepared.clear();
     target.state.state = dspgcs::UploadRouteState::Failed;
     target.state.errorCode = code;
     target.state.retryable = retryable;
     target.state.safeFailureSummary = diagnostic ? diagnostic : "Route upload failed.";
     target.metrics.result = "Failed";
+	target.metrics.resultCode = code;
+	if (target.metrics.terminalPhase.empty())
+		target.metrics.terminalPhase = RouteStateName(sourceState);
     target.metrics.safeDiagnostic = target.state.safeFailureSummary;
     target.metrics.totalDurationMs = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -199,6 +285,7 @@ void RouteUploadManager::FailTarget(
         target.metadata.droneId + " RouteSlot=" +
         std::to_string(target.metadata.routeSlotIndex) + " " +
         target.state.safeFailureSummary);
+	PersistTargetTerminal(target);
 }
 
 bool RouteUploadManager::StartPrepared(
@@ -215,16 +302,24 @@ bool RouteUploadManager::StartPrepared(
             true, now);
         return false;
     }
-    MissionUploadTransactionIdentity identity;
+    MissionTransportIdentity identity;
     identity.uploadJobId = activeJob_->view.uploadJobId;
     identity.droneId = target.metadata.droneId;
     identity.routeSlotIndex = target.metadata.routeSlotIndex;
-    identity.peer = session->GetMissionProtocolPeerIdentity();
-    identity.transactionGeneration = target.generation;
+    identity.generation = target.generation;
     target.session = session;
-    target.transaction = std::make_unique<MissionUploadTransaction>(
-        std::move(identity), std::move(target.prepared), *session);
-    session->SetMissionProtocolMessageSink(target.transaction.get());
+    target.transport = CreateMissionProtocolTransport(
+        *session, session->GetMissionProtocolPeerIdentity());
+    std::string prepareDiagnostic;
+    if (!target.transport->Prepare(
+        std::move(identity), std::move(target.prepared), prepareDiagnostic))
+    {
+        FailTarget(target, dspgcs::RouteUploadErrorCode::TransportUnavailable,
+            prepareDiagnostic.c_str(), true, now);
+        return false;
+    }
+    session->SetMissionProtocolMessageSink(
+        target.transport->GetMissionProtocolMessageSink());
     target.state.state = dspgcs::UploadRouteState::Uploading;
     target.state.errorCode = dspgcs::RouteUploadErrorCode::None;
     target.state.retryable = false;
@@ -235,9 +330,9 @@ bool RouteUploadManager::StartPrepared(
         target.metadata.droneId + " RouteSlot=" +
         std::to_string(target.metadata.routeSlotIndex) + " Items=" +
         std::to_string(target.metadata.missionItemCount));
-    if (!target.transaction->Start(now))
+    if (!target.transport->Upload(now))
     {
-        const std::string diagnostic = target.transaction->GetSafeDiagnostic();
+        const std::string diagnostic = target.transport->GetSafeDiagnostic();
         FailTarget(target, dspgcs::RouteUploadErrorCode::TransportUnavailable,
             diagnostic.c_str(), true, now);
         return false;
@@ -288,7 +383,7 @@ void RouteUploadManager::ProcessPreparation(
     {
         for (RuntimeTarget& target : activeJob_->targets)
         {
-            if (!target.prepared.empty() && !target.transaction &&
+            if (!target.prepared.empty() && !target.transport &&
                 GetActiveSlotCountForTest() <= maxConcurrency)
                 StartPrepared(target, now);
         }
@@ -300,41 +395,45 @@ void RouteUploadManager::ProcessTransactions(
 {
     for (RuntimeTarget& target : activeJob_->targets)
     {
-        if (!target.transaction) continue;
-        const MissionUploadPhase before = target.transaction->GetPhase();
-        target.transaction->Tick(now);
-        if (target.transaction->ConsumeProgressChanged())
+        if (!target.transport) continue;
+        target.transport->Tick(now);
+        if (target.transport->ConsumeProgressChanged())
         {
             target.state.bytesCompleted = std::min<std::uint64_t>(
                 target.state.totalBytes,
-                target.transaction->GetMetrics().logicalBytesCompleted);
+                target.transport->GetMetrics().logicalBytesCompleted);
             ApplyTarget(target, now);
         }
-        const MissionUploadPhase after = target.transaction->GetPhase();
-        if (before == MissionUploadPhase::AwaitingAck &&
-            after == MissionUploadPhase::VerifyingCount)
-            target.verificationStartedAt = now;
-        if (!target.transaction->IsTerminal()) continue;
+        if (!target.transport->IsTerminal()) continue;
 
-        const MissionUploadTransactionMetrics tx = target.transaction->GetMetrics();
+        const MissionTransportMetrics tx = target.transport->GetMetrics();
         target.metrics.wireBytesSent = tx.wireBytesSent;
+		target.metrics.artifactRouteItems = tx.artifactRouteItems;
+		target.metrics.wireMissionItems = tx.wireMissionItems;
+		target.metrics.uniqueItemsServed = tx.uniqueItemsServed;
         target.metrics.missionMessagesSent = tx.missionMessagesSent;
         target.metrics.missionRequestsReceived = tx.missionRequestsReceived;
         target.metrics.duplicateRequests = tx.duplicateRequests;
         target.metrics.retryCount = tx.retryCount;
-        target.metrics.uploadDurationMs = static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                (target.verificationStartedAt == std::chrono::steady_clock::time_point{}
-                    ? now : target.verificationStartedAt) - target.uploadStartedAt).count());
-        if (target.verificationStartedAt != std::chrono::steady_clock::time_point{})
-            target.metrics.verificationDurationMs = static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now - target.verificationStartedAt).count());
-        const bool succeeded = target.transaction->Succeeded();
-        const std::string diagnostic = target.transaction->GetSafeDiagnostic();
+        target.metrics.terminalPhase = target.transport->GetTerminalPhaseName();
+        target.metrics.uploadDurationMs = tx.uploadDurationMs;
+        target.metrics.verificationDurationMs = tx.verificationDurationMs;
+        target.metrics.verificationMismatchDiagnostic =
+            target.transport->GetVerificationMismatchDiagnostic();
+        const bool succeeded = target.transport->Verify();
+        const std::string diagnostic = target.transport->GetSafeDiagnostic();
+        if (!succeeded &&
+            !target.metrics.verificationMismatchDiagnostic.empty())
+        {
+            ConsoleUI::AddLog("[RouteUpload] Verification mismatch DroneID=" +
+                target.metadata.droneId + " RouteSlot=" +
+                std::to_string(target.metadata.routeSlotIndex) + " " +
+                SafeLogValue(target.metrics.verificationMismatchDiagnostic,
+                    MissionVerificationMismatchDiagnosticMaxBytes));
+        }
         target.session->SetMissionProtocolMessageSink(nullptr);
         target.session = nullptr;
-        target.transaction.reset();
+        target.transport.reset();
         if (succeeded)
         {
             target.state.state = dspgcs::UploadRouteState::Succeeded;
@@ -343,6 +442,7 @@ void RouteUploadManager::ProcessTransactions(
             target.state.retryable = false;
             target.state.safeFailureSummary.clear();
             target.metrics.result = "Succeeded";
+			target.metrics.resultCode = dspgcs::RouteUploadErrorCode::None;
             target.metrics.totalDurationMs = static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     now - target.admittedAt).count());
@@ -350,6 +450,7 @@ void RouteUploadManager::ProcessTransactions(
             ConsoleUI::AddLog("[RouteUpload] Target verified DroneID=" +
                 target.metadata.droneId + " RouteSlot=" +
                 std::to_string(target.metadata.routeSlotIndex));
+			PersistTargetTerminal(target);
         }
         else
         {
@@ -395,14 +496,13 @@ void RouteUploadManager::AdmitPreparation(
 void RouteUploadManager::ProcessCancellation(
     const std::chrono::steady_clock::time_point now)
 {
-    (void)now;
     preparationWorker_.CancelActive();
     for (RuntimeTarget& target : activeJob_->targets)
     {
-        if (target.transaction) target.transaction->Cancel();
+        if (target.transport) target.transport->Cancel(now);
         if (target.session)
             target.session->SetMissionProtocolMessageSink(nullptr);
-        target.transaction.reset();
+        target.transport.reset();
         target.session = nullptr;
         target.prepared.clear();
     }
@@ -435,17 +535,81 @@ void RouteUploadManager::FinalizeJobIfTerminal(
             anyFailed ? dspgcs::UploadJobState::Failed
                       : dspgcs::UploadJobState::Completed,
             error);
+	const auto terminalSnapshot =
+		authority_.GetExecutorSnapshot(activeJob_->view.uploadJobId);
     RefreshMetrics(now);
     targetMetrics_.clear();
     for (const RuntimeTarget& target : activeJob_->targets)
         targetMetrics_.push_back(target.metrics);
-    ConsoleUI::AddLog("[RouteUpload] Job summary Targets=" +
-        std::to_string(jobMetrics_.targetCount) + " Succeeded=" +
-        std::to_string(jobMetrics_.succeeded) + " Failed=" +
-        std::to_string(jobMetrics_.failed) + " LogicalBytes=" +
-        std::to_string(jobMetrics_.logicalBytes) + " WireBytes=" +
-        std::to_string(jobMetrics_.wireBytesSent));
+	PersistJobSummary(terminalSnapshot &&
+		!terminalSnapshot->firstFailure.safeSummary.empty()
+			? &terminalSnapshot->firstFailure : nullptr);
     DetachJob();
+}
+
+void RouteUploadManager::PersistTargetTerminal(const RuntimeTarget& target)
+{
+	const auto& metrics = target.metrics;
+	std::ostringstream line;
+	line << "[RouteUpload] Target terminal"
+		<< " DroneID=" << SafeLogValue(target.metadata.droneId, 64)
+		<< " RouteSlot=" << target.metadata.routeSlotIndex
+		<< " TerminalPhase=" << SafeLogValue(metrics.terminalPhase, 32)
+		<< " ResultCode=" << RouteErrorName(metrics.resultCode)
+		<< " SafeDiagnostic=" << SafeLogValue(metrics.safeDiagnostic, 512)
+		<< " MissionItems=" << metrics.missionItemCount
+		<< " ArtifactRouteItems=" << metrics.artifactRouteItems
+		<< " WireMissionItems=" << metrics.wireMissionItems
+		<< " UniqueServed=" << metrics.uniqueItemsServed
+		<< " MissionRequestsReceived=" << metrics.missionRequestsReceived
+		<< " DuplicateRequests=" << metrics.duplicateRequests
+		<< " RetryCount=" << metrics.retryCount
+		<< " LogicalBytes=" << target.state.bytesCompleted
+		<< " WireBytesSent=" << metrics.wireBytesSent
+		<< " PrepareDurationMs=" << metrics.prepareDurationMs
+		<< " UploadDurationMs=" << metrics.uploadDurationMs
+		<< " VerificationDurationMs=" << metrics.verificationDurationMs
+		<< " TotalDurationMs=" << metrics.totalDurationMs;
+	if (!metrics.verificationMismatchDiagnostic.empty())
+	{
+		line << ' ' << SafeLogValue(metrics.verificationMismatchDiagnostic,
+			MissionVerificationMismatchDiagnosticMaxBytes);
+	}
+	lastTerminalDiagnostic_ = line.str();
+	AppendPersistentRouteUploadLog(lastTerminalDiagnostic_);
+}
+
+void RouteUploadManager::PersistJobSummary(
+	const dspgcs::UploadJobFailureDTO* const firstFailure)
+{
+	std::ostringstream line;
+	line << "[RouteUpload] Job terminal summary"
+		<< " Targets=" << jobMetrics_.targetCount
+		<< " Succeeded=" << jobMetrics_.succeeded
+		<< " Failed=" << jobMetrics_.failed
+		<< " Cancelled=" << jobMetrics_.cancelled
+		<< " ElapsedMs=" << jobMetrics_.elapsedMs
+		<< " LogicalBytes=" << jobMetrics_.logicalBytes
+		<< " WireBytesSent=" << jobMetrics_.wireBytesSent
+		<< " AggregateLogicalThroughput="
+		<< jobMetrics_.aggregateLogicalThroughput
+		<< " PeakActiveUploads=" << jobMetrics_.peakActiveUploads
+		<< " PeakPreparedMissions=" << jobMetrics_.peakPreparedMissions;
+	lastJobSummary_ = line.str();
+	ConsoleUI::AddLog(lastJobSummary_);
+	AppendPersistentRouteUploadLog(lastJobSummary_);
+	if (firstFailure)
+	{
+		std::ostringstream failure;
+		failure << "[RouteUpload] Job firstFailure"
+			<< " DroneID=" << SafeLogValue(firstFailure->droneId, 64)
+			<< " RouteSlot=" << firstFailure->routeSlotIndex
+			<< " ResultCode=" << RouteErrorName(firstFailure->routeErrorCode)
+			<< " Retryable=" << (firstFailure->retryable ? "true" : "false")
+			<< " SafeDiagnostic=" <<
+				SafeLogValue(firstFailure->safeSummary, 512);
+		AppendPersistentRouteUploadLog(failure.str());
+	}
 }
 
 void RouteUploadManager::RefreshMetrics(
@@ -472,7 +636,7 @@ void RouteUploadManager::RefreshMetrics(
     jobMetrics_.peakActiveUploads = std::max(jobMetrics_.peakActiveUploads,
         static_cast<std::size_t>(std::count_if(activeJob_->targets.begin(),
             activeJob_->targets.end(), [](const RuntimeTarget& target)
-            { return target.transaction != nullptr; })));
+            { return target.transport != nullptr; })));
     jobMetrics_.peakPreparedMissions = std::max(jobMetrics_.peakPreparedMissions,
         GetPreparedMissionCountForTest());
 }

@@ -1108,13 +1108,58 @@ namespace
         Expect(authority.InstallSyntheticReadyJobForTest(
             Id('8'), artifactBinding, frozenBinding, stableSource,
             routes, 0, 0, 0, 32, error), error);
+		dspgcs::UploadJobSnapshotRequestDTO aggregateRequest;
+		aggregateRequest.clientRequestId = Id('9');
+		aggregateRequest.uploadJobId = Id('8');
+		aggregateRequest.requestKind =
+			dspgcs::UploadJobSnapshotRequestKind::Aggregate;
+		const auto frozenAggregate = authority.BuildSnapshot(aggregateRequest);
+		Expect(authority.GetFrozenPageRouteCountForTest(Id('8')) == 20000,
+			"aggregate did not freeze its 20K Route page snapshot");
         routes.front().state = dspgcs::UploadRouteState::Uploading;
         routes.front().bytesCompleted = 10;
         Expect(authority.ApplyExecutorRouteUpdates(
             Id('8'), { routes.front() }, 100, 1000, 10, error), error);
+		dspgcs::UploadJobSnapshotRequestDTO frozenPageRequest;
+		frozenPageRequest.clientRequestId = Id('a');
+		frozenPageRequest.uploadJobId = Id('8');
+		frozenPageRequest.requestKind =
+			dspgcs::UploadJobSnapshotRequestKind::RoutePage;
+		frozenPageRequest.snapshotToken = frozenAggregate.snapshotToken;
+		frozenPageRequest.maximumRouteEntries = 20000;
+		dspgcs::UploadJobRouteStatePageDTO frozenPage;
+		dspgcs::UploadJobErrorCode frozenPageError;
+		Expect(authority.BuildRoutePage(
+			frozenPageRequest, frozenPage, frozenPageError),
+			"revision progress invalidated the frozen Aggregate Route page");
+		Expect(!frozenPage.routes.empty() &&
+			frozenPage.routes.front().state == dspgcs::UploadRouteState::Waiting,
+			"frozen Route page drifted after executor revision progress");
         const auto deltas = authority.DrainRouteDeltas();
         Expect(deltas.size() == 1 && deltas.front().routes.size() == 1,
             "existing 20K state Delta regression failed");
+
+		auto failedFive = routes[5];
+		failedFive.state = dspgcs::UploadRouteState::Failed;
+		failedFive.errorCode = dspgcs::RouteUploadErrorCode::UploadRejected;
+		failedFive.retryable = true;
+		failedFive.updatedAtUtcMs = 50;
+		failedFive.safeFailureSummary = "later failure";
+		auto failedTwo = routes[2];
+		failedTwo.state = dspgcs::UploadRouteState::Failed;
+		failedTwo.errorCode = dspgcs::RouteUploadErrorCode::UploadTimedOut;
+		failedTwo.retryable = true;
+		failedTwo.updatedAtUtcMs = 20;
+		failedTwo.safeFailureSummary = "deterministic first failure";
+		Expect(authority.ApplyExecutorRouteUpdates(Id('8'),
+			{ failedFive, failedTwo }, 0, 1000, 20, error), error);
+		const auto* failedAggregate = authority.FindCurrentSnapshotForTest(Id('8'));
+		Expect(failedAggregate && failedAggregate->firstFailure.routeSlotIndex == 2 &&
+			failedAggregate->firstFailure.droneId == failedTwo.droneId &&
+			failedAggregate->firstFailure.routeErrorCode ==
+				dspgcs::RouteUploadErrorCode::UploadTimedOut &&
+			failedAggregate->firstFailure.safeSummary == failedTwo.safeFailureSummary,
+			"deterministic authoritative firstFailure was not materialized");
 
         std::cout << "UploadJob v2-E materialization scale PASS\n"
             << "routes=" << thousand.targetCount

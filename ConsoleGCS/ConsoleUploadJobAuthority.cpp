@@ -688,6 +688,31 @@ void ConsoleUploadJobAuthority::RecalculateAggregate(Job& job)
         case dspgcs::UploadRouteState::Cancelled: ++snapshot.cancelledCount; break;
         }
     }
+    RecalculateFirstFailure(job);
+}
+
+void ConsoleUploadJobAuthority::RecalculateFirstFailure(Job& job)
+{
+    const Target* first = nullptr;
+    for (const auto& target : job.targets)
+    {
+        if (target.state.state != dspgcs::UploadRouteState::Failed) continue;
+        if (!first || target.state.routeSlotIndex < first->state.routeSlotIndex ||
+            (target.state.routeSlotIndex == first->state.routeSlotIndex &&
+             target.state.droneId < first->state.droneId))
+        {
+            first = &target;
+        }
+    }
+    job.snapshot.firstFailure = {};
+    if (!first) return;
+    job.snapshot.firstFailure.routeErrorCode = first->state.errorCode;
+    job.snapshot.firstFailure.routeSlotIndex = first->state.routeSlotIndex;
+    job.snapshot.firstFailure.droneId = first->state.droneId;
+    job.snapshot.firstFailure.retryable = first->state.retryable;
+    job.snapshot.firstFailure.occurredAtUtcMs = first->state.updatedAtUtcMs;
+    job.snapshot.firstFailure.safeSummary =
+        first->state.safeFailureSummary.substr(0, 512);
 }
 
 dspgcs::UploadJobSnapshotDTO ConsoleUploadJobAuthority::BuildSnapshot(
@@ -699,7 +724,12 @@ dspgcs::UploadJobSnapshotDTO ConsoleUploadJobAuthority::BuildSnapshot(
         job->snapshot.clientRequestId = request.clientRequestId;
         job->snapshot.snapshotToken = MakeCanonicalId();
         ++job->snapshot.snapshotSequence;
-        job->snapshotTokenRevision = job->snapshot.jobRevision;
+        job->pageSnapshot.clear();
+        job->pageSnapshot.reserve(job->targets.size());
+        for (const auto& target : job->targets)
+            job->pageSnapshot.push_back(target.state);
+        job->pageSnapshotRevision = job->snapshot.jobRevision;
+        job->pageSnapshotToken = job->snapshot.snapshotToken;
         return job->snapshot;
     }
     const auto pendingItem = pendingStarts_.find(request.uploadJobId);
@@ -740,25 +770,10 @@ bool ConsoleUploadJobAuthority::BuildRoutePage(
         errorCode = dspgcs::UploadJobErrorCode::UnknownJob;
         return false;
     }
-    if (request.snapshotToken != job->snapshot.snapshotToken)
+    if (request.snapshotToken != job->pageSnapshotToken)
     {
         errorCode = dspgcs::UploadJobErrorCode::StaleJobRevision;
         return false;
-    }
-    if (job->pageSnapshotToken != request.snapshotToken)
-    {
-        if (request.routePageStart != 0 ||
-            job->snapshotTokenRevision != job->snapshot.jobRevision)
-        {
-            errorCode = dspgcs::UploadJobErrorCode::StaleJobRevision;
-            return false;
-        }
-        job->pageSnapshot.clear();
-        job->pageSnapshot.reserve(job->targets.size());
-        for (const auto& target : job->targets)
-            job->pageSnapshot.push_back(target.state);
-        job->pageSnapshotRevision = job->snapshotTokenRevision;
-        job->pageSnapshotToken = request.snapshotToken;
     }
     if (request.routePageStart >= job->pageSnapshot.size())
     {
@@ -885,10 +900,14 @@ bool ConsoleUploadJobAuthority::ApplyExecutorRouteUpdates(
         }
         if (increment) ++(*count); else --(*count);
     };
+    bool failureSetChanged = false;
     for (const auto& resolved : resolvedUpdates)
     {
         auto& current = job->targets[resolved.first].state;
         const auto& update = *resolved.second;
+        failureSetChanged = failureSetChanged ||
+            current.state == dspgcs::UploadRouteState::Failed ||
+            update.state == dspgcs::UploadRouteState::Failed;
         adjustStateCount(job->snapshot, current.state, false);
         adjustStateCount(job->snapshot, update.state, true);
         job->snapshot.bytesCompleted -= current.bytesCompleted;
@@ -900,6 +919,7 @@ bool ConsoleUploadJobAuthority::ApplyExecutorRouteUpdates(
     job->snapshot.throughputBytesPerSecond = throughputBytesPerSecond;
     job->snapshot.throughputWindowMs = throughputWindowMs;
     job->snapshot.elapsedMs = elapsedMs;
+    if (failureSetChanged) RecalculateFirstFailure(*job);
     QueueRouteDeltas(*job, updates);
     error.clear();
     return true;

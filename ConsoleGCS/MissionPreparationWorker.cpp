@@ -1,5 +1,6 @@
 #include "MissionPreparationWorker.h"
 
+#include "ArduPilotMissionWireAdapter.h"
 #include "RouteArtifactContract.h"
 #include "Wpl110Core.h"
 
@@ -185,6 +186,10 @@ MissionPreparationResult MissionPreparationWorker::PrepareForTest(
         !request.target.routeArtifactDigest.IsSet)
         return fail(MissionPreparationError::InvalidSource,
             "Mission preparation source identity is invalid.");
+    if (request.target.missionItemCount >
+        dronegcs::ardupilot_mission::MaximumArtifactRouteItems)
+        return fail(MissionPreparationError::MissionConversionFailed,
+            "Artifact route item count exceeds the ArduPilot Mission wire limit.");
 
     std::error_code pathError;
     const fs::path root = fs::weakly_canonical(
@@ -273,4 +278,3 @@ MissionPreparationResult MissionPreparationWorker::PrepareForTest(
     result.safeDiagnostic.clear();
     return finish();
 }
-

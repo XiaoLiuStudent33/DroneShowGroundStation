@@ -126,6 +126,8 @@ public:
 	static FString FormatPercent(double Ratio);
 	static int32 ComputeRetryCount(uint32 AttemptCount);
 	static FString FormatRouteState(uint8 RouteStateValue);
+	static FString FormatRouteErrorCode(uint16 ErrorCodeValue);
+	static FString DiagnoseRouteRowStructure(const UUserWidget* Row);
 	static FString FormatRouteFileDisplay(const FString& ManifestRelativePath);
 	static FGCSRouteUploadArtifactDisplay ResolveArtifactDisplay(
 		bool bHasJob,
@@ -272,6 +274,7 @@ private:
 	FString RouteListSnapshotToken;
 	int64 RouteListRebuildCount = 0;
 	TSet<TWeakObjectPtr<UUserWidget>> ValidatedRouteRows;
+	TMap<TWeakObjectPtr<UUserWidget>, FString> RouteRowDiagnostics;
 	bool bUploadArtifactMismatch = false;
 	FString SelectedRouteImportFilePath;
 	FString SelectedRouteSourceDigest;

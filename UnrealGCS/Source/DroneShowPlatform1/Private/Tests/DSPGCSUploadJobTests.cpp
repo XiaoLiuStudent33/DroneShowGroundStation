@@ -109,6 +109,25 @@ bool FDSPGCSUploadJobMirrorReliabilityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Consistent page applies"), Mirror.ApplyRoutePage(Page));
 	TestTrue(TEXT("Page completes route mirror"),
 		Mirror.IsRoutePageComplete() && Mirror.GetRouteStateCount() == 2);
+	FDSPGCSUploadJobStateMirror PagingMirror;
+	TestTrue(TEXT("Paging mirror accepts aggregate"), PagingMirror.ApplySnapshot(Baseline));
+	dspgcs::UploadJobRouteStateDeltaDTO EarlyDelta;
+	EarlyDelta.uploadJobId = Baseline.uploadJobId;
+	EarlyDelta.jobRevision = Baseline.jobRevision + 1;
+	EarlyDelta.deltaSequence = Baseline.routeDeltaSequence + 1;
+	auto EarlyChanged = Route(0);
+	EarlyChanged.state = dspgcs::UploadRouteState::Uploading;
+	EarlyChanged.bytesCompleted = 25;
+	EarlyDelta.routes.push_back(EarlyChanged);
+	bool bEarlyDuplicate = false;
+	TestTrue(TEXT("Delta arriving before frozen page is deferred"),
+		PagingMirror.ApplyRouteDelta(EarlyDelta, bEarlyDuplicate));
+	TestTrue(TEXT("Frozen page applies after a newer Delta"),
+		PagingMirror.ApplyRoutePage(Page));
+	const auto* Replayed = PagingMirror.FindRoute(0);
+	TestTrue(TEXT("Deferred Delta wins over frozen page state"),
+		Replayed && Replayed->state == dspgcs::UploadRouteState::Uploading &&
+		Replayed->bytesCompleted == 25);
 	TArray<int32> SortedRouteSlots;
 	Mirror.CopySortedRouteSlots(SortedRouteSlots);
 	TestEqual(TEXT("Sorted route slot count"), SortedRouteSlots.Num(), 2);
@@ -150,6 +169,11 @@ bool FDSPGCSUploadJobMirrorReliabilityTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Recovered snapshot clears recovery"), Mirror.IsRecoveryRequired());
 	Mirror.MarkPageOpened();
 	TestTrue(TEXT("Page reopen requests snapshot"), Mirror.IsRecoveryRequired());
+	Mirror.ApplySnapshot(Baseline);
+	Mirror.MarkRoutePageStale();
+	TestTrue(TEXT("Stale Route page retains aggregate and requests recovery"),
+		Mirror.HasAuthoritativeSnapshot() && Mirror.IsRecoveryRequired() &&
+		!Mirror.IsRoutePageComplete() && Mirror.GetRouteStateCount() == 0);
 
 	dspgcs::UploadJobCommandAckDTO Ack;
 	Ack.clientCommandId = Id('4');
@@ -297,6 +321,18 @@ bool FDSPGCSUploadJobClientHardeningTest::RunTest(const FString& Parameters)
 		Client->EnqueueIncoming(Envelope, Payload);
 		Client->ProcessIncoming();
 	};
+	auto DeliverPage = [this](UDSPGCSUploadJobSubsystem* Client,
+		const dspgcs::UploadJobRouteStatePageDTO& PageValue)
+	{
+		std::vector<std::uint8_t> Payload;
+		std::string Error;
+		TestTrue(TEXT("Route page encodes"),
+			dspgcs::EncodeUploadJobRouteStatePage(PageValue, Payload, Error));
+		dspgcs::MessageEnvelope Envelope;
+		Envelope.messageType = dspgcs::UploadJobMessageTypes::RouteStatePage;
+		Client->EnqueueIncoming(Envelope, Payload);
+		Client->ProcessIncoming();
+	};
 
 	UGameInstance* RejectedGameInstance = NewObject<UGameInstance>(GEngine);
 	UDSPGCSUploadJobSubsystem* RejectedClient =
@@ -423,6 +459,49 @@ bool FDSPGCSUploadJobClientHardeningTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Job B authoritative Snapshot binds after explicit reset"),
 		ValidationClient->Mirror.GetSnapshot() &&
 		ValidationClient->Mirror.GetSnapshot()->uploadJobId == JobBCommand.uploadJobId);
+	dspgcs::UploadJobSnapshotRequestDTO InitialPageRequest;
+	DecodeSnapshotRequest(ValidationFrames.Last(), InitialPageRequest);
+	TestTrue(TEXT("Ready aggregate requests Route page"),
+		InitialPageRequest.requestKind ==
+			dspgcs::UploadJobSnapshotRequestKind::RoutePage);
+	dspgcs::UploadJobSnapshotDTO StalePageError;
+	StalePageError.clientRequestId = InitialPageRequest.clientRequestId;
+	StalePageError.uploadJobId = JobBCommand.uploadJobId;
+	StalePageError.resultCode = dspgcs::UploadJobErrorCode::StaleJobRevision;
+	StalePageError.safeDiagnostic = "Route page snapshot is unavailable or stale.";
+	DeliverSnapshot(ValidationClient, StalePageError);
+	TestTrue(TEXT("Stale Route page preserves mirror for automatic recovery"),
+		ValidationClient->Mirror.HasAuthoritativeSnapshot() &&
+		ValidationClient->Mirror.IsRecoveryRequired());
+	const int32 FramesBeforeRecovery = ValidationFrames.Num();
+	ValidationClient->TickClient(0.0f);
+	TestTrue(TEXT("Stale Route page automatically requests Aggregate"),
+		ValidationFrames.Num() == FramesBeforeRecovery + 1);
+	dspgcs::UploadJobSnapshotRequestDTO RecoveryRequest;
+	DecodeSnapshotRequest(ValidationFrames.Last(), RecoveryRequest);
+	TestTrue(TEXT("Automatic recovery request is Aggregate"),
+		RecoveryRequest.requestKind ==
+			dspgcs::UploadJobSnapshotRequestKind::Aggregate);
+	auto RecoveredSnapshot = JobBSnapshot;
+	RecoveredSnapshot.clientRequestId = RecoveryRequest.clientRequestId;
+	RecoveredSnapshot.snapshotToken = Id('b');
+	RecoveredSnapshot.jobRevision++;
+	DeliverSnapshot(ValidationClient, RecoveredSnapshot);
+	dspgcs::UploadJobSnapshotRequestDTO RecoveredPageRequest;
+	DecodeSnapshotRequest(ValidationFrames.Last(), RecoveredPageRequest);
+	dspgcs::UploadJobRouteStatePageDTO RecoveredPage;
+	RecoveredPage.clientRequestId = RecoveredPageRequest.clientRequestId;
+	RecoveredPage.uploadJobId = RecoveredSnapshot.uploadJobId;
+	RecoveredPage.snapshotToken = RecoveredSnapshot.snapshotToken;
+	RecoveredPage.jobRevision = RecoveredSnapshot.jobRevision;
+	RecoveredPage.totalRouteCount = 2;
+	RecoveredPage.pageStart = 0;
+	RecoveredPage.nextPageStart = 2;
+	RecoveredPage.routes = { Route(0), Route(1) };
+	DeliverPage(ValidationClient, RecoveredPage);
+	TestTrue(TEXT("Automatic recovery completes without page reopen"),
+		ValidationClient->Mirror.IsRoutePageComplete() &&
+		!ValidationClient->Mirror.IsRecoveryRequired());
 	TestTrue(TEXT("Request Job B terminal snapshot"),
 		ValidationClient->RequestAuthoritativeSnapshot(Error));
 	dspgcs::UploadJobSnapshotRequestDTO TerminalRequest;

@@ -5,10 +5,12 @@ void FDSPGCSUploadJobStateMirror::Reset()
 	CurrentSnapshot = {};
 	LastCommandAck = {};
 	Routes.clear();
+	DeferredRouteDeltas.clear();
 	PendingCommandID.clear();
 	BoundJobID.clear();
 	LastSnapshotSafeDiagnostic.clear();
 	LastDeltaSequence = 0;
+	ExpectedRoutePageRevision = 0;
 	NextRoutePageStart = 0;
 	LastSnapshotResultCode = dspgcs::UploadJobErrorCode::None;
 	bHasSnapshot = false;
@@ -23,9 +25,11 @@ void FDSPGCSUploadJobStateMirror::PrepareForNewJob(
 {
 	CurrentSnapshot = {};
 	Routes.clear();
+	DeferredRouteDeltas.clear();
 	BoundJobID = UploadJobID;
 	LastSnapshotSafeDiagnostic.clear();
 	LastDeltaSequence = 0;
+	ExpectedRoutePageRevision = 0;
 	NextRoutePageStart = 0;
 	LastSnapshotResultCode = dspgcs::UploadJobErrorCode::None;
 	bHasSnapshot = false;
@@ -72,7 +76,9 @@ bool FDSPGCSUploadJobStateMirror::ApplySnapshot(
 	{
 		CurrentSnapshot = {};
 		Routes.clear();
+		DeferredRouteDeltas.clear();
 		LastDeltaSequence = 0;
+		ExpectedRoutePageRevision = 0;
 		NextRoutePageStart = 0;
 		LastSnapshotResultCode = Snapshot.resultCode;
 		LastSnapshotSafeDiagnostic = Snapshot.safeDiagnostic;
@@ -89,9 +95,11 @@ bool FDSPGCSUploadJobStateMirror::ApplySnapshot(
 	if (BoundJobID.empty()) BoundJobID = Snapshot.uploadJobId;
 	CurrentSnapshot = Snapshot;
 	Routes.clear();
+	DeferredRouteDeltas.clear();
 	LastSnapshotResultCode = dspgcs::UploadJobErrorCode::None;
 	LastSnapshotSafeDiagnostic.clear();
 	LastDeltaSequence = Snapshot.routeDeltaSequence;
+	ExpectedRoutePageRevision = Snapshot.jobRevision;
 	NextRoutePageStart = 0;
 	bHasSnapshot = true;
 	bHasAuthoritativeError = false;
@@ -105,7 +113,7 @@ bool FDSPGCSUploadJobStateMirror::ApplyRoutePage(
 {
 	if (!bHasSnapshot || Page.uploadJobId != CurrentSnapshot.uploadJobId ||
 		Page.snapshotToken != CurrentSnapshot.snapshotToken ||
-		Page.jobRevision != CurrentSnapshot.jobRevision ||
+		Page.jobRevision != ExpectedRoutePageRevision ||
 		Page.pageStart != NextRoutePageStart)
 	{
 		bRecoveryRequired = true;
@@ -117,6 +125,17 @@ bool FDSPGCSUploadJobStateMirror::ApplyRoutePage(
 	}
 	NextRoutePageStart = Page.nextPageStart;
 	bRoutePageComplete = !Page.hasMore;
+	if (bRoutePageComplete)
+	{
+		for (const auto& Delta : DeferredRouteDeltas)
+		{
+			for (const auto& Route : Delta.routes)
+			{
+				Routes[Route.routeSlotIndex] = Route;
+			}
+		}
+		DeferredRouteDeltas.clear();
+	}
 	return true;
 }
 
@@ -141,9 +160,16 @@ bool FDSPGCSUploadJobStateMirror::ApplyRouteDelta(
 		bRecoveryRequired = true;
 		return false;
 	}
-	for (const auto& Route : Delta.routes)
+	if (!bRoutePageComplete)
 	{
-		Routes[Route.routeSlotIndex] = Route;
+		DeferredRouteDeltas.push_back(Delta);
+	}
+	else
+	{
+		for (const auto& Route : Delta.routes)
+		{
+			Routes[Route.routeSlotIndex] = Route;
+		}
 	}
 	LastDeltaSequence = Delta.deltaSequence;
 	CurrentSnapshot.jobRevision = Delta.jobRevision;
@@ -158,6 +184,15 @@ void FDSPGCSUploadJobStateMirror::MarkTransportReconnected()
 void FDSPGCSUploadJobStateMirror::MarkPageOpened()
 {
 	if (bHasSnapshot) bRecoveryRequired = true;
+}
+
+void FDSPGCSUploadJobStateMirror::MarkRoutePageStale()
+{
+	Routes.clear();
+	DeferredRouteDeltas.clear();
+	NextRoutePageStart = 0;
+	bRoutePageComplete = false;
+	bRecoveryRequired = true;
 }
 
 void FDSPGCSUploadJobStateMirror::ClearRecoveryRequired()

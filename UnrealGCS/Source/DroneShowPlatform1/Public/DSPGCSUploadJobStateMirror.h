@@ -4,6 +4,7 @@
 #include "DSPGCSUploadJobProtocol.h"
 
 #include <unordered_map>
+#include <vector>
 
 /** Value-only UE mirror of Console-owned Upload Job authority. */
 class DRONESHOWPLATFORM1_API FDSPGCSUploadJobStateMirror final
@@ -22,6 +23,8 @@ public:
 		bool& bOutDuplicateIgnored);
 	void MarkTransportReconnected();
 	void MarkPageOpened();
+	/** A RoutePage token/revision was rejected; retain the aggregate projection and recover it. */
+	void MarkRoutePageStale();
 	void ClearRecoveryRequired();
 
 	bool HasAuthoritativeSnapshot() const { return bHasSnapshot; }
@@ -56,10 +59,12 @@ private:
 	dspgcs::UploadJobSnapshotDTO CurrentSnapshot;
 	dspgcs::UploadJobCommandAckDTO LastCommandAck;
 	std::unordered_map<std::int32_t, dspgcs::UploadRouteStateDTO> Routes;
+	std::vector<dspgcs::UploadJobRouteStateDeltaDTO> DeferredRouteDeltas;
 	std::string PendingCommandID;
 	std::string BoundJobID;
 	std::string LastSnapshotSafeDiagnostic;
 	std::uint64_t LastDeltaSequence = 0;
+	std::uint64_t ExpectedRoutePageRevision = 0;
 	std::uint32_t NextRoutePageStart = 0;
 	dspgcs::UploadJobErrorCode LastSnapshotResultCode =
 		dspgcs::UploadJobErrorCode::None;

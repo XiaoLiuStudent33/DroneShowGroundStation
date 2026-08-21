@@ -168,6 +168,7 @@
     <ClCompile Include="MavlinkParser.cpp" />
     <ClCompile Include="MissionProfileProbe.cpp" />
     <ClCompile Include="MissionPreparationWorker.cpp" />
+    <ClCompile Include="MissionProtocolTransport.cpp" />
     <ClCompile Include="MissionUploadTransaction.cpp" />
     <ClCompile Include="RouteUploadManager.cpp" />
     <ClCompile Include="UdpClient.cpp" />
@@ -206,6 +207,8 @@
     <ClInclude Include="MavlinkParser.h" />
     <ClInclude Include="MissionProfileProbe.h" />
     <ClInclude Include="MissionPreparationWorker.h" />
+    <ClInclude Include="MissionProtocolTransport.h" />
+    <ClInclude Include="MissionTransport.h" />
     <ClInclude Include="MissionUploadTransaction.h" />
     <ClInclude Include="RouteUploadManager.h" />
     <ClInclude Include="SafetyConfig.h" />

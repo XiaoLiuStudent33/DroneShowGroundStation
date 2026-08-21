@@ -216,6 +216,8 @@ private:
 	std::vector<std::uint8_t> PendingCommandFrame;
 	std::vector<std::uint8_t> PendingSnapshotRequestFrame;
 	std::string PendingSnapshotRequestID;
+	dspgcs::UploadJobSnapshotRequestKind PendingSnapshotRequestKind =
+		dspgcs::UploadJobSnapshotRequestKind::Aggregate;
 	std::string ActiveJobID;
 	std::string ClientSessionID;
 	std::uint64_t OutgoingSequence = 0;

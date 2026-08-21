@@ -2,6 +2,8 @@
 
 #include "GCSRouteWorkflowCoordinator.h"
 #include "Blueprint/IUserObjectListEntry.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/Button.h"
 #include "Components/EditableTextBox.h"
 #include "Components/ListView.h"
 #include "Components/TextBlock.h"
@@ -239,6 +241,10 @@ bool FGCSRouteWorkflowFormattingTest::RunTest(const FString& Parameters)
 			UGCSRouteWorkflowCoordinator::FormatRouteState(static_cast<uint8>(State.Key)),
 			State.Value);
 	}
+	TestEqual(TEXT("Route timeout presentation"),
+		UGCSRouteWorkflowCoordinator::FormatRouteErrorCode(static_cast<uint16>(
+			dspgcs::RouteUploadErrorCode::UploadTimedOut)),
+		FString(TEXT("UploadTimedOut")));
 	int32 Concurrency=0;
 	FString Error;
 	TestTrue(TEXT("Positive concurrency parses"),
@@ -442,6 +448,55 @@ bool FGCSRouteWorkflowRouteListScaleTest::RunTest(const FString& Parameters)
 		if(Count==20000) TestTrue(TEXT("20K ListView does not instantiate 20K rows"),Visible<Count);
 	}
 	C->Shutdown(); GI->Shutdown(); return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowRouteRowContractTest,
+	"DroneGCS.UI.RouteWorkflow.RouteRowContract",
+	EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowRouteRowContractTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UGameInstance* GI=NewObject<UGameInstance>(GEngine);
+	if(!TestNotNull(TEXT("GameInstance"),GI)) return false;
+	GI->InitializeStandalone(TEXT("GCSRouteWorkflowRouteRowContractTest"));
+	UClass* RowClass=LoadClass<UUserWidget>(nullptr,
+		TEXT("/Game/UI/WBP_GCS_RouteUploadRow.WBP_GCS_RouteUploadRow_C"));
+	UUserWidget* BlueprintRow=RowClass?CreateWidget<UUserWidget>(GI,RowClass):nullptr;
+	TestNotNull(TEXT("Blueprint Route row"),BlueprintRow);
+	if(BlueprintRow)
+	{
+		TestTrue(TEXT("Blueprint-only interface is implemented"),
+			BlueprintRow->Implements<UUserObjectListEntry>());
+		TestNull(TEXT("Blueprint-only interface has no required native pointer"),
+			Cast<IUserObjectListEntry>(BlueprintRow));
+		TestTrue(TEXT("Five production TextBlocks satisfy Row structure"),
+			UGCSRouteWorkflowCoordinator::DiagnoseRouteRowStructure(BlueprintRow).IsEmpty());
+	}
+
+	UClass* NonRowClass=LoadClass<UUserWidget>(nullptr,
+		TEXT("/Game/UI/WBP_GCS_RouteUpload.WBP_GCS_RouteUpload_C"));
+	UUserWidget* InvalidRow=NonRowClass?CreateWidget<UUserWidget>(GI,NonRowClass):nullptr;
+	if(!TestNotNull(TEXT("Non-row widget fixture"),InvalidRow))
+	{
+		GI->Shutdown();
+		return false;
+	}
+	const FString MissingDiagnostic=
+		UGCSRouteWorkflowCoordinator::DiagnoseRouteRowStructure(InvalidRow);
+	TestTrue(TEXT("Interface missing is explicit"),
+		MissingDiagnostic.Contains(TEXT("InterfaceMissing")));
+	TestTrue(TEXT("Widget missing is explicit"),
+		MissingDiagnostic.Contains(TEXT("TXT_Route Missing")));
+
+	UButton* WrongRoute=InvalidRow->WidgetTree->ConstructWidget<UButton>(
+		UButton::StaticClass(),TEXT("TXT_Route"));
+	InvalidRow->WidgetTree->RootWidget=WrongRoute;
+	const FString WrongTypeDiagnostic=
+		UGCSRouteWorkflowCoordinator::DiagnoseRouteRowStructure(InvalidRow);
+	TestTrue(TEXT("Widget wrong type is explicit"),
+		WrongTypeDiagnostic.Contains(TEXT("TXT_Route WrongType")));
+	GI->Shutdown();
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowCommandOriginGateTest,
