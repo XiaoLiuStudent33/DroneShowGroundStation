@@ -5,6 +5,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <vector>
@@ -35,6 +36,8 @@ namespace dronegcs::mavftp
         std::chrono::milliseconds requestTimeout{ 750 };
         std::uint32_t maximumRetries = 3;
         std::uint32_t maximumFileBytes = 64U * 1024U * 1024U;
+        std::uint32_t writeWindow = 1;
+        std::uint16_t initialRequestSequence = 0;
     };
 
     enum class OperationKind : std::uint8_t
@@ -60,11 +63,29 @@ namespace dronegcs::mavftp
         Opcode terminalRequestOpcode = Opcode::None;
         std::uint64_t writeBytes = 0;
         std::uint64_t writeBlocks = 0;
+        std::uint64_t writeBlocksSent = 0;
+        std::uint64_t writeBlocksAcked = 0;
         std::uint64_t retryCount = 0;
+        std::uint64_t createRetries = 0;
+        std::uint64_t writeRetries = 0;
+        std::uint64_t terminateRetries = 0;
+        std::uint64_t duplicateAcks = 0;
+        std::uint64_t staleOrMismatchedAcks = 0;
+        std::uint32_t configuredWriteWindow = 1;
+        std::uint32_t maxObservedOutstanding = 0;
+        std::uint64_t writeDataDurationMs = 0;
         std::uint64_t createDurationMs = 0;
         std::uint64_t writeDurationMs = 0;
         std::uint64_t terminateDurationMs = 0;
         std::uint64_t totalDurationMs = 0;
+        std::uint64_t ackRttMinMs = 0;
+        std::uint64_t ackRttAverageMs = 0;
+        std::uint64_t ackRttP50Ms = 0;
+        std::uint64_t ackRttP95Ms = 0;
+        std::uint64_t ackRttP99Ms = 0;
+        std::uint64_t maxAckRttMs = 0;
+        std::uint64_t interAckAverageMs = 0;
+        std::vector<std::uint64_t> boundedAckRttSamples;
     };
 
     using WriteChunkReader = bool (*)(
@@ -84,6 +105,11 @@ namespace dronegcs::mavftp
         std::uint32_t wrongSessionResponses = 0;
         std::uint32_t wrongRequestOpcodeResponses = 0;
         std::uint32_t corruptResponses = 0;
+        std::uint64_t duplicateWriteAcks = 0;
+        std::uint64_t staleOrMismatchedWriteAcks = 0;
+        std::uint64_t createRetries = 0;
+        std::uint64_t writeRetries = 0;
+        std::uint64_t terminateRetries = 0;
     };
 
     class Client final
@@ -123,6 +149,8 @@ namespace dronegcs::mavftp
         std::optional<OperationResult> ConsumeResult();
         const PeerIdentity& GetPeer() const { return peer_; }
         const ClientStats& GetStats() const { return stats_; }
+        std::uint32_t GetConfiguredWriteWindow() const
+            { return config_.writeWindow; }
 
     private:
         enum class Phase : std::uint8_t
@@ -147,6 +175,13 @@ namespace dronegcs::mavftp
             std::uint8_t session, std::uint32_t offset,
             std::vector<std::uint8_t> data, std::string& error);
         bool SendPending(bool retry, std::string& error);
+        bool FillWriteWindow(std::string& error);
+        bool SendWriteRequest(std::size_t offset, std::size_t size,
+            std::string& error);
+        bool RetryWriteRequest(std::size_t index, std::string& error);
+        bool HandleWriteResponse(const Payload& response);
+        void FailWriteOperation(std::string diagnostic,
+            std::uint8_t nakError = 0);
         void HandleAck(const Payload& response);
         void HandleNak(const Payload& response);
         void CompleteSuccess();
@@ -155,9 +190,26 @@ namespace dronegcs::mavftp
         void CompleteCancelled();
         void BestEffortTerminate() noexcept;
         bool StartNextRead(std::string& error);
-        bool StartNextWrite(std::string& error);
         void PopulateOperationMetrics(OperationResult& result) const;
         void ResetWriteSource();
+        std::uint16_t ReserveRequestSequence();
+
+        struct PendingWrite
+        {
+            Payload request;
+            std::array<std::uint8_t, PayloadBytes> wire{};
+            std::chrono::steady_clock::time_point firstSentAt{};
+            std::chrono::steady_clock::time_point lastSentAt{};
+            std::chrono::steady_clock::time_point deadline{};
+            std::uint32_t retriesUsed = 0;
+        };
+
+        struct WriteAckIdentity
+        {
+            std::uint16_t responseSequence = 0;
+            std::uint8_t session = 0;
+            std::uint32_t offset = 0;
+        };
 
         IRequestTransport& transport_;
         PeerIdentity peer_;
@@ -182,10 +234,32 @@ namespace dronegcs::mavftp
         std::size_t maximumWriteChunkBytes_ = MaximumDataBytes;
         std::size_t transferred_ = 0;
         std::size_t pendingChunkSize_ = 0;
+        std::size_t nextWriteOffset_ = 0;
+        std::vector<PendingWrite> pendingWrites_;
+        std::deque<WriteAckIdentity> recentWriteAcks_;
+        static constexpr std::size_t MaximumRecentWriteAcks = 64;
+        static constexpr std::size_t MaximumAckTimingSamples = 2048;
+        std::vector<std::uint64_t> ackRttSamples_;
+        std::size_t ackRttSampleCount_ = 0;
+        std::size_t ackRttSampleCursor_ = 0;
+        std::uint64_t ackRttSumMs_ = 0;
+        std::uint64_t ackRttCount_ = 0;
+        std::uint64_t interAckSumMs_ = 0;
+        std::uint64_t interAckCount_ = 0;
+        std::uint64_t writeBlocksSent_ = 0;
         std::uint64_t writeBlocksCompleted_ = 0;
         std::uint64_t operationRetriesAtStart_ = 0;
+        std::uint64_t createRetriesAtStart_ = 0;
+        std::uint64_t writeRetriesAtStart_ = 0;
+        std::uint64_t terminateRetriesAtStart_ = 0;
+        std::uint64_t duplicateAcksAtStart_ = 0;
+        std::uint64_t staleAcksAtStart_ = 0;
+        std::uint32_t maxObservedOutstanding_ = 0;
         std::chrono::steady_clock::time_point operationStartedAt_{};
         std::chrono::steady_clock::time_point createConfirmedAt_{};
+        std::chrono::steady_clock::time_point firstWriteSentAt_{};
+        std::chrono::steady_clock::time_point lastWriteAckedAt_{};
+        std::chrono::steady_clock::time_point previousWriteAckAt_{};
         std::chrono::steady_clock::time_point terminateStartedAt_{};
         std::optional<OperationResult> completed_;
     };

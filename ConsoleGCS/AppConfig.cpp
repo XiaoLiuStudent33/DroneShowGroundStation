@@ -444,6 +444,7 @@ bool AppConfig::Load(
     int mavftpSegmentItems = static_cast<int>(config.mavftpSegmentItems);
     int mavftpRequestRetryCount =
         static_cast<int>(config.mavftpRequestRetryCount);
+    int mavftpWriteWindow = static_cast<int>(config.mavftpWriteWindow);
     if (!ParseOptionalInteger(
             values,
             "mavftp.segment_items",
@@ -464,6 +465,13 @@ bool AppConfig::Load(
             0,
             10,
             mavftpRequestRetryCount,
+            error) ||
+        !ParseOptionalInteger(
+            values,
+            "mavftp.write_window",
+            1,
+            16,
+            mavftpWriteWindow,
             error))
     {
         return false;
@@ -472,6 +480,8 @@ bool AppConfig::Load(
         static_cast<std::uint32_t>(mavftpSegmentItems);
     config.mavftpRequestRetryCount =
         static_cast<std::uint32_t>(mavftpRequestRetryCount);
+    config.mavftpWriteWindow =
+        static_cast<std::uint32_t>(mavftpWriteWindow);
 
     constexpr float defaultLimitMeters = 5.0f;
     constexpr float maximumConfigurableLimitMeters = 1000.0f;

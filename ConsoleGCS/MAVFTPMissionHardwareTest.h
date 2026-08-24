@@ -37,12 +37,14 @@ struct MAVFTPMissionHardwareTestOptions
     std::uint32_t segmentItemCapacity = 65535U;
     int requestTimeoutMs = 750;
     std::uint32_t requestRetryCount = 3;
+    std::uint32_t writeWindow = 1;
 };
 
 /** Applies the single CLI > INI > code-default transport configuration merge. */
 bool ResolveMAVFTPMissionTransportOptions(
     const AppConfig& appConfig,
     bool segmentItemsProvidedByCli,
+    bool writeWindowProvidedByCli,
     MAVFTPMissionHardwareTestOptions& options,
     std::string& error);
 
@@ -77,6 +79,7 @@ struct MAVFTPMissionHardwareTestReport
     bool firstArtifactItemObserved = false;
     bool lastItemObserved = false;
     dronegcs::mission_ftp::MAVFTPMissionTransportMetrics mavftpMetrics;
+    std::uint64_t hardwareValidationDurationMs = 0;
     std::string safeDiagnostic;
 
     std::string ToHumanSummary() const;
@@ -148,6 +151,7 @@ private:
     std::size_t sampleIndex_ = 0;
     std::optional<std::uint16_t> receivedSampleSequence_;
     std::chrono::steady_clock::time_point discoveryDeadline_{};
+    std::chrono::steady_clock::time_point validationStartedAt_{};
     std::chrono::steady_clock::time_point overallDeadline_{};
     std::chrono::steady_clock::time_point responseDeadline_{};
     std::uint32_t responseRetries_ = 0;

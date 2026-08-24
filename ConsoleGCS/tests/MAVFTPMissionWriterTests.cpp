@@ -478,6 +478,323 @@ namespace
             std::string(writer.GetTerminalPhaseName()) == "StreamRejected",
             "stream rejection emitted a WriteFile or failed without diagnosis");
     }
+
+    std::vector<std::uint8_t> Bytes(const std::size_t count)
+    {
+        std::vector<std::uint8_t> bytes(count);
+        for (std::size_t index = 0; index < count; ++index)
+            bytes[index] = static_cast<std::uint8_t>(index);
+        return bytes;
+    }
+
+    void TestBoundedWindowFillOutOfOrderAndMetrics()
+    {
+        for (const std::uint32_t window : { 1U, 2U, 4U, 8U })
+        {
+            FakeWire wire;
+            ftp::ClientConfig config;
+            config.writeWindow = window;
+            ftp::Client client(wire, TestPeer(), config);
+            std::string error;
+            const auto source = Bytes(9 * ftp::MaximumDataBytes + 7);
+            Expect(client.StartWriteFile("@MISSION/mission.dat", source, error),
+                "window client did not start");
+            const ftp::Payload create = wire.Decode(0);
+            wire.Ack(client, create, 41);
+            Expect(wire.sent.size() == 1 + window,
+                "Write window did not fill immediately after Create ACK");
+
+            std::vector<std::uint32_t> acknowledged;
+            if (window > 1)
+            {
+                const ftp::Payload outOfOrder = wire.Decode(window);
+                wire.Ack(client, outOfOrder, 41);
+                acknowledged.push_back(outOfOrder.offset);
+                Expect(wire.sent.size() == 2 + window,
+                    "out-of-order ACK did not refill the Write window");
+                const auto duplicate = wire.Reply(outOfOrder, ftp::Opcode::Ack, 41);
+                Expect(!client.HandleResponse(TestPeer(), duplicate.data(), duplicate.size()),
+                    "duplicate Write ACK was accepted twice");
+            }
+
+            for (std::size_t guard = 0; guard < 1000; ++guard)
+            {
+                bool madeProgress = false;
+                for (std::size_t index = 1; index < wire.sent.size(); ++index)
+                {
+                    const ftp::Payload request = wire.Decode(index);
+                    if (request.opcode != ftp::Opcode::WriteFile ||
+                        std::find(acknowledged.begin(), acknowledged.end(),
+                            request.offset) != acknowledged.end())
+                        continue;
+                    wire.Ack(client, request, 41);
+                    acknowledged.push_back(request.offset);
+                    madeProgress = true;
+                    break;
+                }
+                if (wire.Last().opcode == ftp::Opcode::TerminateSession) break;
+                Expect(madeProgress, "Write window stopped before TerminateSession");
+            }
+            const ftp::Payload terminate = wire.Last();
+            Expect(terminate.opcode == ftp::Opcode::TerminateSession,
+                "Write window sent Terminate before all blocks were ACKed or stalled");
+            const std::size_t beforeTerminateAck = wire.sent.size();
+            Expect(!client.ConsumeResult(),
+                "Write operation completed before Terminate ACK");
+            wire.Ack(client, terminate, 41);
+            const auto result = client.ConsumeResult();
+            Expect(result && result->success &&
+                result->configuredWriteWindow == window &&
+                result->maxObservedOutstanding == window &&
+                result->writeBlocksSent == 10 &&
+                result->writeBlocksAcked == 10 &&
+                result->writeBytes == source.size() &&
+                wire.sent.size() == beforeTerminateAck,
+                "Write window result or bounded metrics are incorrect");
+            if (window > 1)
+                Expect(result->duplicateAcks == 1,
+                    "duplicate ACK metric was not reported");
+        }
+    }
+
+    void TestWindowCorrelationAndSequenceWrap()
+    {
+        FakeWire wire;
+        ftp::ClientConfig config;
+        config.writeWindow = 4;
+        config.initialRequestSequence = 65534;
+        ftp::Client client(wire, TestPeer(), config);
+        std::string error;
+        Expect(client.StartWriteFile("@MISSION/mission.dat",
+            Bytes(6 * ftp::MaximumDataBytes), error),
+            "sequence-wrap client did not start");
+        const ftp::Payload create = wire.Decode(0);
+        Expect(create.sequence == 65534,
+            "sequence-wrap fixture did not start at uint16 boundary");
+        wire.Ack(client, create, 51);
+        Expect(wire.Decode(1).sequence == 0 && wire.Decode(2).sequence == 2 &&
+            wire.Decode(3).sequence == 4 && wire.Decode(4).sequence == 6,
+            "Write request sequence did not wrap without pending reuse");
+
+        const ftp::Payload target = wire.Decode(1);
+        auto wrongPeerWire = wire.Reply(target, ftp::Opcode::Ack, 51);
+        auto wrongPeer = TestPeer();
+        wrongPeer.remotePort++;
+        Expect(!client.HandleResponse(wrongPeer,
+            wrongPeerWire.data(), wrongPeerWire.size()),
+            "wrong-peer ACK was accepted");
+
+        auto wrongSessionWire = wire.Reply(target, ftp::Opcode::Ack, 52);
+        Expect(!client.HandleResponse(TestPeer(),
+            wrongSessionWire.data(), wrongSessionWire.size()),
+            "wrong-session ACK was accepted");
+
+        ftp::Payload wrongSequenceResponse;
+        ftp::Error protocolError;
+        Expect(ftp::DecodePayload(wrongPeerWire.data(), wrongPeerWire.size(),
+            wrongSequenceResponse, protocolError), "wrap response decode failed");
+        wrongSequenceResponse.sequence = ftp::NextSequence(
+            ftp::NextSequence(wrongSequenceResponse.sequence));
+        std::array<std::uint8_t, ftp::PayloadBytes> wrongSequenceWire{};
+        Expect(ftp::EncodePayload(wrongSequenceResponse, wrongSequenceWire,
+            protocolError), "wrong sequence response encode failed");
+        Expect(!client.HandleResponse(TestPeer(), wrongSequenceWire.data(),
+            wrongSequenceWire.size()), "wrong-sequence ACK was accepted");
+
+        ftp::Payload wrongOpcodeResponse = wrongSequenceResponse;
+        wrongOpcodeResponse.sequence = ftp::NextSequence(target.sequence);
+        wrongOpcodeResponse.requestOpcode = ftp::Opcode::ReadFile;
+        std::array<std::uint8_t, ftp::PayloadBytes> wrongOpcodeWire{};
+        Expect(ftp::EncodePayload(wrongOpcodeResponse, wrongOpcodeWire,
+            protocolError), "wrong opcode response encode failed");
+        Expect(!client.HandleResponse(TestPeer(), wrongOpcodeWire.data(),
+            wrongOpcodeWire.size()), "wrong-opcode ACK was accepted");
+
+        wire.Ack(client, target, 51);
+        Expect(client.IsBusy() && client.GetStats().wrongPeerResponses == 1 &&
+            client.GetStats().wrongSessionResponses == 1 &&
+            client.GetStats().wrongRequestOpcodeResponses == 1 &&
+            client.GetStats().staleOrMismatchedWriteAcks >= 3,
+            "correlation rejection metrics are incomplete");
+        client.Cancel();
+        const auto cancelled = client.ConsumeResult();
+        Expect(cancelled && cancelled->cancelled && !client.IsBusy(),
+            "window cancel did not clear pending blocks");
+        const std::size_t sendsAfterCancel = wire.sent.size();
+        Expect(!client.HandleResponse(TestPeer(), wrongPeerWire.data(),
+            wrongPeerWire.size()) && wire.sent.size() == sendsAfterCancel,
+            "late ACK after cancel emitted another request");
+    }
+
+    void TestSingleBlockRetryAndWindowNakFailure()
+    {
+        FakeWire wire;
+        ftp::ClientConfig config;
+        config.writeWindow = 4;
+        config.requestTimeout = std::chrono::milliseconds(1);
+        config.maximumRetries = 1;
+        ftp::Client client(wire, TestPeer(), config);
+        std::string error;
+        Expect(client.StartWriteFile("@MISSION/mission.dat",
+            Bytes(3 * ftp::MaximumDataBytes), error),
+            "retry window did not start");
+        wire.Ack(client, wire.Decode(0), 61);
+        const ftp::Payload first = wire.Decode(1);
+        const ftp::Payload second = wire.Decode(2);
+        const ftp::Payload third = wire.Decode(3);
+        wire.Ack(client, first, 61);
+        wire.Ack(client, second, 61);
+        const std::size_t beforeRetry = wire.sent.size();
+        client.Tick(std::chrono::steady_clock::now() + std::chrono::seconds(1));
+        Expect(wire.sent.size() == beforeRetry + 1 &&
+            wire.Last().sequence == third.sequence &&
+            wire.Last().session == third.session &&
+            wire.Last().offset == third.offset &&
+            wire.Last().data == third.data,
+            "single timed-out block retry changed immutable identity or payload");
+        wire.Ack(client, third, 61);
+        Expect(wire.Last().opcode == ftp::Opcode::TerminateSession,
+            "retry completion did not reach Terminate gate");
+        wire.Ack(client, wire.Last(), 61);
+        const auto success = client.ConsumeResult();
+        Expect(success && success->success && success->writeRetries == 1 &&
+            success->createRetries == 0 && success->terminateRetries == 0,
+            "Write retry was not classified independently");
+
+        FakeWire nakWire;
+        ftp::Client nakClient(nakWire, TestPeer(), config);
+        Expect(nakClient.StartWriteFile("@MISSION/mission.dat",
+            Bytes(6 * ftp::MaximumDataBytes), error), "NAK window did not start");
+        nakWire.Ack(nakClient, nakWire.Decode(0), 62);
+        const ftp::Payload rejected = nakWire.Decode(2);
+        const auto nak = nakWire.Reply(rejected, ftp::Opcode::Nak, 62, { 1 });
+        const std::size_t beforeNak = nakWire.sent.size();
+        Expect(nakClient.HandleResponse(TestPeer(), nak.data(), nak.size()),
+            "exact Write NAK was not consumed");
+        const auto failed = nakClient.ConsumeResult();
+        Expect(failed && !failed->success && !failed->cancelled &&
+            !nakClient.IsBusy() && nakWire.sent.size() == beforeNak + 1,
+            "Write NAK did not fail once with one best-effort cleanup request");
+        const ftp::Payload lateRequest = nakWire.Decode(1);
+        const auto late = nakWire.Reply(lateRequest, ftp::Opcode::Ack, 62);
+        const std::size_t afterFailure = nakWire.sent.size();
+        Expect(!nakClient.HandleResponse(TestPeer(), late.data(), late.size()) &&
+            !nakClient.ConsumeResult() && nakWire.sent.size() == afterFailure,
+            "late ACK recovered or completed a failed window twice");
+    }
+
+    void TestWindowBoundariesExhaustionShutdownAndMetricBound()
+    {
+        ftp::ClientConfig config;
+        config.writeWindow = 8;
+        std::string error;
+
+        FakeWire boundaryWire;
+        ftp::Client boundaryClient(boundaryWire, TestPeer(), config);
+        Expect(!boundaryClient.StartWriteFile(
+            "@MISSION/mission.dat", {}, error) && boundaryWire.sent.empty(),
+            "empty Write source did not preserve the existing reject contract");
+        error.clear();
+        Expect(boundaryClient.StartWriteFile("@MISSION/mission.dat",
+            Bytes(ftp::MaximumDataBytes + 1), error),
+            "small-window boundary source did not start");
+        boundaryWire.Ack(boundaryClient, boundaryWire.Decode(0), 71);
+        Expect(boundaryWire.sent.size() == 3,
+            "file smaller than Window emitted more than its two Write blocks");
+        boundaryWire.Ack(boundaryClient, boundaryWire.Decode(1), 71);
+        Expect(boundaryWire.sent.size() == 3,
+            "small file emitted Terminate before every Write ACK");
+        boundaryWire.Ack(boundaryClient, boundaryWire.Decode(2), 71);
+        Expect(boundaryWire.sent.size() == 4 &&
+            boundaryWire.Last().opcode == ftp::Opcode::TerminateSession,
+            "small file did not emit exactly one Terminate after its last ACK");
+        boundaryWire.Ack(boundaryClient, boundaryWire.Last(), 71);
+        const auto boundaryResult = boundaryClient.ConsumeResult();
+        Expect(boundaryResult && boundaryResult->success &&
+            boundaryResult->writeBlocksSent == 2 &&
+            boundaryResult->writeBlocksAcked == 2 &&
+            boundaryResult->maxObservedOutstanding == 2,
+            "small-file Window metrics are incorrect");
+
+        FakeWire exhaustionWire;
+        config.writeWindow = 4;
+        config.requestTimeout = std::chrono::milliseconds(1);
+        config.maximumRetries = 1;
+        ftp::Client exhaustionClient(exhaustionWire, TestPeer(), config);
+        Expect(exhaustionClient.StartWriteFile("@MISSION/mission.dat",
+            Bytes(4 * ftp::MaximumDataBytes), error),
+            "retry-exhaustion Window did not start");
+        exhaustionWire.Ack(exhaustionClient, exhaustionWire.Decode(0), 72);
+        const ftp::Payload timedOut = exhaustionWire.Decode(1);
+        exhaustionWire.Ack(exhaustionClient, exhaustionWire.Decode(2), 72);
+        exhaustionWire.Ack(exhaustionClient, exhaustionWire.Decode(3), 72);
+        exhaustionWire.Ack(exhaustionClient, exhaustionWire.Decode(4), 72);
+        exhaustionClient.Tick(
+            std::chrono::steady_clock::now() + std::chrono::seconds(1));
+        Expect(exhaustionWire.Last().sequence == timedOut.sequence &&
+            exhaustionWire.Last().session == timedOut.session &&
+            exhaustionWire.Last().offset == timedOut.offset &&
+            exhaustionWire.Last().data == timedOut.data,
+            "retry-exhaustion fixture did not resend the immutable Block");
+        exhaustionClient.Tick(
+            std::chrono::steady_clock::now() + std::chrono::seconds(2));
+        const auto exhausted = exhaustionClient.ConsumeResult();
+        Expect(exhausted && !exhausted->success &&
+            exhausted->writeRetries == 1 && !exhaustionClient.IsBusy(),
+            "one exhausted in-flight Block did not fail the whole Window once");
+        const auto late = exhaustionWire.Reply(
+            timedOut, ftp::Opcode::Ack, 72);
+        Expect(!exhaustionClient.HandleResponse(TestPeer(),
+            late.data(), late.size()) && !exhaustionClient.ConsumeResult(),
+            "late ACK recovered a retry-exhausted Window");
+
+        FakeWire shutdownWire;
+        ftp::Client shutdownClient(shutdownWire, TestPeer(), config);
+        Expect(shutdownClient.StartWriteFile("@MISSION/mission.dat",
+            Bytes(6 * ftp::MaximumDataBytes), error),
+            "shutdown Window did not start");
+        shutdownWire.Ack(shutdownClient, shutdownWire.Decode(0), 73);
+        const ftp::Payload shutdownPending = shutdownWire.Decode(1);
+        shutdownClient.Shutdown();
+        const std::size_t sendsAfterShutdown = shutdownWire.sent.size();
+        const auto shutdownLate = shutdownWire.Reply(
+            shutdownPending, ftp::Opcode::Ack, 73);
+        Expect(!shutdownClient.IsBusy() &&
+            !shutdownClient.HandleResponse(TestPeer(),
+                shutdownLate.data(), shutdownLate.size()) &&
+            shutdownWire.sent.size() == sendsAfterShutdown,
+            "Shutdown retained pending Blocks or emitted traffic for a late ACK");
+
+        FakeWire metricWire;
+        config.writeWindow = 8;
+        config.maximumRetries = 1;
+        ftp::Client metricClient(metricWire, TestPeer(), config);
+        constexpr std::size_t BlockCount = 2050;
+        Expect(metricClient.StartWriteFile("@MISSION/mission.dat",
+            Bytes(BlockCount * ftp::MaximumDataBytes), error),
+            "bounded-metric Window did not start");
+        metricWire.Ack(metricClient, metricWire.Decode(0), 74);
+        std::size_t cursor = 1;
+        while (metricWire.Last().opcode != ftp::Opcode::TerminateSession)
+        {
+            Expect(cursor < metricWire.sent.size(),
+                "bounded-metric Window stopped before Terminate");
+            const ftp::Payload request = metricWire.Decode(cursor++);
+            if (request.opcode == ftp::Opcode::WriteFile)
+                metricWire.Ack(metricClient, request, 74);
+        }
+        metricWire.Ack(metricClient, metricWire.Last(), 74);
+        const auto metricResult = metricClient.ConsumeResult();
+        Expect(metricResult && metricResult->success &&
+            metricResult->writeBlocksAcked == BlockCount &&
+            metricResult->boundedAckRttSamples.size() == 2048 &&
+            metricResult->ackRttMinMs <= metricResult->ackRttP50Ms &&
+            metricResult->ackRttP50Ms <= metricResult->ackRttP95Ms &&
+            metricResult->ackRttP95Ms <= metricResult->ackRttP99Ms &&
+            metricResult->ackRttP99Ms <= metricResult->maxAckRttMs &&
+            metricResult->writeDataDurationMs <= metricResult->totalDurationMs,
+            "RTT/duration aggregation exceeded its bound or ordering contract");
+    }
 }
 
 int RunMAVFTPMissionWriterTests()
@@ -491,6 +808,10 @@ int RunMAVFTPMissionWriterTests()
         TestNextSegmentStartsOnlyAfterTerminateAck();
         TestMultipleSegmentsRemainOrdered();
         TestStreamingRejectionStopsWrites();
+        TestBoundedWindowFillOutOfOrderAndMetrics();
+        TestWindowCorrelationAndSequenceWrap();
+        TestSingleBlockRetryAndWindowNakFailure();
+        TestWindowBoundariesExhaustionShutdownAndMetricBound();
         std::cout << "MAVFTP Mission writer core tests passed\n";
         return 0;
     }

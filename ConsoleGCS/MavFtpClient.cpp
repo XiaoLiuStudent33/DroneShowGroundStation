@@ -1,6 +1,7 @@
 #include "MavFtpClient.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace dronegcs::mavftp
@@ -48,6 +49,9 @@ namespace dronegcs::mavftp
             config_.requestTimeout = std::chrono::milliseconds(750);
         if (config_.maximumFileBytes == 0)
             config_.maximumFileBytes = 64U * 1024U * 1024U;
+        if (config_.writeWindow == 0 || config_.writeWindow > 16)
+            config_.writeWindow = 1;
+        nextRequestSequence_ = config_.initialRequestSequence;
     }
 
     Client::~Client() noexcept
@@ -91,6 +95,11 @@ namespace dronegcs::mavftp
         sessionOpen_ = false;
         activeSession_ = 0;
         operationRetriesAtStart_ = stats_.retriesSent;
+        createRetriesAtStart_ = stats_.createRetries;
+        writeRetriesAtStart_ = stats_.writeRetries;
+        terminateRetriesAtStart_ = stats_.terminateRetries;
+        duplicateAcksAtStart_ = stats_.duplicateWriteAcks;
+        staleAcksAtStart_ = stats_.staleOrMismatchedWriteAcks;
         operationStartedAt_ = std::chrono::steady_clock::now();
         if (!SendNewRequest(phase, opcode, session, offset,
             std::move(data), error))
@@ -216,7 +225,7 @@ namespace dronegcs::mavftp
         std::string& error)
     {
         Payload request;
-        request.sequence = nextRequestSequence_;
+        request.sequence = ReserveRequestSequence();
         request.session = session;
         request.opcode = opcode;
         request.requestOpcode = Opcode::None;
@@ -246,6 +255,12 @@ namespace dronegcs::mavftp
         {
             ++stats_.retriesSent;
             ++retriesUsed_;
+            if (pendingRequest_.opcode == Opcode::CreateFile)
+                ++stats_.createRetries;
+            else if (pendingRequest_.opcode == Opcode::WriteFile)
+                ++stats_.writeRetries;
+            else if (pendingRequest_.opcode == Opcode::TerminateSession)
+                ++stats_.terminateRetries;
         }
         else
         {
@@ -258,6 +273,27 @@ namespace dronegcs::mavftp
 
     void Client::Tick(const std::chrono::steady_clock::time_point now)
     {
+        if (phase_ == Phase::AwaitWrite)
+        {
+            for (std::size_t index = 0; index < pendingWrites_.size(); ++index)
+            {
+                if (now < pendingWrites_[index].deadline) continue;
+                if (pendingWrites_[index].retriesUsed >= config_.maximumRetries)
+                {
+                    pendingRequest_ = pendingWrites_[index].request;
+                    FailWriteOperation("MAVFTP WriteFile retry limit exhausted.");
+                    return;
+                }
+                std::string error;
+                if (!RetryWriteRequest(index, error))
+                {
+                    pendingRequest_ = pendingWrites_[index].request;
+                    FailWriteOperation(error);
+                    return;
+                }
+            }
+            return;
+        }
         if (!pending_ || now < deadline_) return;
         if (retriesUsed_ >= config_.maximumRetries)
         {
@@ -290,6 +326,12 @@ namespace dronegcs::mavftp
             ++stats_.corruptResponses;
             return false;
         }
+        if (operation_ == OperationKind::WriteFile &&
+            (phase_ == Phase::AwaitWrite ||
+                response.requestOpcode == Opcode::WriteFile))
+        {
+            return HandleWriteResponse(response);
+        }
         if (!pending_ || response.sequence !=
             NextSequence(pendingRequest_.sequence))
         {
@@ -316,10 +358,276 @@ namespace dronegcs::mavftp
 
         ++stats_.responsesAccepted;
         pending_ = false;
-        nextRequestSequence_ = NextSequence(response.sequence);
         if (response.opcode == Opcode::Ack) HandleAck(response);
         else HandleNak(response);
         return true;
+    }
+
+    std::uint16_t Client::ReserveRequestSequence()
+    {
+        for (;;)
+        {
+            const std::uint16_t reserved = nextRequestSequence_;
+            nextRequestSequence_ = NextSequence(
+                NextSequence(nextRequestSequence_));
+            const bool alreadyPending = std::any_of(
+                pendingWrites_.begin(), pendingWrites_.end(),
+                [reserved](const PendingWrite& pending)
+                {
+                    return pending.request.sequence == reserved;
+                });
+            if (!alreadyPending) return reserved;
+        }
+    }
+
+    bool Client::SendWriteRequest(
+        const std::size_t offset,
+        const std::size_t size,
+        std::string& error)
+    {
+        if (size == 0 || offset > operationSize_ ||
+            size > operationSize_ - offset ||
+            pendingWrites_.size() >= config_.writeWindow)
+        {
+            error = "MAVFTP WriteFile window range is invalid.";
+            return false;
+        }
+        std::vector<std::uint8_t> chunk(size);
+        if (writeChunkReader_)
+        {
+            if (!writeChunkReader_(offset, chunk.data(), chunk.size(),
+                writeChunkReaderContext_, error))
+            {
+                if (error.empty())
+                    error = "MAVFTP write stream rejected the requested range.";
+                return false;
+            }
+        }
+        else
+        {
+            if (operationBytes_.size() != operationSize_)
+            {
+                error = "MAVFTP write source size changed during the operation.";
+                return false;
+            }
+            std::copy_n(operationBytes_.begin() + offset, size, chunk.begin());
+        }
+
+        PendingWrite pending;
+        pending.request.sequence = ReserveRequestSequence();
+        pending.request.session = activeSession_;
+        pending.request.opcode = Opcode::WriteFile;
+        pending.request.requestOpcode = Opcode::None;
+        pending.request.offset = static_cast<std::uint32_t>(offset);
+        pending.request.data = std::move(chunk);
+        Error protocolError;
+        if (!EncodePayload(pending.request, pending.wire, protocolError))
+        {
+            error = protocolError.detail;
+            return false;
+        }
+        if (!transport_.SendMavFtpPayload(pending.wire))
+        {
+            error = "Endpoint-bound MAVFTP WriteFile send failed.";
+            return false;
+        }
+        const auto sentAt = std::chrono::steady_clock::now();
+        pending.firstSentAt = sentAt;
+        pending.lastSentAt = sentAt;
+        pending.deadline = sentAt + config_.requestTimeout;
+        pendingWrites_.push_back(std::move(pending));
+        ++stats_.requestsSent;
+        ++writeBlocksSent_;
+        if (firstWriteSentAt_ == std::chrono::steady_clock::time_point{})
+            firstWriteSentAt_ = sentAt;
+        maxObservedOutstanding_ = (std::max)(maxObservedOutstanding_,
+            static_cast<std::uint32_t>(pendingWrites_.size()));
+        error.clear();
+        return true;
+    }
+
+    bool Client::FillWriteWindow(std::string& error)
+    {
+        while (pendingWrites_.size() < config_.writeWindow &&
+            nextWriteOffset_ < operationSize_)
+        {
+            const std::size_t remaining = operationSize_ - nextWriteOffset_;
+            const std::size_t size = (std::min)(
+                remaining, maximumWriteChunkBytes_);
+            if (!SendWriteRequest(nextWriteOffset_, size, error)) return false;
+            nextWriteOffset_ += size;
+        }
+        return true;
+    }
+
+    bool Client::RetryWriteRequest(
+        const std::size_t index,
+        std::string& error)
+    {
+        if (index >= pendingWrites_.size() ||
+            !transport_.SendMavFtpPayload(pendingWrites_[index].wire))
+        {
+            error = "Endpoint-bound MAVFTP WriteFile retry failed.";
+            return false;
+        }
+        auto& pending = pendingWrites_[index];
+        const auto sentAt = std::chrono::steady_clock::now();
+        pending.lastSentAt = sentAt;
+        pending.deadline = sentAt + config_.requestTimeout;
+        ++pending.retriesUsed;
+        ++stats_.retriesSent;
+        ++stats_.writeRetries;
+        error.clear();
+        return true;
+    }
+
+    bool Client::HandleWriteResponse(const Payload& response)
+    {
+        if (phase_ != Phase::AwaitWrite)
+        {
+            ++stats_.duplicateOrStaleResponses;
+            ++stats_.staleOrMismatchedWriteAcks;
+            return false;
+        }
+        if (response.requestOpcode != Opcode::WriteFile)
+        {
+            ++stats_.wrongRequestOpcodeResponses;
+            ++stats_.staleOrMismatchedWriteAcks;
+            return false;
+        }
+        const auto sequenceMatch = std::find_if(
+            pendingWrites_.begin(), pendingWrites_.end(),
+            [&response](const PendingWrite& candidate)
+            {
+                return response.sequence == NextSequence(
+                    candidate.request.sequence);
+            });
+        const auto pending = std::find_if(
+            pendingWrites_.begin(), pendingWrites_.end(),
+            [&response](const PendingWrite& candidate)
+            {
+                return response.sequence == NextSequence(
+                        candidate.request.sequence) &&
+                    response.session == candidate.request.session &&
+                    response.offset == candidate.request.offset;
+            });
+        if (pending == pendingWrites_.end())
+        {
+            const bool duplicate = std::any_of(
+                recentWriteAcks_.begin(), recentWriteAcks_.end(),
+                [&response](const WriteAckIdentity& identity)
+                {
+                    return response.sequence == identity.responseSequence &&
+                        response.session == identity.session &&
+                        response.offset == identity.offset;
+                });
+            ++stats_.duplicateOrStaleResponses;
+            if (duplicate)
+                ++stats_.duplicateWriteAcks;
+            else
+            {
+                ++stats_.staleOrMismatchedWriteAcks;
+                if (sequenceMatch != pendingWrites_.end() &&
+                    response.session != sequenceMatch->request.session)
+                    ++stats_.wrongSessionResponses;
+            }
+            if (!duplicate && pendingWrites_.size() == 1 &&
+                sequenceMatch != pendingWrites_.end() &&
+                response.session == sequenceMatch->request.session &&
+                response.offset != sequenceMatch->request.offset)
+            {
+                pendingRequest_ = sequenceMatch->request;
+                FailWriteOperation(
+                    "OffsetMismatch: MAVFTP WriteFile ACK offset differs from the pending block.");
+                return true;
+            }
+            return false;
+        }
+        if (response.opcode != Opcode::Ack && response.opcode != Opcode::Nak)
+        {
+            ++stats_.corruptResponses;
+            ++stats_.staleOrMismatchedWriteAcks;
+            return false;
+        }
+        if (response.opcode == Opcode::Nak)
+        {
+            const std::uint8_t nak = response.data.empty() ? 0 : response.data[0];
+            pendingRequest_ = pending->request;
+            FailWriteOperation(
+                std::string("WriteFile returned MAVFTP NAK ") +
+                    std::to_string(nak) + " (" + NakErrorName(nak) + ").",
+                nak);
+            return true;
+        }
+        const std::size_t blockSize = pending->request.data.size();
+        if (!response.data.empty() &&
+            (response.data.size() != 4 ||
+                ReadU32LittleEndian(response.data.data()) != blockSize))
+        {
+            pendingRequest_ = pending->request;
+            FailWriteOperation("MAVFTP WriteFile ACK byte count is invalid.");
+            return true;
+        }
+
+        const auto acknowledgedAt = std::chrono::steady_clock::now();
+        const std::uint64_t rtt = ElapsedMilliseconds(
+            pending->lastSentAt, acknowledgedAt);
+        ackRttSumMs_ += rtt;
+        ++ackRttCount_;
+        if (ackRttSamples_.size() < MaximumAckTimingSamples)
+        {
+            ackRttSamples_.push_back(rtt);
+            ackRttSampleCount_ = ackRttSamples_.size();
+        }
+        else
+        {
+            ackRttSamples_[ackRttSampleCursor_] = rtt;
+            ackRttSampleCursor_ = (ackRttSampleCursor_ + 1) %
+                MaximumAckTimingSamples;
+        }
+        if (previousWriteAckAt_ != std::chrono::steady_clock::time_point{})
+        {
+            interAckSumMs_ += ElapsedMilliseconds(
+                previousWriteAckAt_, acknowledgedAt);
+            ++interAckCount_;
+        }
+        previousWriteAckAt_ = acknowledgedAt;
+        lastWriteAckedAt_ = acknowledgedAt;
+        transferred_ += blockSize;
+        ++writeBlocksCompleted_;
+        ++stats_.responsesAccepted;
+        recentWriteAcks_.push_back({ response.sequence, response.session,
+            response.offset });
+        if (recentWriteAcks_.size() > MaximumRecentWriteAcks)
+            recentWriteAcks_.pop_front();
+        pendingWrites_.erase(pending);
+
+        std::string error;
+        if (!FillWriteWindow(error))
+        {
+            if (!pendingWrites_.empty()) pendingRequest_ = pendingWrites_.front().request;
+            FailWriteOperation(error);
+            return true;
+        }
+        if (nextWriteOffset_ == operationSize_ && pendingWrites_.empty())
+        {
+            terminateStartedAt_ = acknowledgedAt;
+            if (!SendNewRequest(Phase::AwaitTerminateWrite,
+                Opcode::TerminateSession, activeSession_, 0, {}, error))
+            {
+                FailWriteOperation(error);
+            }
+        }
+        return true;
+    }
+
+    void Client::FailWriteOperation(
+        std::string diagnostic,
+        const std::uint8_t nakError)
+    {
+        pendingWrites_.clear();
+        BestEffortTerminate();
+        CompleteFailure(std::move(diagnostic), nakError);
     }
 
     void Client::HandleAck(const Payload& response)
@@ -394,8 +702,10 @@ namespace dronegcs::mavftp
             activeSession_ = response.session;
             sessionOpen_ = true;
             transferred_ = 0;
+            nextWriteOffset_ = 0;
             createConfirmedAt_ = std::chrono::steady_clock::now();
-            if (!StartNextWrite(error))
+            phase_ = Phase::AwaitWrite;
+            if (!FillWriteWindow(error))
             {
                 BestEffortTerminate();
                 CompleteFailure(error);
@@ -412,39 +722,7 @@ namespace dronegcs::mavftp
             return;
         }
         case Phase::AwaitWrite:
-            if (response.offset != transferred_)
-            {
-                BestEffortTerminate();
-                CompleteFailure("OffsetMismatch: MAVFTP WriteFile ACK offset differs from the pending block.");
-                return;
-            }
-            // ArduPilot's canonical WriteFile ACK has no data payload. Retain
-            // compatibility with servers that return a uint32 written count.
-            if (!response.data.empty() &&
-                (response.data.size() != 4 ||
-                    ReadU32LittleEndian(response.data.data()) != pendingChunkSize_))
-            {
-                BestEffortTerminate();
-                CompleteFailure("MAVFTP WriteFile ACK byte count is invalid.");
-                return;
-            }
-            transferred_ += pendingChunkSize_;
-            ++writeBlocksCompleted_;
-            if (transferred_ == operationSize_)
-            {
-                terminateStartedAt_ = std::chrono::steady_clock::now();
-                if (!SendNewRequest(Phase::AwaitTerminateWrite,
-                    Opcode::TerminateSession, activeSession_, 0, {}, error))
-                {
-                    BestEffortTerminate();
-                    CompleteFailure(error);
-                }
-            }
-            else if (!StartNextWrite(error))
-            {
-                BestEffortTerminate();
-                CompleteFailure(error);
-            }
+            CompleteFailure("Unexpected control ACK while Write window is active.");
             return;
         case Phase::AwaitTerminateWrite:
             sessionOpen_ = false;
@@ -490,41 +768,6 @@ namespace dronegcs::mavftp
         return SendNewRequest(Phase::AwaitRead, Opcode::ReadFile,
             activeSession_, static_cast<std::uint32_t>(transferred_),
             std::move(requestData), error);
-    }
-
-    bool Client::StartNextWrite(std::string& error)
-    {
-        if (transferred_ >= operationSize_)
-        {
-            error = "MAVFTP write source has no remaining bytes.";
-            return false;
-        }
-        const std::size_t remaining = operationSize_ - transferred_;
-        pendingChunkSize_ = (std::min)(remaining, maximumWriteChunkBytes_);
-        std::vector<std::uint8_t> chunk(pendingChunkSize_);
-        if (writeChunkReader_)
-        {
-            if (!writeChunkReader_(transferred_, chunk.data(), chunk.size(),
-                writeChunkReaderContext_, error))
-            {
-                if (error.empty())
-                    error = "MAVFTP write stream rejected the requested range.";
-                return false;
-            }
-        }
-        else
-        {
-            if (operationBytes_.size() != operationSize_)
-            {
-                error = "MAVFTP write source size changed during the operation.";
-                return false;
-            }
-            std::copy_n(operationBytes_.begin() + transferred_,
-                pendingChunkSize_, chunk.begin());
-        }
-        return SendNewRequest(Phase::AwaitWrite, Opcode::WriteFile,
-            activeSession_, static_cast<std::uint32_t>(transferred_),
-            std::move(chunk), error);
     }
 
     void Client::CompleteSuccess()
@@ -637,7 +880,19 @@ namespace dronegcs::mavftp
         const auto completedAt = std::chrono::steady_clock::now();
         result.writeBytes = transferred_;
         result.writeBlocks = writeBlocksCompleted_;
+        result.writeBlocksSent = writeBlocksSent_;
+        result.writeBlocksAcked = writeBlocksCompleted_;
         result.retryCount = stats_.retriesSent - operationRetriesAtStart_;
+        result.createRetries = stats_.createRetries - createRetriesAtStart_;
+        result.writeRetries = stats_.writeRetries - writeRetriesAtStart_;
+        result.terminateRetries = stats_.terminateRetries - terminateRetriesAtStart_;
+        result.duplicateAcks = stats_.duplicateWriteAcks - duplicateAcksAtStart_;
+        result.staleOrMismatchedAcks =
+            stats_.staleOrMismatchedWriteAcks - staleAcksAtStart_;
+        result.configuredWriteWindow = config_.writeWindow;
+        result.maxObservedOutstanding = maxObservedOutstanding_;
+        result.writeDataDurationMs = ElapsedMilliseconds(
+            firstWriteSentAt_, lastWriteAckedAt_);
         result.createDurationMs = ElapsedMilliseconds(
             operationStartedAt_, createConfirmedAt_);
         result.writeDurationMs = ElapsedMilliseconds(
@@ -646,6 +901,26 @@ namespace dronegcs::mavftp
             terminateStartedAt_, completedAt);
         result.totalDurationMs = ElapsedMilliseconds(
             operationStartedAt_, completedAt);
+        result.ackRttAverageMs = ackRttCount_ == 0
+            ? 0 : ackRttSumMs_ / ackRttCount_;
+        result.interAckAverageMs = interAckCount_ == 0
+            ? 0 : interAckSumMs_ / interAckCount_;
+        if (ackRttSampleCount_ > 0)
+        {
+            std::vector<std::uint64_t> samples = ackRttSamples_;
+            result.boundedAckRttSamples = samples;
+            std::sort(samples.begin(), samples.end());
+            const auto percentile = [&samples](const std::size_t percent)
+            {
+                const std::size_t index = (percent * (samples.size() - 1) + 99) / 100;
+                return samples[(std::min)(index, samples.size() - 1)];
+            };
+            result.ackRttMinMs = samples.front();
+            result.ackRttP50Ms = percentile(50);
+            result.ackRttP95Ms = percentile(95);
+            result.ackRttP99Ms = percentile(99);
+            result.maxAckRttMs = samples.back();
+        }
     }
 
     void Client::ResetWriteSource()
@@ -654,8 +929,23 @@ namespace dronegcs::mavftp
         writeChunkReaderContext_ = nullptr;
         operationSize_ = 0;
         maximumWriteChunkBytes_ = MaximumDataBytes;
+        nextWriteOffset_ = 0;
+        pendingWrites_.clear();
+        recentWriteAcks_.clear();
+        std::vector<std::uint64_t>().swap(ackRttSamples_);
+        ackRttSampleCount_ = 0;
+        ackRttSampleCursor_ = 0;
+        ackRttSumMs_ = 0;
+        ackRttCount_ = 0;
+        interAckSumMs_ = 0;
+        interAckCount_ = 0;
+        writeBlocksSent_ = 0;
         writeBlocksCompleted_ = 0;
+        maxObservedOutstanding_ = 0;
         createConfirmedAt_ = {};
+        firstWriteSentAt_ = {};
+        lastWriteAckedAt_ = {};
+        previousWriteAckAt_ = {};
         terminateStartedAt_ = {};
     }
 

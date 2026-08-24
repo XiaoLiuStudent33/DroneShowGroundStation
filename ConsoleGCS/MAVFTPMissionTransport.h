@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace dronegcs::mission_ftp
 {
@@ -38,7 +39,17 @@ namespace dronegcs::mission_ftp
         std::uint64_t createDurationMs = 0;
         std::uint64_t writeBytes = 0;
         std::uint64_t writeBlocks = 0;
+        std::uint64_t writeBlocksSent = 0;
+        std::uint64_t writeBlocksAcked = 0;
         std::uint64_t retryCount = 0;
+        std::uint64_t createRetries = 0;
+        std::uint64_t writeRetries = 0;
+        std::uint64_t terminateRetries = 0;
+        std::uint64_t duplicateAcks = 0;
+        std::uint64_t staleOrMismatchedAcks = 0;
+        std::uint32_t configuredWriteWindow = 1;
+        std::uint32_t maxObservedOutstanding = 0;
+        std::uint64_t writeDataDurationMs = 0;
         std::uint64_t terminateDurationMs = 0;
         std::uint64_t commitDurationMs = 0;
         std::uint64_t totalMavftpDurationMs = 0;
@@ -46,6 +57,13 @@ namespace dronegcs::mission_ftp
         std::uint64_t segmentsCommitted = 0;
         std::uint64_t activeSegmentIndex = 0;
         std::uint32_t segmentCapacity = 0;
+        std::uint64_t ackRttMinMs = 0;
+        std::uint64_t ackRttAverageMs = 0;
+        std::uint64_t ackRttP50Ms = 0;
+        std::uint64_t ackRttP95Ms = 0;
+        std::uint64_t ackRttP99Ms = 0;
+        std::uint64_t maxAckRttMs = 0;
+        std::uint64_t interAckAverageMs = 0;
     };
 
     /**
@@ -117,5 +135,12 @@ namespace dronegcs::mission_ftp
         std::string safeDiagnostic_;
         std::string verificationMismatchDiagnostic_;
         std::string terminalPhase_ = "Idle";
+        static constexpr std::size_t MaximumAckTimingSamples = 2048;
+        std::vector<std::uint64_t> ackRttSamples_;
+        std::size_t ackRttSampleCursor_ = 0;
+        std::uint64_t ackRttWeightedSumMs_ = 0;
+        std::uint64_t ackRttCount_ = 0;
+        std::uint64_t interAckWeightedSumMs_ = 0;
+        std::uint64_t interAckCount_ = 0;
     };
 }

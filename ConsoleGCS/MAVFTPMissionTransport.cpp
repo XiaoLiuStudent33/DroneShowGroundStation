@@ -211,6 +211,13 @@ namespace dronegcs::mission_ftp
         mavftpMetrics_.segmentsPlanned =
             snapshot_->GetSegmentDescriptors().size();
         mavftpMetrics_.segmentCapacity = config_.compileConfig.segmentCapacity;
+        ackRttSamples_.clear();
+        ackRttSamples_.reserve(MaximumAckTimingSamples);
+        ackRttSampleCursor_ = 0;
+        ackRttWeightedSumMs_ = 0;
+        ackRttCount_ = 0;
+        interAckWeightedSumMs_ = 0;
+        interAckCount_ = 0;
         currentSegmentIndex_ = 0;
         safeDiagnostic_.clear();
         verificationMismatchDiagnostic_.clear();
@@ -369,11 +376,63 @@ namespace dronegcs::mission_ftp
         mavftpMetrics_.createDurationMs += result.createDurationMs;
         mavftpMetrics_.writeBytes += result.writeBytes;
         mavftpMetrics_.writeBlocks += result.writeBlocks;
+        mavftpMetrics_.writeBlocksSent += result.writeBlocksSent;
+        mavftpMetrics_.writeBlocksAcked += result.writeBlocksAcked;
         mavftpMetrics_.retryCount += result.retryCount;
+        mavftpMetrics_.createRetries += result.createRetries;
+        mavftpMetrics_.writeRetries += result.writeRetries;
+        mavftpMetrics_.terminateRetries += result.terminateRetries;
+        mavftpMetrics_.duplicateAcks += result.duplicateAcks;
+        mavftpMetrics_.staleOrMismatchedAcks += result.staleOrMismatchedAcks;
+        mavftpMetrics_.configuredWriteWindow = result.configuredWriteWindow;
+        mavftpMetrics_.maxObservedOutstanding = (std::max)(
+            mavftpMetrics_.maxObservedOutstanding,
+            result.maxObservedOutstanding);
+        mavftpMetrics_.writeDataDurationMs += result.writeDataDurationMs;
         mavftpMetrics_.terminateDurationMs += result.terminateDurationMs;
         mavftpMetrics_.commitDurationMs += result.terminateDurationMs;
         metrics_.wireBytesSent = mavftpMetrics_.writeBytes;
         metrics_.retryCount = mavftpMetrics_.retryCount;
+
+        ackRttWeightedSumMs_ += result.ackRttAverageMs *
+            result.writeBlocksAcked;
+        ackRttCount_ += result.writeBlocksAcked;
+        const std::uint64_t segmentInterAckCount = result.writeBlocksAcked > 0
+            ? result.writeBlocksAcked - 1 : 0;
+        interAckWeightedSumMs_ += result.interAckAverageMs *
+            segmentInterAckCount;
+        interAckCount_ += segmentInterAckCount;
+        for (const std::uint64_t sample : result.boundedAckRttSamples)
+        {
+            if (ackRttSamples_.size() < MaximumAckTimingSamples)
+                ackRttSamples_.push_back(sample);
+            else
+            {
+                ackRttSamples_[ackRttSampleCursor_] = sample;
+                ackRttSampleCursor_ = (ackRttSampleCursor_ + 1) %
+                    MaximumAckTimingSamples;
+            }
+        }
+        mavftpMetrics_.ackRttAverageMs = ackRttCount_ == 0
+            ? 0 : ackRttWeightedSumMs_ / ackRttCount_;
+        mavftpMetrics_.interAckAverageMs = interAckCount_ == 0
+            ? 0 : interAckWeightedSumMs_ / interAckCount_;
+        if (!ackRttSamples_.empty())
+        {
+            std::vector<std::uint64_t> sorted = ackRttSamples_;
+            std::sort(sorted.begin(), sorted.end());
+            const auto percentile = [&sorted](const std::size_t percent)
+            {
+                const std::size_t index =
+                    (percent * (sorted.size() - 1) + 99) / 100;
+                return sorted[(std::min)(index, sorted.size() - 1)];
+            };
+            mavftpMetrics_.ackRttMinMs = sorted.front();
+            mavftpMetrics_.ackRttP50Ms = percentile(50);
+            mavftpMetrics_.ackRttP95Ms = percentile(95);
+            mavftpMetrics_.ackRttP99Ms = percentile(99);
+            mavftpMetrics_.maxAckRttMs = sorted.back();
+        }
     }
 
     void MAVFTPMissionTransport::Fail(

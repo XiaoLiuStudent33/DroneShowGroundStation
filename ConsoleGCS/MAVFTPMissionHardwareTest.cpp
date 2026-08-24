@@ -34,12 +34,15 @@ namespace
 bool ResolveMAVFTPMissionTransportOptions(
     const AppConfig& appConfig,
     const bool segmentItemsProvidedByCli,
+    const bool writeWindowProvidedByCli,
     MAVFTPMissionHardwareTestOptions& options,
     std::string& error)
 {
     error.clear();
     if (!segmentItemsProvidedByCli)
         options.segmentItemCapacity = appConfig.mavftpSegmentItems;
+    if (!writeWindowProvidedByCli)
+        options.writeWindow = appConfig.mavftpWriteWindow;
     options.requestTimeoutMs = appConfig.mavftpRequestTimeoutMs;
     options.requestRetryCount = appConfig.mavftpRequestRetryCount;
 
@@ -51,6 +54,8 @@ bool ResolveMAVFTPMissionTransportOptions(
         error = "MAVFTP request timeout must be within 100..60000 milliseconds.";
     else if (options.requestRetryCount > 10U)
         error = "MAVFTP request retry count must be within 0..10.";
+    else if (options.writeWindow == 0 || options.writeWindow > 16U)
+        error = "MAVFTP write window must be within 1..16.";
     return error.empty();
 }
 
@@ -171,6 +176,8 @@ bool ValidateMAVFTPMissionHardwareTestOptions(
         error = "MAVFTP hardware test request timeout must be within 100..60000 milliseconds.";
     else if (options.requestRetryCount > 10U)
         error = "MAVFTP hardware test request retry count must be within 0..10.";
+    else if (options.writeWindow == 0 || options.writeWindow > 16U)
+        error = "MAVFTP hardware test write window must be within 1..16.";
     return error.empty();
 }
 
@@ -199,10 +206,29 @@ std::string MAVFTPMissionHardwareTestReport::ToHumanSummary() const
         << " CreateDurationMs=" << mavftpMetrics.createDurationMs
         << " WriteBytes=" << mavftpMetrics.writeBytes
         << " WriteBlocks=" << mavftpMetrics.writeBlocks
+        << " ConfiguredWriteWindow=" << mavftpMetrics.configuredWriteWindow
+        << " MaxObservedOutstanding=" << mavftpMetrics.maxObservedOutstanding
+        << " WriteBlocksSent=" << mavftpMetrics.writeBlocksSent
+        << " WriteBlocksAcked=" << mavftpMetrics.writeBlocksAcked
+        << " DuplicateAcks=" << mavftpMetrics.duplicateAcks
+        << " StaleOrMismatchedAcks=" << mavftpMetrics.staleOrMismatchedAcks
         << " RetryCount=" << mavftpMetrics.retryCount
+        << " RetriesTotal=" << mavftpMetrics.retryCount
+        << " CreateRetries=" << mavftpMetrics.createRetries
+        << " WriteRetries=" << mavftpMetrics.writeRetries
+        << " TerminateRetries=" << mavftpMetrics.terminateRetries
+        << " WriteDataDurationMs=" << mavftpMetrics.writeDataDurationMs
         << " TerminateDurationMs=" << mavftpMetrics.terminateDurationMs
         << " CommitDurationMs=" << mavftpMetrics.commitDurationMs
-        << " TotalMavftpDurationMs=" << mavftpMetrics.totalMavftpDurationMs;
+        << " TotalMavFtpDurationMs=" << mavftpMetrics.totalMavftpDurationMs
+        << " AckRttMinMs=" << mavftpMetrics.ackRttMinMs
+        << " AckRttAverageMs=" << mavftpMetrics.ackRttAverageMs
+        << " AckRttP50Ms=" << mavftpMetrics.ackRttP50Ms
+        << " AckRttP95Ms=" << mavftpMetrics.ackRttP95Ms
+        << " AckRttP99Ms=" << mavftpMetrics.ackRttP99Ms
+        << " MaxAckRttMs=" << mavftpMetrics.maxAckRttMs
+        << " InterAckAverageMs=" << mavftpMetrics.interAckAverageMs
+        << " HardwareValidationDurationMs=" << hardwareValidationDurationMs;
     if (!safeDiagnostic.empty())
         output << " ErrorReason=" << safeDiagnostic;
     return output.str();
@@ -239,6 +265,8 @@ bool MAVFTPMissionHardwareTest::Start(
     if (!ValidateMAVFTPMissionHardwareTestOptions(options_, error))
         return false;
 
+    validationStartedAt_ = now;
+
     ExpectedRouteArtifactV2Identity expected;
     expected.artifactSetId = options_.artifactSetId;
     expected.artifactSetDigest = options_.artifactSetDigest;
@@ -268,7 +296,8 @@ bool MAVFTPMissionHardwareTest::Start(
         " SegmentCapacity=" +
         std::to_string(options_.segmentItemCapacity) +
         " RequestTimeoutMs=" + std::to_string(options_.requestTimeoutMs) +
-        " RequestRetryCount=" + std::to_string(options_.requestRetryCount));
+        " RequestRetryCount=" + std::to_string(options_.requestRetryCount) +
+        " WriteWindow=" + std::to_string(options_.writeWindow));
     return true;
 }
 
@@ -409,7 +438,8 @@ void MAVFTPMissionHardwareTest::TryBeginUpload(
         return;
     }
     if (sessionConfig.mavFtpRequestTimeoutMs != options_.requestTimeoutMs ||
-        sessionConfig.mavFtpRequestRetryCount != options_.requestRetryCount)
+        sessionConfig.mavFtpRequestRetryCount != options_.requestRetryCount ||
+        sessionConfig.mavFtpWriteWindow != options_.writeWindow)
     {
         Finish(false, "Target DroneSession MAVFTP request configuration differs from the hardware-test snapshot.");
         return;
@@ -730,6 +760,13 @@ void MAVFTPMissionHardwareTest::Finish(
     report_.completed = true;
     report_.succeeded = success;
     report_.safeDiagnostic = std::move(diagnostic);
+    if (validationStartedAt_ != std::chrono::steady_clock::time_point{})
+    {
+        report_.hardwareValidationDurationMs =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - validationStartedAt_).count());
+    }
     state_ = State::Complete;
     Log(report_.ToHumanSummary());
 }

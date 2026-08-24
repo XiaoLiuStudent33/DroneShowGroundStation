@@ -112,6 +112,7 @@ snapshot_items_per_chunk=256
 segment_items=4000
 request_timeout_ms=750
 request_retry_count=3
+write_window=10
 )" );
 
         AppConfig config;
@@ -135,7 +136,8 @@ request_retry_count=3
         Expect(
             config.mavftpSegmentItems == 4000U &&
             config.mavftpRequestTimeoutMs == 750 &&
-            config.mavftpRequestRetryCount == 3U,
+            config.mavftpRequestRetryCount == 3U &&
+            config.mavftpWriteWindow == 10U,
             "legal MAVFTP configuration values were not loaded");
         Expect(
             config.artifactWorkspaceRoot == "C:\\DroneGCSArtifactWorkspace",
@@ -200,7 +202,9 @@ dspgcs_command_enabled=false
             fallbackConfig.mavftpRequestTimeoutMs ==
                 AppConfigDefaults::MavftpRequestTimeoutMs &&
             fallbackConfig.mavftpRequestRetryCount ==
-                AppConfigDefaults::MavftpRequestRetryCount,
+                AppConfigDefaults::MavftpRequestRetryCount &&
+            fallbackConfig.mavftpWriteWindow ==
+                AppConfigDefaults::MavftpWriteWindow,
             "missing optional keys did not preserve code defaults");
         Expect(!fallbackConfig.routeUploadEnabled,
             "route_upload_enabled did not default fail-closed");
@@ -232,6 +236,28 @@ dspgcs_command_enabled=false
         expectInvalidMavftp("timeout-high", "request_timeout_ms=60001");
         expectInvalidMavftp("retry-negative", "request_retry_count=-1");
         expectInvalidMavftp("retry-high", "request_retry_count=11");
+        expectInvalidMavftp("window-zero", "write_window=0");
+        expectInvalidMavftp("window-negative", "write_window=-1");
+        expectInvalidMavftp("window-high", "write_window=17");
+
+        for (const int window : { 1, 2, 4, 8, 10, 16 })
+        {
+            TemporaryConfigFile legalWindow(
+                "window-" + std::to_string(window), std::string(R"(
+safe_test_mode=true
+mavlink_network_enabled=false
+real_command_enabled=false
+heartbeat_timeout_ms=3000
+dspgcs_telemetry_enabled=false
+dspgcs_command_enabled=false
+[mavftp]
+write_window=)") + std::to_string(window) + "\n");
+            AppConfig legalConfig;
+            std::string legalError;
+            Expect(AppConfig::Load(legalWindow.GetPath(), legalConfig, legalError) &&
+                legalConfig.mavftpWriteWindow == static_cast<std::uint32_t>(window),
+                "legal MAVFTP write window was rejected");
+        }
 
         TemporaryConfigFile invalidRouteGate("invalid-route-gate", R"(
 safe_test_mode=true

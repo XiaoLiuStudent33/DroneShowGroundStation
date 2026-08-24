@@ -21,6 +21,7 @@ namespace AppConfigDefaults
     inline constexpr std::uint32_t MavftpSegmentItems = 65535U;
     inline constexpr int MavftpRequestTimeoutMs = 750;
     inline constexpr std::uint32_t MavftpRequestRetryCount = 3U;
+    inline constexpr std::uint32_t MavftpWriteWindow = 1U;
 
 }
 
@@ -52,6 +53,8 @@ struct AppConfig
         AppConfigDefaults::MavftpRequestTimeoutMs;
     std::uint32_t mavftpRequestRetryCount =
         AppConfigDefaults::MavftpRequestRetryCount;
+    std::uint32_t mavftpWriteWindow =
+        AppConfigDefaults::MavftpWriteWindow;
 
     int heartbeatTimeoutMs = AppConfigDefaults::HeartbeatTimeoutMs;
     float takeoffAltitudeLimitMeters = 5.0f;

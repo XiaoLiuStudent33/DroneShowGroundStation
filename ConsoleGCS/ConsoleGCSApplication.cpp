@@ -167,6 +167,7 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
     bool quickRouteSlotSeen = false;
     bool legacyHardwareEntrySeen = false;
     bool segmentItemsProvidedByCli = false;
+    bool writeWindowProvidedByCli = false;
     for (int index = 1; index < argc; ++index)
     {
         const std::string argument = argv[index] ? argv[index] : "";
@@ -300,6 +301,17 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
                 return -1;
             }
         }
+        else if (argument == "--mavftp-write-window")
+        {
+            writeWindowProvidedByCli = true;
+            std::string value;
+            if (!ReadOptionValue("--mavftp-write-window", index, argc, argv,
+                value) || !ParseInteger(value, hardwareTestOptions.writeWindow))
+            {
+                std::cerr << "--mavftp-write-window requires a uint32 value.\n";
+                return -1;
+            }
+        }
         else if (!argument.empty() && argument[0] == '-')
         {
             std::cerr << "Unknown command-line option.\n";
@@ -354,6 +366,7 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
     if (!ResolveMAVFTPMissionTransportOptions(
             appConfig,
             segmentItemsProvidedByCli,
+            writeWindowProvidedByCli,
             hardwareTestOptions,
             hardwareOptionsError) ||
         !ResolveMAVFTPQuickTestOptionsFromCurrent(
@@ -526,6 +539,9 @@ int ConsoleGCSApplication::RunProductionMavlink(
         appConfig.mavftpRequestTimeoutMs;
     discoveredSessionDefaults.mavFtpRequestRetryCount =
         appConfig.mavftpRequestRetryCount;
+    discoveredSessionDefaults.mavFtpWriteWindow = hardwareTestOptions.enabled
+        ? hardwareTestOptions.writeWindow
+        : appConfig.mavftpWriteWindow;
     discoveredSessionDefaults.missionUploadServiceEnabled =
         appConfig.routeUploadEnabled;
 

@@ -82,27 +82,35 @@ namespace
         config.mavftpSegmentItems = 4000U;
         config.mavftpRequestTimeoutMs = 750;
         config.mavftpRequestRetryCount = 3U;
+        config.mavftpWriteWindow = 8U;
         MAVFTPMissionHardwareTestOptions options;
         std::string error;
 
         Expect(ResolveMAVFTPMissionTransportOptions(
-            config, false, options, error) &&
+            config, false, false, options, error) &&
             options.segmentItemCapacity == 4000U &&
             options.requestTimeoutMs == 750 &&
-            options.requestRetryCount == 3U,
+            options.requestRetryCount == 3U &&
+            options.writeWindow == 8U,
             "missing CLI did not use the INI-derived MAVFTP values");
 
         options.segmentItemCapacity = 4U;
+        options.writeWindow = 4U;
         Expect(ResolveMAVFTPMissionTransportOptions(
-            config, true, options, error) &&
-            options.segmentItemCapacity == 4U,
-            "explicit CLI segment capacity did not override INI");
+            config, true, true, options, error) &&
+            options.segmentItemCapacity == 4U && options.writeWindow == 4U,
+            "explicit CLI transport values did not override INI");
 
         options.segmentItemCapacity = 0U;
         Expect(!ResolveMAVFTPMissionTransportOptions(
-            config, true, options, error) &&
+            config, true, true, options, error) &&
             options.segmentItemCapacity == 0U,
             "explicit CLI zero fell back to INI instead of failing");
+        options.segmentItemCapacity = 4U;
+        options.writeWindow = 0U;
+        Expect(!ResolveMAVFTPMissionTransportOptions(
+            config, true, true, options, error) && options.writeWindow == 0U,
+            "explicit CLI write-window zero fell back instead of failing");
     }
 
     void TestQuickModeResolvesCanonicalCurrentIdentity()
@@ -164,6 +172,7 @@ namespace
         options.segmentItemCapacity = 4;
         options.requestTimeoutMs = 1234;
         options.requestRetryCount = 2;
+        options.writeWindow = 8;
         std::string error;
         const bool resolved = ResolveMAVFTPQuickTestOptionsFromCurrent(
             root.u8string(), options, error);
@@ -176,6 +185,7 @@ namespace
             options.segmentItemCapacity == 4 &&
             options.requestTimeoutMs == 1234 &&
             options.requestRetryCount == 2 &&
+            options.writeWindow == 8 &&
             ValidateMAVFTPMissionHardwareTestOptions(options, error),
             "quick resolver changed transport configuration or failed Current authority");
     }
@@ -204,6 +214,7 @@ namespace
         AppConfig appConfig;
         appConfig.mavftpRequestTimeoutMs = 100;
         appConfig.mavftpRequestRetryCount = 1;
+        appConfig.mavftpWriteWindow = 4;
         CountingSender sender;
         DroneSessionConfig sessionConfig;
         sessionConfig.droneId = "Drone001";
@@ -215,6 +226,7 @@ namespace
             appConfig.mavftpRequestTimeoutMs;
         sessionConfig.mavFtpRequestRetryCount =
             appConfig.mavftpRequestRetryCount;
+        sessionConfig.mavFtpWriteWindow = appConfig.mavftpWriteWindow;
         sessionConfig.sharedMavlinkEndpoint = &sender;
         sessionConfig.discoveredSystemId = 7;
         sessionConfig.discoveredComponentId = 1;
@@ -231,7 +243,8 @@ namespace
             "configured DroneSession did not become online");
         auto* client = session.GetMavFtpClient();
         std::string error;
-        Expect(client && client->StartResetSessions(error),
+        Expect(client && client->GetConfiguredWriteWindow() == 4 &&
+            client->StartResetSessions(error),
             "endpoint-bound client did not start configured request");
         const auto startedAt = std::chrono::steady_clock::now();
         const std::size_t initialSends = sender.sendCount;
@@ -265,6 +278,12 @@ namespace
         report.mavftpMetrics.writeBytes = 428;
         report.mavftpMetrics.writeBlocks = 2;
         report.mavftpMetrics.retryCount = 1;
+        report.mavftpMetrics.configuredWriteWindow = 8;
+        report.mavftpMetrics.maxObservedOutstanding = 8;
+        report.mavftpMetrics.writeBlocksSent = 2;
+        report.mavftpMetrics.writeBlocksAcked = 2;
+        report.mavftpMetrics.writeDataDurationMs = 50;
+        report.hardwareValidationDurationMs = 100;
         const std::string summary = report.ToHumanSummary();
         Expect(summary.find("ArtifactRouteItems=10") != std::string::npos &&
             summary.find("WireMissionItems=11") != std::string::npos &&
@@ -274,7 +293,12 @@ namespace
             summary.find("SegmentsCommitted=3") != std::string::npos &&
             summary.find("WriteBytes=428") != std::string::npos &&
             summary.find("WriteBlocks=2") != std::string::npos &&
-            summary.find("RetryCount=1") != std::string::npos,
+            summary.find("ConfiguredWriteWindow=8") != std::string::npos &&
+            summary.find("WriteDataDurationMs=50") != std::string::npos &&
+            summary.find("HardwareValidationDurationMs=100") != std::string::npos &&
+            summary.find("RetryCount=1") != std::string::npos &&
+            summary.find("RetriesTotal=1") != std::string::npos &&
+            summary.find("TotalMavFtpDurationMs=") != std::string::npos,
             "hardware report omitted required compile or MAVFTP metrics");
     }
 }
