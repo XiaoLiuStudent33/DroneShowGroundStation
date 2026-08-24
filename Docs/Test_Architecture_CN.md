@@ -1,60 +1,88 @@
-# 测试架构与运行方式
+# DroneGCS 测试架构与证据边界
 
-> Status: CURRENT TEST REFERENCE
->
-> Last Updated: 2026-08-14 (documentation classification)
->
-> Authority: 测试资产与运行入口参考；Production 边界以 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md) 和 [Code_Architecture_CN.md](Code_Architecture_CN.md) 为准。
->
-> Project status: [Development_Status_CN.md](Development_Status_CN.md)
+Status: CURRENT SUPPORTING
+Authority: 测试资产、运行入口与证据等级
+Last Updated: 2026-08-24
+
+Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，当前调用链见 [Code_Architecture_CN.md](Code_Architecture_CN.md)，进度见 [Development_Status_CN.md](Development_Status_CN.md)。
 
 ## 1. 资产边界
 
-| 类型 | 入口 | 用途 |
+| 类型 | 入口 | 证据范围 |
 |---|---|---|
-| Production | `ConsoleGCS/DroneGCS.vcxproj`、Unreal `DroneShowPlatform1` Module | 实际运行；不得依赖测试源码 |
-| Console Regression | `ConsoleGCS/ConsoleGCSTests.vcxproj` | 一次运行覆盖 Console 核心回归 |
-| UE Regression | `UnrealGCS/Source/DroneShowPlatform1/Private/Tests/` | Unreal Automation Test，统一前缀 `DroneGCS.` |
-| Acceptance Tool | `ConsoleGCS/DSPGCSAcceptance.vcxproj`、`ConsoleGCS/acceptance/` | 跨进程 DSP-GCS Loopback 手工验收 |
+| Production | `ConsoleGCS/DroneGCS.vcxproj`、UE `DroneShowPlatform1` Module | 实际运行；不得依赖测试源码 |
+| Console Regression | `ConsoleGCS/ConsoleGCSTests.vcxproj` | Console 核心链、Artifact、Mission、DSP Job、MAVFTP |
+| UE Regression | `UnrealGCS/Source/DroneShowPlatform1/Private/Tests/` | Unreal Automation，统一前缀 `DroneGCS.` |
+| Acceptance Tool | `ConsoleGCS/DSPGCSAcceptance.vcxproj` | 独立 DSP-GCS loopback 手工验收 |
+| Hardware Harness | `DroneGCS.exe --mavftp-test` 或显式 legacy harness 参数 | 真实飞控写入；不属于普通回归 |
 
-`HoverTest.*` 是现有 Production 应用级飞行工作流，虽然名称包含 Test，但不属于测试资产，本阶段未修改。
-
-Cleanup Phase 3E 的旧资产分类：
-
-| 旧资产 | 分类 | 收敛结果 |
-|---|---|---|
-| `MavlinkDiscoveryTests` | T0/T1，跨配置、UDP、Session、GPS、ACK、DSP | 重命名并收口为 `ConsolePipelineTests.cpp` |
-| `CommandDispatcherTests` | T0，MAVLink Command packet 与 LAND/SET_MODE | 合并到 `CommandTests.cpp` |
-| `CommandManagerTests` | T1/T2，SAFE_TEST 与单目标键盘入口 | 去除独立工程和重复 harness，断言并入 `CommandTests.cpp` |
-| `DSPGCSProductionCommandTests` | T0，DSP Command/Result 与多目标安全策略 | 保留为 `DSPCommandTests.cpp`，并入统一测试工程 |
-| `DSPGCSLoopbackHost` | Acceptance Tool | 重命名为 `DSPGCSAcceptance` 并继续独立构建 |
-| UE `Private/Tests/*.cpp` | T0/T1，五个独立领域 | 全部保留；没有 T3 Legacy 或 T4 Temporary 文件 |
+测试中的 loopback Session、MAVFTP fake wire 和 synthetic Artifact 不能证明真实飞控行为。
 
 ## 2. Console Regression
 
-在 `ConsoleGCS` 目录构建并运行：
+构建后从 `ConsoleGCS` 目录运行完整回归：
 
 ```powershell
-msbuild DroneGCS.sln /t:ConsoleGCSTests /p:Configuration=Debug /p:Platform=x64
-.\x64\Debug\ConsoleGCSTests.exe
+.\x64\Release\ConsoleGCSTests.exe
 ```
 
-领域分工：
+专项入口：
 
-- `ConsolePipelineTests.cpp`：配置、UDP/MAVLink、Endpoint/Session、GPS、ACK、DSP Snapshot/Chunk。
-- `CommandTests.cpp`：Command packet、LAND、SET_MODE、SAFE_TEST CommandManager。
-- `DSPCommandTests.cpp`：DSP Command/Result、多目标命令、安全策略。
+```powershell
+.\x64\Release\ConsoleGCSTests.exe --mission-tests
+.\x64\Release\ConsoleGCSTests.exe --mission-upload-tests
+.\x64\Release\ConsoleGCSTests.exe --upload-job-tests
+.\x64\Release\ConsoleGCSTests.exe --mavftp-probe-tests
+```
+
+- `--mission-tests`：Route Mission codec 与 Mission FTP compiler。
+- `--mission-upload-tests`：Mission transaction、transport abstraction、preparation 与 RouteUploadManager integration。
+- `--upload-job-tests`：DSP Upload Job schema/binding/materialization/scale。
+- `--mavftp-probe-tests`：MAVFTP protocol/client、MissionProfileProbe、Mission writer 与 Hardware Harness safety。
+- Full suite 还覆盖 Console pipeline、command、Frozen Assignment、Artifact Consumer v2 与 contract。
 
 ## 3. UE Regression
 
-构建 `DroneShowPlatform1Editor Development Win64` 后，在 Automation Framework 中运行：
+UE 自动化测试位于 `UnrealGCS/Source/DroneShowPlatform1/Private/Tests/`，覆盖 Fleet、Route Overlay、Assignment、Artifact、Waypoint、Frozen Assignment、Upload Job 与 Workflow 等领域。
+
+运行要求：构建 `DroneShowPlatform1Editor Development Win64` 后执行：
 
 ```text
 Automation RunTests DroneGCS.
 ```
 
-当前领域为 FleetGeoOrigin、DSP Snapshot Chunk、Telemetry Link、UI Selection、Fleet Niagara Bridge。
+## 4. Hardware Harness 隔离
 
-## 4. DSP-GCS Acceptance
+真实 Mission 写入只能在用户明确授权后运行。普通回归、文档审计和只读诊断不得启动：
 
-`DSPGCSAcceptance.exe` 独立发送三架模拟遥测并验证单目标 ARM、多目标 Hover 及逐机结果。它只接受 SAFE_TEST 模式，可用 `--transport-config=<path>` 指定验收 Transport 配置；Production 不会加载或启动该工具。
+```text
+--mavftp-test
+--mavftp-hardware-test
+--allow-mission-write-probe
+任何真实 Mission upload
+```
+
+Quick Test 从 `UnrealGCS/Saved/RouteArtifacts/Current/manifest.json` 引导，再由 `ConsoleArtifactConsumerV2` 执行完整 Artifact 校验。当前 Quick Test 仍使用默认 MAVFTP segment capacity，尚未完成 2I-C.3.D 配置接线。
+
+## 5. 当前自动化证据
+
+2026-08-24 使用当前 checkout 中已有 Release 测试程序运行：
+
+```text
+--mission-tests = PASS
+--mission-upload-tests = PASS
+--upload-job-tests = PASS
+--mavftp-probe-tests = PASS
+Full ConsoleGCSTests = PASS
+```
+
+证据限定：本轮未重新 Build、未运行 UE Automation、未运行真实飞控上传。
+
+## 6. 用户确认的硬件证据
+
+```text
+1000–6000 items: USER-CONFIRMED PASS
+7000 items: USER-CONFIRMED NAK 2 / Write Failed
+```
+
+仓库没有对应持久化日志，飞控源码也未证明精确根因。因此不能写成固定“7000 item limit”，也不能将该观察升级为自动化回归结论。

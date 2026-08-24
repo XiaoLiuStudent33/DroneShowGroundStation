@@ -2,7 +2,7 @@
 
 Status: CURRENT
 Authority: 当前 UMG 结构、C++ binding 和交互状态边界
-Last Updated: 2026-08-14
+Last Updated: 2026-08-24
 Applies To: `WBP_GCS_*`、`UGCSUIBridgeSubsystem`、`FGCSUIWidgetPresenter`
 
 ## 1. Purpose 与 Authority
@@ -12,6 +12,7 @@ Applies To: `WBP_GCS_*`、`UGCSUIBridgeSubsystem`、`FGCSUIWidgetPresenter`
 - `FGCSUIWidgetPresenter`只负责Widget查找、文本、颜色和Visibility派生。
 - `FleetManagerSubsystem`拥有真实Fleet和详情选择。
 - `URoutePreviewSubsystem`拥有Route数据和Playback；Widget不累计第二个时钟。
+- `UGCSRouteWorkflowCoordinator` 协调 Route Convert / Upload 页面与当前 Route、Assignment、Artifact、Upload Job authorities；Widget 不拥有第二份 Job state。
 
 C++不得无理由覆盖Designer geometry。只有修复根Canvas/viewport坐标边界时可以设置必要Anchor/Alignment。
 
@@ -49,6 +50,10 @@ Main children：
 | `WBP_GCS_RightPanel` | LED颜色控制等右侧功能 |
 | `WBP_GCS_Playback` | Route Import入口和Playback控件 |
 | `WBP_GCS_RouteImport` | NPZ浏览、Origin、SampleRate、metadata、加载Preview |
+| `WBP_GCS_RouteWorkflow` | Route Convert / Route Upload workflow shell |
+| `WBP_GCS_RouteConvert` | Route load、assignment、waypoint generation 与 Artifact workflow |
+| `WBP_GCS_RouteUpload` | Upload Job command、aggregate progress 与状态展示 |
+| `WBP_GCS_RouteUploadRow` | 单 Route/Drone upload state row |
 | `WBP_GCS_PageMap` | Map页面 |
 | `WBP_GCS_PageSettings` | Settings页面 |
 | `WBP_GCS_PageLogs` | Logs页面 |
@@ -151,16 +156,16 @@ Slider使用0..1归一化；用户scrub时暂停，结束后不自动恢复。�
 - LMB Marquee与MMB pan互不复用状态。
 - Marquee期间camera look lock在release后恢复。
 
-## 10. Planned Route Operations UI
+## 10. Route Operations UI — IMPLEMENTED
 
-`PLANNED`，尚未实现。建议新增独立Route Operations Page/Panel，包含：
+`UGCSRouteWorkflowCoordinator` 加载并绑定 `WBP_GCS_RouteWorkflow`、`WBP_GCS_RouteConvert` 与 `WBP_GCS_RouteUpload`。当前已实现：
 
-- Live/Route Overlay legend。
-- Assignment状态、冲突、距离、位置质量。
-- Waypoint生成、输出目录、文件数、验证结果。
-- Upload总进度和单机进度。
-- Start/Cancel/Retry failed/Retry single drone。
+- Route browse、Preview load、Assignment/Artifact/Waypoint workflow 协调。
+- Upload aggregate/route state 读取与 `FDSPGCSUploadJobStateMirror` 展示。
+- Start、Pause、Resume、Cancel、Retry Failed、Apply Max Concurrency。
+- Waiting、Preparing、Uploading、RetryWaiting、Succeeded、Failed、Cancelled 统计与总进度。
+- command gate、safe diagnostic 与 stale binding rejection 展示。
 
-Write size/window/batch/max active/timeout/retry应进入Advanced Settings，不塞入主操作区。
+UI command 通过 `UDSPGCSUploadJobSubsystem` 发送 DSP-GCS Upload Job protocol，不直接调用 MAVLink 或 `RouteUploadManager`。
 
-ConsoleGCS继续headless，不创建第二套正式Operator UI。
+ConsoleGCS 继续 headless，不创建第二套正式 Operator UI。MAVFTP segment/write/timeout 参数尚未进入生产 UI；它们属于 Phase 2I-C.3.D 之后才能冻结的 advanced configuration。

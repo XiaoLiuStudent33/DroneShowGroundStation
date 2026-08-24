@@ -1,417 +1,254 @@
 # DroneGCS 当前代码架构
 
 Status: CURRENT
-Authority: 当前 Production 运行链与日常开发主文档
-Last Updated: 2026-08-14
-Applies To: 当前仓库源码
-Supersedes: 本文件 2026-08-14 之前的实现描述
+Authority: 当前 Production 运行链与 Developer Entry Map
+Last Updated: 2026-08-24
+Baseline: `a494bd14dae00a5b4c24055a426ca1cee98e37f0`
 
-## 1. 文档职责
+本文只记录当前源码中已经存在的实现。长期约束见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，进度见 [Development_Status_CN.md](Development_Status_CN.md)，Route Upload 语义见 [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md)。
 
-本文记录当前代码中已经存在的实现。未来功能只在单独的 `PLANNED` 章节引用，不与当前事实混写。长期约束见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)。专项文档：
-
-- [Network_Architecture_CN.md](Network_Architecture_CN.md)
-- [Visualization_Architecture_CN.md](Visualization_Architecture_CN.md)
-- [UI_Architecture_CN.md](UI_Architecture_CN.md)
-- [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md)
-- [Test_Architecture_CN.md](Test_Architecture_CN.md)
-
-## 2. 系统总览
+## 1. 系统总览
 
 ```text
-ArduPilot/APM Drone Endpoints
-    <-> MAVLink UDP
-ConsoleGCS
+ArduPilot / APM
+    <-> MAVLink UDP / explicit MAVFTP harness
+ConsoleGCS C++ Backend
     <-> DSP-GCS localhost UDP
-UnrealGCS
-    -> GCSServerAdapter
-    -> FleetManager
-       |-> UMG UI
-       `-> Cesium -> Niagara
+Unreal Engine 5.5.4 Frontend
+    -> Operator Workflow / Fleet / Route / Cesium / Niagara
 ```
 
-ConsoleGCS 是 MAVLink、Remote Endpoint Session 和真实命令执行 Authority。UnrealGCS 是操作、Fleet 消费、Route Preview 和地理可视化前端。
+ConsoleGCS 是 MAVLink、Remote Endpoint Session、真实命令和 Route Upload execution Authority。UE 是 operator workflow、Route domain 与 visualization Authority；UE 不直接发送 MAVLink。
 
-## 3. Unreal 启动与主 UI
-
-Module 启动在 PIE/Game World 初始化后延迟创建主 UI：
-
-```text
-FDroneShowPlatform1Module::HandleWorldInitialized
--> CreatePrototypeUI
--> ConfigureGroundStationInput
--> Load /Game/UI/WBP_GCS_Main_V2
--> reuse existing viewport instance OR CreateWidget
--> AddToViewport(100), viewport fill
--> UGCSUIBridgeSubsystem::BindMainWidget
-```
-
-`BindMainWidget` 查找并保存：
-
-- `CHILD_TopBar`
-- `CHILD_LeftToolbar`
-- `CHILD_FleetPanel`
-- `CHILD_DroneDetail`
-- `CHILD_RightToolbar`
-- `CHILD_RightPanel`
-- `CHILD_Playback`
-- authored `SelectionRectangle`
-
-首次绑定将 FleetPanel、DroneDetail、RightPanel 设为 Collapsed；后续按钮基于当前 Visibility 独立切换。UI Designer 继续拥有内部几何和视觉，C++只处理生命周期、绑定和状态派生。
-
-## 4. Console 启动
-
-```text
-main
--> ConsoleGCSApplication::Run
--> AppConfig::Load(gcs-config.ini)
--> RunProductionMavlink
--> MavlinkUdpReceiver::Start
--> DroneManager / CommandManager
--> MavlinkDiscoveryService / MavlinkReadOnlyIngress
--> DSPGCSProductionTelemetryProvider / CommandReceiver
--> single service loop
-```
-
-主循环：
-
-1. 有界 drain MAVLink datagrams。
-2. `MavlinkReadOnlyIngress` 只解码一次。
-3. Discovery/Session tick。
-4. DSP command queue processing。
-5. 周期发布全量 Fleet snapshot。
-6. 更新 Console diagnostics。
-7. `Sleep(10)`。
-
-## 5. Fleet Identity 与发现
+## 2. Fleet、Telemetry 与短命令
 
 ```text
 MavlinkUdpReceiver
 -> MavlinkReadOnlyIngress
--> valid non-GCS HEARTBEAT #0
 -> MavlinkDiscoveryService
--> DroneManager::RegisterOrRefreshDrone
+-> DroneManager
 -> DroneSession
+-> DataManager
+-> DSPGCSProductionTelemetryProvider
+-> DSP-GCS localhost UDP
+-> DSPGCSProductionTelemetryProviderSubsystem
+-> GCSServerAdapterSubsystem
+-> FleetManagerSubsystem
 ```
 
-Identity：
+Fleet identity 是 `Remote IP + UDP Source Port`。SYSID/COMPID 只用于 MAVLink metadata、target 与 ACK validation。相同 endpoint 恢复原 Session/DroneID；Offline 不删除稳定 Session order。
 
-```text
-Remote Endpoint = Remote IP + UDP Source Port
-```
-
-- HEARTBEAT 之前的非发现消息不能创建 Session。
-- 同 endpoint 恢复原 Session/DroneID。
-- Offline 不删除 Session、SessionOrder 或最后快照。
-- SYSID/COMPID 仅用于 MAVLink target/ACK validation。
-- 当前 DroneID 是 Console 进程内稳定分配值，未提供跨进程重启持久化保证。
-
-## 6. MAVLink Inbound
-
-| ID | Message | 当前职责 |
-|---:|---|---|
-| 0 | HEARTBEAT | 发现、在线、模式、armed、target metadata |
-| 1 | SYS_STATUS | battery remaining |
-| 24 | GPS_RAW_INT | 纬度、经度、AMSL、Fix、卫星、GPSValid |
-| 30 | ATTITUDE | Roll/Pitch/Yaw，当前不进入 UE Fleet |
-| 33 | GLOBAL_POSITION_INT | RelativeAltitude、速度融合 |
-| 77 | COMMAND_ACK | 当前 endpoint Session 的短命令 ACK |
-| 253 | STATUSTEXT | 当前忽略 |
-
-Datagram 只由 `MavlinkReadOnlyIngress` 解码。HEARTBEAT 交给 Discovery；已知 endpoint 的 COMMAND_ACK 交给 `DroneSession::ApplyDiscoveredCommandMessage`；其余尝试作为 telemetry 应用。
-
-当前未实现 `FILE_TRANSFER_PROTOCOL #110` ACK/NAK 路由。
-
-## 7. MAVLink Outbound 与 Command
-
-| ID | Message | 当前用途 |
-|---:|---|---|
-| 0 | HEARTBEAT | Console 作为 GCS 周期发送 |
-| 11 | SET_MODE | GUIDED/STABILIZE/AUTO/LOITER |
-| 66 | REQUEST_DATA_STREAM | Session online 阶段请求数据流 |
-| 76 | COMMAND_LONG | ARM/DISARM/TAKEOFF/LAND/RTL |
-| 186 | LED_CONTROL | Selected subset realtime RGB，fire-and-forget |
-
-Production command chain：
+短命令链：
 
 ```text
 GCSUIBridgeSubsystem
 -> DSPGCSProductionCommandProviderSubsystem
--> DSP-GCS CommandRequest
 -> DSPGCSProductionCommandReceiver
--> CommandManager::Submit
--> DroneManager::FindDrone(DroneID)
--> DroneSession::SubmitCommand
+-> CommandManager
+-> DroneSession
 -> CommandDispatcher
 -> MavlinkCommand
--> endpoint-bound UdpClient adapter
+-> endpoint-bound adapter
 -> shared MavlinkUdpReceiver::SendTo
 ```
 
-`CommandDispatcher` 当前为短命令队列：最大32项、每Session一个pending、ACK timeout 3000ms、最多重发一次。`SetLedColor` 没有 COMMAND_ACK，发送成功后返回 `Sent`。
+长生命周期 Route Upload 不进入 `CommandDispatcher`。
 
-LED实际使用：
+## 3. Visualization、Route Preview 与 Overlay
 
-```text
-LED_CONTROL #186
-target_system=0, target_component=0
-instance=255, pattern=255, custom_len=3
-custom[0..2]=RGB, custom[3..23]=0
-```
-
-0/0 是 legacy device compatibility metadata，不参与 Fleet lookup。
-
-## 8. DSP-GCS
-
-当前 wire constants：
-
-- ProtocolMajor = 1
-- ProtocolMinor = 0
-- SchemaVersion = 3
-- MaxFrameBytes = 256 KiB
-- MaxCollectionItems = 20000
-
-当前 MessageType：
-
-- `TelemetryBatch = 1`
-- `CommandRequest = 2`
-- `CommandResultBatch = 3`
-
-当前 CommandType：
-
-- Arm
-- Disarm
-- Takeoff
-- Land
-- RTL
-- SetMode
-- HoverTest
-- SetLedColor
-
-正式 transport：
+唯一批量渲染形态：
 
 ```text
-Console bind 127.0.0.1:12001
-UE bind      127.0.0.1:12002
-```
-
-1000架 telemetry snapshot 允许分片。UE Provider 在 worker 完成 decode/reassembly/DTO conversion，只有完整 snapshot 才交给 `GCSServerAdapterSubsystem` 在 GameThread 原子 Apply。
-
-## 9. UE Telemetry 与 Fleet
-
-```text
-DSPGCSProductionTelemetryProviderSubsystem
--> GCSServerAdapterSubsystem
--> UFleetManagerSubsystem
--> UI / ADroneFleetVisualizationActor
-```
-
-`FleetManagerSubsystem` 拥有：
-
-- `DronesByID`
-- stable `DroneOrder`
-- `CurrentSelectedDroneID`（详情选择）
-- FleetRevision
-- session-scoped `FFleetGeoOrigin`
-
-选择语义：
-
-- `CurrentSelectedDroneID`：单机详情。
-- `UGCSUIBridgeSubsystem::SelectedCommandDroneIDs`：多机命令目标。
-
-两者独立，不得相互覆盖。
-
-## 10. GPS 与 Cesium
-
-```text
-valid WGS84 Latitude/Longitude/AltitudeAMSL
--> ACesiumGeoreference
--> UE Absolute World Position
-```
-
-- Live GPS 无效时不生成假位置。
-- `AltitudeAMSL=0` 可以合法。
-- Route Preview 使用 Local ENU + Show Origin，经 Cesium ESU transform 映射到 UE World。
-- Cesium/UE World 是渲染空间，不是 Waypoint Generator 的业务 Authority。
-
-## 11. Visualization
-
-当前唯一结构：
-
-```text
-one ADroneFleetVisualizationActor
+FleetManager / RoutePreviewSubsystem
+-> one ADroneFleetVisualizationActor
 -> one UNiagaraComponent
 -> one NS_DroneFleet
--> N particles
+-> N stable particles + Route Target data
 ```
 
-代码数组和 User Params：
+`RoutePreviewSubsystem` 拥有 Native NPZ、Local ENU Route data、Show Origin、SampleRate、Playback 与 Preview mode。Live telemetry 继续由 FleetManager 保存；退出 Preview 后恢复最新 Live snapshot。
 
-- `ParticleDroneIDs`
-- `DronePositions` -> `User.DronePositions`
-- `DroneColors` -> `User.DroneColors`
-- `DroneDisplayIDs` -> `User.DroneDisplayIDs`
-- `DroneSelectedMasks` -> `User.DroneSelectedMasks`
-- `User.ShowDroneLabels`
+Live + Route Overlay 已实现：`RoutePreviewSubsystem` 构建 Frame-0 Route target world positions，`ADroneFleetVisualizationActor` 通过独立 Route Target arrays/visibility 向同一个 Niagara System 提交。Overlay 只负责显示，不修改 Fleet identity、Live particle mapping 或 Assignment。
 
-`DisplayID = stable particle index + 1`。`SelectedMask` 来源仍是 `SelectedCommandDroneIDs`。颜色 Preview 通过 `SetNiagaraArrayColor` 提交完整数组。
-
-`EGCSVisualizationMode` 当前有：
-
-- Live
-- RoutePreview
-
-RoutePreview 进入时接管同一批数组；Fleet telemetry继续进入FleetManager。Exit后重新提交最新Live snapshot。Live + Route Overlay尚未实现。
-
-详见 [Visualization_Architecture_CN.md](Visualization_Architecture_CN.md)。
-
-## 12. TopDown、Marquee 与标签
-
-当前已实现：
-
-- `BTN_ZCamera`显式Toggle。
-- 唯一可复用 runtime `ACameraActor`。
-- Orthographic Z TopDown。
-- Fleet XY bounds + viewport aspect自动fit。
-- 保存/恢复 previous ViewTarget。
-- Wheel修改OrthoWidth的center zoom。
-- MMB camera-plane pan，速度随OrthoWidth变化。
-- LMB Marquee独立于TopDown输入。
-- Marquee使用viewport-local mouse与`ProjectWorldLocationToWidgetPosition(..., false)`同一坐标空间。
-- Drone ID仅在TopDown通过`User.ShowDroneLabels`显示。
-
-Marquee结果继续写入唯一 `SelectedCommandDroneIDs`，并同步 Fleet勾选、Selected Count、SelectedMask和Orange ID/rim。
-
-## 13. UI Architecture
-
-Main asset：`/Game/UI/WBP_GCS_Main_V2`。
-
-主要 authored widgets：
-
-- `WBP_GCS_TopBar`
-- `WBP_GCS_LeftToolbar`
-- `WBP_GCS_FleetPanel`
-- `WBP_GCS_DroneDetail`
-- `WBP_GCS_RightToolbar`
-- `WBP_GCS_RightPanel`
-- `WBP_GCS_Playback`
-- `WBP_GCS_RouteImport`
-- `WBP_GCS_PageMap`
-- `WBP_GCS_PageSettings`
-- `WBP_GCS_PageLogs`
-
-`BTN_Fleet`和`BTN_Control`分别独立Toggle FleetPanel/DroneDetail。Map/Settings/Logs是独立页面；二次点击当前页关闭并回到主场景。详见 [UI_Architecture_CN.md](UI_Architecture_CN.md)。
-
-## 14. Route Preview
-
-### 14.1 Native NPZ
-
-`FRoutePreviewNpzLoader`：
-
-- Store/Deflate
-- NPY v1/v2/v3
-- little-endian f2/f4/f8
-- `position`和`color`必需
-- optional `range`
-- rank/shape/count/finite validation
-- 无Python Runtime
-
-### 14.2 RouteData
+## 4. RouteAssignment Authority
 
 ```text
-Index = FrameIndex * DroneCount + RouteSlotIndex
-PositionsENU: TArray<FVector3f>
-Colors:       TArray<FFloat16Color>
+Fleet snapshot + Route frame 0 + Show Origin
+-> RouteAssignmentGeo
+-> RouteAssignmentMatcher
+-> RouteAssignmentMaterializer
+-> RouteAssignmentPipeline
+-> URouteAssignmentSubsystem
+-> Working / Frozen snapshot + monotonic Revision
 ```
 
-RouteSlot为0-based preview identity，绝不创建Fleet Drone或DroneSession。
+`URouteAssignmentSubsystem` 是 working/frozen Assignment Authority，支持显式 binding、位置匹配、full/degraded freeze policy、one-to-one DroneID/RouteSlot validation、revision 与 source identity。`RouteSlotIndex` 始终是 0-based route identity，不等于 DroneID、SYSID 或 particle index。
 
-9100 frames × 1000 drones最终存储约173.57 MiB。10000-drone route store仍是未来chunked/sharded问题。
+## 5. Artifact Workspace 与 Waypoint
 
-### 14.3 Playback
+```text
+Frozen Assignment + Route Preview source
+-> RouteWaypointGenerationSubsystem
+-> RouteWaypointBatchGenerator / RouteWaypointGenerator
+-> QGC WPL 110 route files
+-> RouteWaypointValidator
+-> RouteArtifactWorkspaceManager / Subsystem
+-> canonical schema v2 manifest.json + READY
+-> Current publication
+```
 
-状态：Stopped、Playing、Paused、Completed。
+Waypoint 生成使用 Route Local ENU + Show Origin；Mission relative altitude 使用 Local Z。Generator 与 Validator 不依赖 Niagara 或 UE World 反算 GPS。
 
-- SampleRate默认为0/unset。
-- Play要求有效SampleRate。
-- 单一FTSTicker仅Playing时工作。
-- Exact frame sampling：`floor(CurrentTime * SampleRateHz)`。
-- 当前Frame不变时不重复批量提交。
-- Stop回Frame 0。
-- Exit恢复最新Live visualization。
+Artifact identity 包含 source、range、origin、generator、route records、file size/digest 和 ArtifactSet digest。READY 后的 Current Artifact 通过 immutable/canonical contract 供 Console 消费。
 
-### 14.4 UI与Developer Commands
+## 6. Frozen Assignment DSP 链
 
-Playback已绑定Play/Pause/Stop/Previous/Next/Slider/Time/Frame。RouteImport popup使用单实例，Windows runtime `IFileOpenDialog`只选`.npz`；Hint Text不作为真实值。用户提交显式SampleRate和Origin后Commit、进入Preview、显示Frame 0。
+```text
+URouteAssignmentSubsystem frozen snapshot
+-> UDSPGCSFrozenAssignmentSyncSubsystem
+-> DSPGCSFrozenAssignmentProtocol schema 2
+-> DSPGCSFrozenAssignmentReceiver
+-> FrozenAssignmentTransactionAssembler
+-> FrozenAssignmentStore
+-> ACK / rejection back to UE
+```
 
-Developer Commands继续存在：
+该链校验 authority session、Fleet session、revision、digest、duplicate DroneID/RouteSlot、full/degraded policy 和 chunk transaction。Console store 是 accepted frozen snapshot 的原子 Authority。
 
-- `RoutePreview.Load`
-- `RoutePreview.Origin`
-- `RoutePreview.Rate`
-- `RoutePreview.Frame`
-- `RoutePreview.Play`
-- `RoutePreview.Pause`
-- `RoutePreview.Stop`
-- `RoutePreview.Status`
-- `RoutePreview.Exit`
-- `RoutePreview.Unload`
+## 7. Upload Job DSP 与 Operator UI
 
-## 15. Production / Developer / Test
+```text
+GCSRouteWorkflowCoordinator / WBP_GCS_RouteUpload
+-> UDSPGCSUploadJobSubsystem
+-> DSPGCSUploadJobProtocol schema 2
+-> DSPGCSUploadJobReceiver
+-> ConsoleUploadJobAuthority
+-> snapshots / route pages / deltas / command ACK
+-> FDSPGCSUploadJobStateMirror
+-> UI state and progress
+```
 
-| Category | Current Components | State |
+已实现 Start、Pause、Resume、Cancel、RetryFailed 与 max concurrency 操作，以及 aggregate snapshot、route page 和 route delta。Upload Job 同时绑定 Artifact identity 与 Frozen Assignment identity；不能只凭任意路径或 UI 内存状态启动。
+
+## 8. Console Artifact Consumer 与 Upload Authority
+
+`ConsoleArtifactConsumerV2` 在 Console trust boundary 内重新验证：
+
+- allowlisted workspace 与 canonical path。
+- `Current`、`READY`、schema v2 manifest。
+- ArtifactSetId / ArtifactSetDigest 双绑定。
+- route allowlist、file size/digest、waypoint semantics。
+- read lease 与 TOCTOU identity。
+
+`ConsoleUploadJobAuthority` 拥有 Job state、command idempotency、Artifact/Frozen Assignment binding、aggregate/route snapshots、cancel/retry/concurrency 与 executor-facing immutable view。
+
+## 9. 当前 Production Route Upload
+
+```text
+ConsoleUploadJobAuthority
+-> RouteUploadManager
+-> MissionPreparationWorker
+-> Console Artifact mission rows
+-> IMissionTransport
+-> MissionProtocolTransport
+-> DroneSession Mission Protocol ingress/outbound
+-> shared endpoint-bound sender
+-> ArduPilot/APM
+```
+
+`RouteUploadManager` 负责 bounded preparation、active upload concurrency、per-target state、cancel、retry、failure isolation、progress、metrics 和 terminal summary。
+
+当前 `RouteUploadManager::StartPrepared` 固定调用 `CreateMissionProtocolTransport(...)`。这是当前 Production default；MAVFTP 没有接管该路径。
+
+`MissionProtocolTransport` 封装 Mission upload transaction、protocol request/ACK correlation 与 verification instrumentation。MissionProtocol 真实硬件垂直链已经完成。
+
+## 10. Mission Transport abstraction
+
+`IMissionTransport` 定义 per-target lifecycle：
+
+```text
+Prepare -> Upload -> Tick -> Verify / Cancel -> terminal status + metrics
+```
+
+现有实现：
+
+- `MissionProtocolTransport`：当前生产实现。
+- `MAVFTPMissionTransport`：显式 Hardware Harness / Quick Test 使用的 writer implementation。
+
+抽象本身不选择生产协议，选择权当前仍在 `RouteUploadManager`。
+
+## 11. MAVFTP 实验与硬件验证链
+
+```text
+known endpoint FILE_TRANSFER_PROTOCOL ingress
+-> DroneSession endpoint-bound MavFtpClient
+-> MissionFtpCompiler
+   Artifact items
+   -> Reserved Home expansion
+   -> Wire Mission Items
+   -> SegmentDescriptor[]
+-> MAVFTPMissionTransport
+-> Create/Open/Truncate @MISSION/mission.dat
+-> streaming WriteFile
+-> TerminateSession ACK commit gate
+-> next segment
+```
+
+`MavFtpClient` 已实现 ACK/NAK correlation、timeout/retry、streaming WriteFile、offset validation 与 TerminateSession。FTP reply 只路由到已知 endpoint Session；不创建第二套 Fleet registry 或 socket。
+
+`MissionFtpCompiler` 是唯一 deterministic segment planner。`segmentCapacity` 计算 Wire Mission Items，包含 Reserved Home `seq 0`。第一段 options=0/CLEAR，后续段 options=1/NO_CLEAR；StartIndex 连续、无 gap、无 overlap。
+
+`MAVFTPMissionTransport` 必须等待上一段 `TerminateSession ACK` 后才开始下一段。Hardware Harness 在上传后检查 FC Mission Count、Home seq 0、first artifact seq 1 和 last seq。
+
+显式入口：
+
+- Quick Test：`DroneGCS.exe --mavftp-test <DroneID> --route-slot <N> [--items <N>]`。
+- Legacy explicit Hardware Harness 参数仍保留。
+
+Quick Test 当前从 `Current/manifest.json` 引导，但会使用默认 segment capacity 65535；尚未接入 `[mavftp]` 配置。MAVFTP 只通过显式测试入口启用。
+
+## 12. 当前配置边界
+
+- Console deployment：`ConsoleGCS/gcs-config.ini` 或显式指定配置。
+- Console DSP：`ConsoleGCS/config/DSPGCSTransport.ini`。
+- UE：`UnrealGCS/Config/DefaultGame.ini`。
+- Route/Mission 测试部署：`ConsoleGCS/gcs-config-upload.ini`，包含真实写入 gate；不得自动运行。
+- Protocol contracts：`Shared/DSPGCSProtocol`、`Shared/RouteArtifact`、`Shared/RouteWaypoint`、`Shared/RouteMission`。
+
+当前没有 `[mavftp] segment_items / segment_retry_count / segment_timeout_ms` 配置接线。
+
+## 13. 尚未实现或尚未证明
+
+- Phase 2I-C.3.D 配置化多段 MAVFTP 上传。
+- Quick Test 配置化 segment capacity、segment retry/timeout 和完整逐段日志/metrics。
+- MAVFTP production `RouteUploadManager` cutover。
+- 真实飞控多段 CLEAR + NO_CLEAR 拼接验证。
+- Production Mission Ready verification 与完整 firmware capability model。
+- 10000-drone chunked/sharded Route Store。
+- Backup Drone Replacement 与 conflict/rejoin workflow。
+
+## 14. Developer Entry Map
+
+| 目标 | 首要入口 | 关联入口 |
 |---|---|---|
-| Production | Console MAVLink/Session/Command/DSP；UE Production Providers、Adapter、Fleet、UI、Cesium/Niagara、RoutePreview | 正式链 |
-| Developer Mock | `Developer/Mock/MockDroneDataSubsystem` | 默认关闭 |
-| Developer Acceptance | `Developer/Acceptance/DSPGCSLoopbackProviderSubsystem` + Console acceptance exe | 默认关闭 |
-| Regression | ConsoleGCSTests + UE `Private/Tests` | 不进入Production |
+| Discovery / Fleet identity | `MavlinkDiscoveryService`、`DroneManager` | `MavlinkReadOnlyIngress`、`DroneSession` |
+| Telemetry / short command | `DroneSession`、`CommandManager` | DSP telemetry/command providers |
+| Visualization / Overlay | `RoutePreviewSubsystem`、`DroneFleetVisualizationActor` | `NS_DroneFleet` asset |
+| RouteAssignment | `RouteAssignmentSubsystem`、`RouteAssignmentPipeline` | Geo/Matcher/Materializer |
+| Artifact / Manifest | `RouteArtifactWorkspaceSubsystem`、`RouteArtifactWorkspaceManager` | Shared RouteArtifact contract |
+| Waypoint | `RouteWaypointGenerationSubsystem` | BatchGenerator、Generator、Validator |
+| Frozen Assignment DSP | `DSPGCSFrozenAssignmentSyncSubsystem` | Console Receiver、Assembler、Store |
+| Upload Job DSP/UI | `DSPGCSUploadJobSubsystem`、`GCSRouteWorkflowCoordinator` | Console Receiver、Authority、StateMirror |
+| Production upload | `RouteUploadManager` | `MissionPreparationWorker`、`MissionProtocolTransport` |
+| MAVFTP test chain | `MAVFTPMissionHardwareTest` | `MavFtpClient`、`MissionFtpCompiler`、`MAVFTPMissionTransport` |
+| Test entry | `ConsolePipelineTests.cpp` | UE `Private/Tests/` |
 
-Production初始化失败不允许自动切换Mock。
+## 15. 当前事实标签
 
-## 16. 当前配置边界
-
-- `ConsoleGCS/gcs-config.ini`：Console deployment。
-- `ConsoleGCS/config/DSPGCSTransport.ini`：Console DSP endpoint。
-- `UnrealGCS/Config/DefaultGame.ini`：UE Production/Developer开关。
-- Protocol constants：`Shared/DSPGCSProtocol`。
-- Safety constants/config：Console command safety层。
-
-Production Drone endpoint只来自实际MAVLink datagram，不存在固定目标配置。
-
-## 17. 当前没有实现
-
-- Live + Route Overlay
-- RouteAssignment Authority
-- Waypoint Generator/Validation/Manifest
-- Route Upload DSP messages
-- Console RouteUploadManager
-- QGC WPL parser/Mission Binary Encoder
-- MAVFTP client与FTP ACK/NAK路由
-- Mission Ready verification
-- Firmware capability model
-- Backup Drone Replacement
-
-这些内容见 [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md)，不得从该文档反推为当前实现。
-
-## 18. Developer Entry Map
-
-| 目标 | 首要入口 | 第二入口 |
-|---|---|---|
-| Discovery/identity | `MavlinkDiscoveryService`、`DroneManager` | `MavlinkReadOnlyIngress` |
-| Telemetry decode | `MavlinkParser`、`FlightData` | DSP Telemetry Provider |
-| 新短命令 | UE/Shared/Console command mapping | `DroneSession`、`CommandDispatcher`、`MavlinkCommand` |
-| UE Fleet | `FleetManagerSubsystem` | `GCSDataTypes` |
-| UI行为 | `GCSUIBridgeSubsystem` | `GCSUIWidgetPresenter` |
-| Visualization arrays | `DroneFleetVisualizationActor` | `NS_DroneFleet` asset |
-| Route data/playback | `RoutePreviewSubsystem` | `RoutePreviewNpzLoader` |
-| Network/DSP | `MavlinkUdpReceiver`、DSP transport | `MavlinkReadOnlyIngress` |
-
-## 19. 当前事实标签
-
-- Route Preview Import UI：IMPLEMENTED，人工验证PASS。
-- Selected-drone LED_CONTROL：IMPLEMENTED，硬件验证PASS。
-- Marquee coordinate alignment：IMPLEMENTED，人工验证PASS。
-- BTN_ZCamera explicit toggle、wheel zoom、MMB pan：IMPLEMENTED。
-- Live + Route Overlay：PLANNED / NEXT PHASE。
-- Route Upload：PLANNED，当前无实现。
-- Mission timing与custom firmware behavior：UNKNOWN。
+- Phase 2A～2G：IMPLEMENTED。
+- RouteUploadManager / UI-3C / MissionProtocol vertical slice：IMPLEMENTED。
+- MissionTransport / MissionFtpCompiler / MAVFTP Writer / Hardware Harness / Quick Test：IMPLEMENTED。
+- Production Transport：MissionProtocol。
+- Phase 2I-C.3.D：NOT STARTED。
+- MAVFTP production cutover：NOT IMPLEMENTED / INTENTIONALLY DEFERRED。
+- Mission Ready、timing、RGB 与 mission.dat apply：FIRMWARE UNKNOWN / NOT PROVEN。

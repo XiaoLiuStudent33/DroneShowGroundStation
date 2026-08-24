@@ -1,12 +1,16 @@
 # Production 职责审计（Architecture Freeze 基线）
 
-> Status: AUDIT / BASELINE REFERENCE
+> Status: ARCHIVED / HISTORICAL
+>
+> Current Authority: [Architecture_Freeze_CN.md](../Architecture_Freeze_CN.md) and [Code_Architecture_CN.md](../Code_Architecture_CN.md)
+>
+> Do Not Use As Current Implementation State
 >
 > Last Updated: 2026-08-14 (classification only)
 >
-> Authority: 保留 Cleanup/Freeze 时的职责审计证据；当前调用链以 [Code_Architecture_CN.md](Code_Architecture_CN.md) 与 Production 源码为准，冻结边界以 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md) 为准。
+> Authority: 保留 Cleanup/Freeze 时的职责审计证据；当前调用链以 [Code_Architecture_CN.md](../Code_Architecture_CN.md) 与 Production 源码为准，冻结边界以 [Architecture_Freeze_CN.md](../Architecture_Freeze_CN.md) 为准。
 >
-> Current status: [Development_Status_CN.md](Development_Status_CN.md)
+> Current status: [Development_Status_CN.md](../Development_Status_CN.md)
 
 ## 现行文档职责与审计问题
 
@@ -16,7 +20,7 @@
 
 
 
-最终审计基线：`master`，Cleanup Phase 3A~3H 已完成。本文描述 Architecture Freeze 时的当前代码；冻结规则与维护入口见 [`Architecture_Freeze_CN.md`](Architecture_Freeze_CN.md)。
+最终审计基线：`master`，Cleanup Phase 3A~3H 已完成。本文描述 Architecture Freeze 时的代码快照；冻结规则与维护入口见 [`Architecture_Freeze_CN.md`](../Architecture_Freeze_CN.md)。
 
 ## 1. 统计口径与 Production 主链
 

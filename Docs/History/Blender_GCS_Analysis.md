@@ -8,7 +8,7 @@
 >
 > **DO NOT USE AS CURRENT ARCHITECTURE**
 >
-> Superseded by [Architecture_Freeze_CN.md](../Architecture_Freeze_CN.md), [Code_Architecture_CN.md](../Code_Architecture_CN.md), and [Development_Status_CN.md](../Development_Status_CN.md). Route-upload evidence is superseded by [Audit_Legacy_BGC2_RouteUpload_CN.md](../Audit_Legacy_BGC2_RouteUpload_CN.md).
+> Superseded by [Architecture_Freeze_CN.md](../Architecture_Freeze_CN.md), [Code_Architecture_CN.md](../Code_Architecture_CN.md), and [Development_Status_CN.md](../Development_Status_CN.md). Route-upload evidence is superseded by [Audit_Legacy_BGC2_RouteUpload_CN.md](Audit_Legacy_BGC2_RouteUpload_CN.md).
 
 > 文档性质：旧系统业务参考与 UnrealGCS 模块规划，不是迁移方案。  
 > 分析对象：`D:\Download\重要资源存储\bgc2\bgc2`、`simulator.blend`。  

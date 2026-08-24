@@ -2,7 +2,7 @@
 
 Status: CURRENT
 Authority: 项目最高长期架构约束
-Last Updated: 2026-08-14
+Last Updated: 2026-08-24
 Applies To: `ConsoleGCS`、`UnrealGCS`、`Shared`、Route domain
 Supersedes: 早期阶段性架构建议中的冲突内容
 
@@ -12,10 +12,12 @@ Supersedes: 早期阶段性架构建议中的冲突内容
 
 Source of Truth 优先级：
 
-1. 当前 Production 源码与已经人工验证的当前行为。
-2. 本文件仍成立的冻结原则。
-3. 当前专项 Architecture 文档。
-4. Audit 与历史记录。
+1. 当前 Production 源码。
+2. 已存在并通过的自动化测试代码。
+3. 用户提供的本地审计和人工验证结果；必须标明证据等级。
+4. 本文件仍成立的冻结原则。
+5. 当前专项 Architecture 文档。
+6. Audit 与历史记录。
 
 本文不是开发日志。未来设计必须明确标记为 `PLANNED` 或 `DEFERRED`，不得写成已实现事实。
 
@@ -28,6 +30,9 @@ Source of Truth 优先级：
 5. **FleetManagerSubsystem**：UE 真实 Fleet、稳定 `DroneOrder`、详情选择和 Fleet Geo Origin 的 Authority。
 6. **GCSUIBridgeSubsystem**：UI lifecycle、页面/面板、命令选择、命令提交与 Route UI 协调者；不拥有 Route 样本或 Fleet 网络身份。
 7. **URoutePreviewSubsystem**：当前 Route Preview 数据、Show Origin、SampleRate、Frame 和 Playback 的 Authority。
+8. **URouteAssignmentSubsystem**：UE RouteAssignment、Freeze 和 Revision 的 Authority。
+9. **Route Artifact / Waypoint services**：生成、验证、Manifest、READY 与 Artifact identity 的 Route-domain Authority；不拥有 Flight Controller 网络。
+10. **ConsoleUploadJobAuthority / RouteUploadManager**：Console Upload Job 状态与执行 Authority；不得迁入 UE 或短命令队列。
 
 ## 3. Fleet Identity 与 Session
 
@@ -111,12 +116,18 @@ FleetManager / RoutePreview
 - `URoutePreviewSubsystem` 是 Route Preview Authority。
 - `FRoutePreviewData` 保留原始 Local ENU，RouteSlot 为 0-based preview identity。
 - Route Preview 与 Live telemetry 使用明确的 Visualization Mode，不能同时写同一组视觉数组。
+- Live 模式可以通过同一个 `ADroneFleetVisualizationActor` / Niagara System 显示独立 Route Target overlay；Overlay 不拥有 Assignment。
 - SampleRate 必须显式配置；unset 为合法状态，禁止猜 24/25/30/50/60 Hz。
+- RouteAssignment、Freeze/Revision、Artifact Workspace、Manifest/READY、Waypoint Generator/Validator 已实现。
+- Frozen Assignment 与 Upload Job 已通过 DSP-GCS 版本化协议连接 UE 和 Console。
+- Console Artifact Consumer、Upload Job Authority、`RouteUploadManager`、Mission Preparation 与 `IMissionTransport` 已实现。
+- 当前 Production Transport 是 `MissionProtocolTransport`。
+- `MavFtpClient`、FTP ingress、`MissionFtpCompiler`、`MAVFTPMissionTransport`、Hardware Harness 与 Quick Test 已实现为显式测试/验证链。
 
-### 7.2 FROZEN DIRECTION / PLANNED
+### 7.2 FROZEN DIRECTION / NEXT
 
 - Waypoint 生成必须使用 `Route Local ENU + Show Origin`，禁止从 UE World Position 反推 GPS。
-- RouteAssignment 必须成为独立 UE Route-domain Authority，不能藏在 FleetManager。
+- RouteAssignment 必须保持独立 UE Route-domain Authority，不能藏在 FleetManager。
 - `DroneID != RouteSlotIndex`，不得自动按相同数字匹配。
 - `.waypoints` 必须作为可人工检查、可追溯、可哈希的落盘 Artifact。
 - UE 不直接发送 MAVLink Route Upload。
@@ -132,7 +143,10 @@ UE Route Workflow
 ```
 
 - 长生命周期 Route Upload 不能塞入现有短命令 `CommandDispatcher`。
-- 当前 Legacy compatibility target 是 QGC WPL 110 -> Mission binary -> MAVFTP `@MISSION/mission.dat`，但在新实现前仍需真实定制固件验证。
+- Route Upload 必须复用 shared UDP sender 和现有 Remote Endpoint authority。
+- 当前生产 `RouteUploadManager` 不得被误写成 MAVFTP；它仍固定选择 `MissionProtocolTransport`。
+- 下一阶段是 `Phase 2I-C.3.D` 配置化多段 MAVFTP。必须复用现有 `MissionFtpCompiler` segment plan，且 `segmentCapacity` 以包含 Reserved Home 的 Wire Mission Items 计数。
+- MAVFTP production cutover 必须在配置化多段、真实飞控验证和明确批准后另行进行。
 
 ### 7.3 DEFERRED
 

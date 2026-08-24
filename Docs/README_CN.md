@@ -1,129 +1,108 @@
 # DroneGCS Documentation Index
 
-Status: CURRENT
-Authority: 文档导航、职责和Source-of-Truth索引
-Last Updated: 2026-08-14
-Applies To: 仓库全部Markdown
+Status: CURRENT SUPPORTING
+Authority: 文档导航、分类与 Source-of-Truth 索引
+Last Updated: 2026-08-24
 
-## START HERE
+## 1. START HERE
 
 推荐阅读顺序：
 
 1. [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md) — 不能违反的长期边界。
-2. [Code_Architecture_CN.md](Code_Architecture_CN.md) — 当前代码如何运行。
-3. [Development_Status_CN.md](Development_Status_CN.md) — DONE/NEXT/DEFERRED。
-4. 当前任务相关专项Architecture。
-5. Audit作为证据。
-6. `History/`仅作历史参考。
+2. [Code_Architecture_CN.md](Code_Architecture_CN.md) — 当前生产代码如何运行。
+3. [Development_Status_CN.md](Development_Status_CN.md) — DONE、NEXT、NOT STARTED、DEFERRED、UNKNOWN。
+4. 当前任务相关专项 Architecture。
+5. [PROJECT_HANDOFF_CN.md](PROJECT_HANDOFF_CN.md) — 快速接手摘要。
+6. `History/` 只作历史证据，不用于判断当前实现状态。
 
-## Architecture Authorities
+Source of Truth 优先级：当前生产源码、已存在并通过的测试、明确标级的人工/硬件证据、Architecture Freeze、专项 Architecture、History。
 
-- [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)
-- [Code_Architecture_CN.md](Code_Architecture_CN.md)
-- [Network_Architecture_CN.md](Network_Architecture_CN.md)
-- [Visualization_Architecture_CN.md](Visualization_Architecture_CN.md)
-- [UI_Architecture_CN.md](UI_Architecture_CN.md)
-- [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md)
-- [Test_Architecture_CN.md](Test_Architecture_CN.md)
+## 2. CURRENT Authority
 
-## Current Status
+| 文档 | 作用 |
+|---|---|
+| [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md) | 项目最高长期 Authority；冻结 UE/Console/DSP、Fleet identity、网络、性能和 Route domain 边界 |
+| [Code_Architecture_CN.md](Code_Architecture_CN.md) | 当前 Production 调用链、模块职责与 Developer Entry Map |
+| [Development_Status_CN.md](Development_Status_CN.md) | 当前阶段完成度、下一阶段、延后项、固件未知项与证据等级 |
+| [Network_Architecture_CN.md](Network_Architecture_CN.md) | Remote Endpoint identity、shared socket、MAVLink ingress/outbound 与 DSP-GCS 链 |
+| [Visualization_Architecture_CN.md](Visualization_Architecture_CN.md) | Fleet、Route Preview、Overlay、Cesium/Niagara、TopDown 与 Marquee |
+| [UI_Architecture_CN.md](UI_Architecture_CN.md) | UMG/C++ binding、selection、Route Workflow 与 Upload Job UI |
+| [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md) | RouteAssignment、Artifact、Waypoint、DSP Job、MissionTransport、MAVFTP 与下一阶段语义 |
 
-- [Development_Status_CN.md](Development_Status_CN.md)
-- [PROJECT_HANDOFF_CN.md](PROJECT_HANDOFF_CN.md)
+## 3. CURRENT Supporting Documentation
 
-## Audits
+| 文档 | 作用 |
+|---|---|
+| [../README.md](../README.md) | 仓库入口、系统边界、当前生产 Transport 与阅读顺序 |
+| 本文件 | 全部 Markdown 的分类与导航 |
+| [PROJECT_HANDOFF_CN.md](PROJECT_HANDOFF_CN.md) | 新会话快速接手与安全边界 |
+| [Test_Architecture_CN.md](Test_Architecture_CN.md) | Console/UE/Hardware 测试入口和证据边界 |
 
-- [Production_Responsibility_Audit_CN.md](Production_Responsibility_Audit_CN.md)
-- [Audit_Legacy_BGC2_RouteUpload_CN.md](Audit_Legacy_BGC2_RouteUpload_CN.md)
-- [Audit_DroneGCS_RouteUpload_Gap_CN.md](Audit_DroneGCS_RouteUpload_Gap_CN.md)
+## 4. History / Archived
 
-Audit是证据/快照，不是Architecture Authority。
+以下文件不再承担当前 Authority，但保留独特历史、设计或审计证据：
 
-## History
+| 文档 | 历史作用 |
+|---|---|
+| [History/00-current-state-review.md](History/00-current-state-review.md) | 2026-07-31 工程导入与早期现状审查 |
+| [History/Blender_GCS_Analysis.md](History/Blender_GCS_Analysis.md) | Blender/BGC2 旧系统业务参考分析 |
+| [History/DroneShowPlatform_Architecture_V5.0.md](History/DroneShowPlatform_Architecture_V5.0.md) | Phase 1 后的早期架构建议 |
+| [History/DroneShowPlatform_Communication_Protocol_V1.0.md](History/DroneShowPlatform_Communication_Protocol_V1.0.md) | DSP-GCS 早期协议设计 |
+| [History/Production_Responsibility_Audit_CN.md](History/Production_Responsibility_Audit_CN.md) | Cleanup/Architecture Freeze 阶段职责审计快照 |
+| [History/Audit_Legacy_BGC2_RouteUpload_CN.md](History/Audit_Legacy_BGC2_RouteUpload_CN.md) | Legacy BGC2 Route Upload 源码证据与兼容性风险 |
+| [History/Audit_DroneGCS_RouteUpload_Gap_CN.md](History/Audit_DroneGCS_RouteUpload_Gap_CN.md) | 2026-08-14 Route Upload 尚未实现时的 gap 快照 |
 
-`History/`文件全部为`STATUS: HISTORICAL`。不得用于判断当前Production状态。
+这些文件顶部必须保持 `ARCHIVED / HISTORICAL` 或等价历史横幅，并链接回当前 Authority。
 
-## Source-of-Truth Matrix
+## 5. External Tool Documentation
+
+以下文件属于 `Tools/unreal-mcp` 外部工具边界，不是 DroneGCS Production Authority，本次保持原位：
+
+| 文档 | 作用 |
+|---|---|
+| `Tools/unreal-mcp/README.md` | Unreal MCP 工具入口与使用说明 |
+| `Tools/unreal-mcp/Python/README.md` | Python server/runtime 使用说明 |
+| `Tools/unreal-mcp/Docs/README.md` | Unreal MCP 文档索引 |
+| `Tools/unreal-mcp/Docs/Tools/README.md` | MCP tool API 索引 |
+| `Tools/unreal-mcp/Docs/Tools/actor_tools.md` | Actor tool API |
+| `Tools/unreal-mcp/Docs/Tools/blueprint_tools.md` | Blueprint tool API |
+| `Tools/unreal-mcp/Docs/Tools/editor_tools.md` | Editor tool API |
+| `Tools/unreal-mcp/Docs/Tools/node_tools.md` | Node tool API |
+| `Tools/unreal-mcp/MCPGameProject/Docs/REFACTOR_COMMANDS.md` | Unreal MCP 历史重构计划 |
+
+## 6. Source-of-Truth Matrix
 
 | Topic | Primary Document |
 |---|---|
-| Overall Architecture | `Architecture_Freeze_CN.md` |
-| Current Code Chain | `Code_Architecture_CN.md` |
-| Fleet Identity | `Network_Architecture_CN.md` |
-| DSP Protocol | `Network_Architecture_CN.md` |
-| UI | `UI_Architecture_CN.md` |
-| Visualization | `Visualization_Architecture_CN.md` |
-| Route Data | `Code_Architecture_CN.md`，Route Preview章节 |
-| Route Assignment | `Route_Upload_Architecture_CN.md` |
-| Waypoint Artifact | `Route_Upload_Architecture_CN.md` |
-| Route Upload | `Route_Upload_Architecture_CN.md` |
-| Firmware Compatibility | `Route_Upload_Architecture_CN.md`，Firmware章节 |
-| Current Development Status | `Development_Status_CN.md` |
-| Test Architecture | `Test_Architecture_CN.md` |
-| Production Responsibility Rationale | `Production_Responsibility_Audit_CN.md` |
-| History classification/index | `README_CN.md`，History章节；单个历史文件无当前Authority |
+| Long-term architecture | `Architecture_Freeze_CN.md` |
+| Current code chain | `Code_Architecture_CN.md` |
+| Current progress / next phase | `Development_Status_CN.md` |
+| Fleet identity / network / DSP | `Network_Architecture_CN.md` |
+| Visualization / Overlay | `Visualization_Architecture_CN.md` |
+| UI / Route Workflow | `UI_Architecture_CN.md` |
+| Route Assignment / Artifact / Upload / MAVFTP | `Route_Upload_Architecture_CN.md` |
+| Test and evidence boundary | `Test_Architecture_CN.md` |
+| Historical rationale | `History/`；无当前 Authority |
 
-## Complete Markdown Inventory
+## 7. Inventory Classification
 
-Recommended action枚举：KEEP、UPDATE、MERGE、MOVE-TO-HISTORY、NEW-REPLACEMENT、DELETE-DUPLICATE。本轮没有删除或移动文件。
+本次 `rg --files -g "*.md"` 得到 27 个受 Git 跟踪的 Markdown：
 
-| Path | Title | Purpose | Last relevant content | Old status | Action |
-|---|---|---|---|---|---|
-| `README.md` | DroneShowGroundStation | 仓库入口 | 工程与Docs导航 | Current but stale | UPDATE |
-| `Docs/Architecture_Freeze_CN.md` | DroneGCS Architecture Freeze | 最高架构约束 | Route domain长期边界 | Current but incomplete | UPDATE |
-| `Docs/Code_Architecture_CN.md` | DroneGCS当前代码架构 | 当前运行链 | Route/LED/UI/Visualization事实 | Stale in later sections | UPDATE |
-| `Docs/Production_Responsibility_Audit_CN.md` | Production职责审计 | Cleanup阶段职责证据 | Production/Developer边界 | Audit snapshot | UPDATE metadata |
-| `Docs/PROJECT_HANDOFF_CN.md` | Project Handoff | 快速交接 | 当前阶段和入口 | Stale | UPDATE |
-| `Docs/Test_Architecture_CN.md` | 测试架构 | 测试入口 | Console/UE/Acceptance | Current reference | UPDATE metadata |
-| `Docs/README_CN.md` | Documentation Index | 文档导航与矩阵 | 本表与Source-of-Truth | Missing | NEW-REPLACEMENT |
-| `Docs/Development_Status_CN.md` | Development Status | DONE/NEXT/DEFERRED | Phase 2 roadmap | Missing | NEW-REPLACEMENT |
-| `Docs/UI_Architecture_CN.md` | UI Architecture | UMG/C++ binding Authority | RouteImport/Playback/UI semantics | Scattered | NEW-REPLACEMENT |
-| `Docs/Visualization_Architecture_CN.md` | Visualization Architecture | Cesium/Niagara/selection | Live/Preview与Overlay边界 | Scattered | NEW-REPLACEMENT |
-| `Docs/Network_Architecture_CN.md` | Network & DSP Architecture | Identity/network/DSP | shared sender与future FTP reply | Scattered | NEW-REPLACEMENT |
-| `Docs/Route_Upload_Architecture_CN.md` | Route Upload Architecture | 正式规划Authority | Assignment->Artifact->Upload | Missing | NEW-REPLACEMENT |
-| `Docs/Audit_Legacy_BGC2_RouteUpload_CN.md` | Legacy BGC2 Route Upload Audit | Legacy证据 | Source facts/inference/unknown | Not landed | NEW-REPLACEMENT |
-| `Docs/Audit_DroneGCS_RouteUpload_Gap_CN.md` | DroneGCS Route Upload Gap Audit | 当前差距证据 | Gap matrix与blockers | Not landed | NEW-REPLACEMENT |
-| `Docs/History/00-current-state-review.md` | 当前工程现状审查 | 早期导入/加固历史 | 早期Console状态 | History but unlabeled | UPDATE banner |
-| `Docs/History/Blender_GCS_Analysis.md` | Blender旧地面站参考分析 | 旧业务参考 | BGC2早期分析 | History but unlabeled | UPDATE banner |
-| `Docs/History/DroneShowPlatform_Architecture_V5.0.md` | 架构审查V5.0 | 早期设计建议 | Phase 1建议 | History but unlabeled | UPDATE banner |
-| `Docs/History/DroneShowPlatform_Communication_Protocol_V1.0.md` | DSP协议设计V1.0 | 早期协议设计 | 设计阶段结论 | History but unlabeled | UPDATE banner |
-| `Tools/unreal-mcp/.github/copilot-instructions.md` | UnrealMCP Python guidelines | vendored tool instructions | tool coding guidelines | External tool | KEEP |
-| `Tools/unreal-mcp/Docs/README.md` | Unreal Engine MCP Documentation | tool docs index | MCP docs links | External tool | KEEP |
-| `Tools/unreal-mcp/Docs/Tools/README.md` | Unreal MCP Tools | tool index | actor/blueprint/editor/node links | External tool | KEEP |
-| `Tools/unreal-mcp/Docs/Tools/actor_tools.md` | Unreal MCP Editor Tools | actor tool API | actor operations | External tool | KEEP |
-| `Tools/unreal-mcp/Docs/Tools/blueprint_tools.md` | Unreal MCP Blueprint Tools | blueprint tool API | blueprint operations | External tool | KEEP |
-| `Tools/unreal-mcp/Docs/Tools/editor_tools.md` | Unreal MCP Editor Tools | editor tool API | editor operations | External tool | KEEP |
-| `Tools/unreal-mcp/Docs/Tools/node_tools.md` | Unreal MCP Node Tools | node tool API | node operations | External tool | KEEP |
-| `Tools/unreal-mcp/MCPGameProject/Docs/REFACTOR_COMMANDS.md` | UnrealMCP Refactoring Plan | vendored tool history | tool refactor plan | External tool history | KEEP |
-| `Tools/unreal-mcp/Python/README.md` | Unreal MCP | vendored runtime instructions | Python server setup | External tool | KEEP |
-| `Tools/unreal-mcp/README.md` | Model Context Protocol for Unreal Engine | vendored tool root readme | UnrealMCP usage | External tool | KEEP |
-| `Tools/unreal-mcp/Python/.venv/Lib/site-packages/httpcore-1.0.7.dist-info/licenses/LICENSE.md` | httpcore license | dependency license | license text | Third-party license | KEEP |
-| `Tools/unreal-mcp/Python/.venv/Lib/site-packages/httpx-0.28.1.dist-info/licenses/LICENSE.md` | httpx license | dependency license | license text | Third-party license | KEEP |
-| `Tools/unreal-mcp/Python/.venv/Lib/site-packages/idna-3.10.dist-info/LICENSE.md` | idna license | dependency license | license text | Third-party license | KEEP |
-| `Tools/unreal-mcp/Python/.venv/Lib/site-packages/starlette-0.46.1.dist-info/licenses/LICENSE.md` | starlette license | dependency license | license text | Third-party license | KEEP |
-| `Tools/unreal-mcp/Python/.venv/Lib/site-packages/uvicorn-0.34.0.dist-info/licenses/LICENSE.md` | uvicorn license | dependency license | license text | Third-party license | KEEP |
+- CURRENT Authority：7。
+- CURRENT Supporting：4。
+- History / Archived：7。
+- External Tool Documentation：9。
+- Audit/Evidence 原位文件：0；三份旧 Audit 已归档到 `History/`。
+- Stale Duplicate：0。
+- Requires User Decision：0。
+- Deleted：0。
 
-说明：任务开始扫描得到25个Markdown；新增8个项目文档后表中共33项。`Tools/unreal-mcp`和`.venv`属于vendor/tool/license边界，本轮不改。
+## 8. Maintenance Rules
 
-## Documentation Matrix
-
-| File | New Responsibility | Authority Level | Implemented/Planned coverage |
-|---|---|---|---|
-| Architecture Freeze | 长期边界 | Highest | Implemented constraints + frozen directions |
-| Code Architecture | 当前源码运行链 | Current code authority | Implemented only |
-| Network Architecture | Identity/network/DSP | Subsystem authority | Implemented + explicit future FTP hook |
-| Visualization Architecture | Cesium/Niagara/input | Subsystem authority | Implemented + planned Overlay |
-| UI Architecture | Widget/C++ binding | Subsystem authority | Implemented + planned Route Operations UI |
-| Route Upload Architecture | Route upload design | Planned architecture authority | Planned/Deferred/Unknown |
-| Development Status | 当前状态 | Status authority | DONE/NEXT/DEFERRED |
-| Audits | 证据和差距 | Reference only | Facts/inference/unknown |
-| History | 历史上下文 | None for current | Historical only |
-
-## Maintenance Rules
-
-- Architecture文件不写逐日开发日志。
-- Status文件不重复完整调用链。
-- Audit不得宣称自己是Authority。
-- History必须保留Historical banner。
-- 新功能完成后同时更新Code Architecture、对应专项Architecture和Development Status。
-- 如果文档与Production源码冲突，先按源码修正文档；不要为保留旧文档而扭曲事实。
+- Architecture 不写逐日开发日志；Status 不复制完整调用链。
+- 当前源码事实优先于旧状态文档。
+- 已实现功能不得继续写成 `PLANNED`；未来功能不得写成已完成。
+- 用户确认的硬件观察必须标为 `USER-CONFIRMED`，无日志时不得升级为固定协议结论。
+- History 文件不得作为当前实现 Authority。
+- 仓库 Markdown 使用相对链接，不写本机绝对路径和易漂移行号。
+- 功能完成后同步更新 Code Architecture、对应专项 Architecture、Development Status 与本索引。

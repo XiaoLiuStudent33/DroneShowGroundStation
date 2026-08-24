@@ -1,57 +1,54 @@
 # DroneGCS Route Upload Architecture
 
-Status: PLANNED
-Authority: Route Upload冻结设计方向；不代表模块已实现
-Last Updated: 2026-08-14
-Applies To: RouteAssignment、Waypoint Artifact、DSP Upload Job、Console MAVFTP
-Evidence: [Audit_Legacy_BGC2_RouteUpload_CN.md](Audit_Legacy_BGC2_RouteUpload_CN.md)、[Audit_DroneGCS_RouteUpload_Gap_CN.md](Audit_DroneGCS_RouteUpload_Gap_CN.md)
+Status: CURRENT
+Authority: 当前 Route domain、Upload Job、Mission Transport 与下一阶段边界
+Last Updated: 2026-08-24
+Baseline: `a494bd14dae00a5b4c24055a426ca1cee98e37f0`
+
+历史证据见 [Legacy BGC2 Route Upload Audit](History/Audit_Legacy_BGC2_RouteUpload_CN.md) 与 [2026-08-14 DroneGCS Gap Audit](History/Audit_DroneGCS_RouteUpload_Gap_CN.md)。历史 Audit 不代表当前实现状态。
 
 ## 1. Status Legend
 
-- **IMPLEMENTED**：当前Production源码存在。
-- **PLANNED**：冻结方向，尚未实现。
-- **DEFERRED**：未来扩展，不进入当前阶段。
-- **FIRMWARE UNKNOWN**：必须通过真实定制固件审计/硬件测试确认。
+- **IMPLEMENTED**：当前 Production 源码或显式测试/硬件工具已存在。
+- **CURRENT PRODUCTION**：当前默认生产调用链。
+- **EXPERIMENTAL / HARDWARE HARNESS**：仅由显式入口启用，不是生产默认。
+- **NEXT**：下一阶段开发内容。
+- **DEFERRED**：当前阶段不接入。
+- **FIRMWARE UNKNOWN / NOT PROVEN**：需要真实固件证据或硬件验证。
 
-## 2. End-to-End Target
+## 2. End-to-End Status
 
 ```text
 NPZ Import                         IMPLEMENTED
--> Route Preview                  IMPLEMENTED
--> Live + Route Overlay           PLANNED
--> Route Assignment               PLANNED
--> Assignment Validation/Freeze   PLANNED
--> Waypoint Generation            PLANNED
--> Waypoint Validation            PLANNED
--> Artifact Freeze / READY        PLANNED
--> DSP-GCS Upload Job             PLANNED
--> Console RouteUploadManager     PLANNED
--> QGC Parser / Mission Encoder   PLANNED
--> MAVFTP                         PLANNED
--> @MISSION/mission.dat           LEGACY TARGET / FIRMWARE UNKNOWN
--> Verification                   PLANNED / FIRMWARE UNKNOWN
--> Mission Ready                  NOT CURRENTLY PROVABLE
+Route Preview                      IMPLEMENTED
+Live + Route Overlay               IMPLEMENTED
+Route Assignment                   IMPLEMENTED
+Assignment Validation / Freeze     IMPLEMENTED
+Waypoint Generation                IMPLEMENTED
+Waypoint Validation                IMPLEMENTED
+Artifact Freeze / READY            IMPLEMENTED
+Frozen Assignment DSP              IMPLEMENTED
+DSP-GCS Upload Job                 IMPLEMENTED
+Console Artifact Consumer          IMPLEMENTED
+Console RouteUploadManager         IMPLEMENTED
+QGC Parser / Mission Encoder       IMPLEMENTED
+MissionProtocol Production Upload  IMPLEMENTED
+MAVFTP Compiler / Writer / Harness IMPLEMENTED
+MAVFTP Production Cutover          NOT IMPLEMENTED
+Mission Ready                      FIRMWARE UNKNOWN / NOT PROVEN
 ```
 
-UE不得直接发送MAVLink。ConsoleGCS始终是Flight Controller network authority。
+UE 不直接发送 MAVLink。ConsoleGCS 始终是 Flight Controller network 与 upload execution Authority。
 
-## 3. Current Foundations — IMPLEMENTED
+## 3. Route Overlay — IMPLEMENTED
 
-- Native NPZ loader，position/color/range validation。
-- `FRoutePreviewData` frame-major compact storage。
-- Local ENU X East、Y North、Z Relative Up。
-- Show Origin和显式SampleRate。
-- Offline 1000-drone preview、Playback、Scrub、Import UI。
-- Fleet Remote Endpoint/DroneSession链。
-- DSP-GCS localhost UDP。
-- shared MAVLink sender。
-- generated MAVLink headers包含MISSION_ITEM_INT和FILE_TRANSFER_PROTOCOL。
+`RoutePreviewSubsystem` 在 Live mode 中生成 Route target positions，并由同一个 `ADroneFleetVisualizationActor` / Niagara System 显示。Overlay 与 Live drone arrays、particle identity 和 Assignment Authority 隔离。
 
-这些基础不等于已经具备Route Upload。
+Overlay 只回答“真实位置与 Route target 如何同屏显示”，不决定 DroneID 与 RouteSlot 的绑定。
 
-## 4. RouteAssignment — PLANNED
+## 4. RouteAssignment — IMPLEMENTED
 
-推荐Authority：UE `URouteAssignmentSubsystem`。
+Authority：`URouteAssignmentSubsystem`。
 
 核心关系：
 
@@ -59,251 +56,196 @@ UE不得直接发送MAVLink。ConsoleGCS始终是Flight Controller network autho
 DroneID <-> RouteSlotIndex
 ```
 
-必须一对一并表达：
+已实现：
 
-- DistanceMeters
-- PositionQuality
-- AssignmentState
-- OwnerState
-- Revision
-- Timestamp
-- PreviousOwner/TransitionReason扩展点
+- Local ENU / Show Origin 一致空间中的位置匹配。
+- one-to-one DroneID/RouteSlot validation。
+- explicit binding 与 position matching。
+- full/degraded freeze policy。
+- working/frozen snapshot、monotonic Revision、source identity 与 digest。
+- conflict、unassigned、vacant 与质量信息。
 
-匹配空间：真实Drone WGS84转换到同一Show Origin下的double precision Local ENU，再与Route Frame 0比较。禁止使用UE World、particle index、SYSID或`DroneID == RouteSlotIndex`假设。
+禁止使用 SYSID、particle index 或 `DroneID == RouteSlotIndex` 假设。
 
-算法接口必须返回assignment、conflict、unassigned、vacant和quality；当前不冻结Nearest Neighbor/KD Tree/Hungarian/Greedy具体算法。
-
-## 5. Waypoint Generation — PLANNED
-
-Workflow Authority在UE，推荐独立纯C++ Route Core service。
-
-输入：
-
-- 原始Route Local ENU。
-- Show Origin。
-- Frozen Assignment Revision。
-- 显式Timing/Firmware Profile。
-
-输出：每个RouteSlot一个QGC WPL 110文件。
-
-禁止绑定UMG、Niagara、Cesium World或Playback ticker。禁止从UE World反推GPS。
-
-1000-drone NOW：基于已加载RouteData，按RouteSlot迭代Frame，使用reusable buffer和bounded workers流式写盘。
-
-10000-drone FUTURE：chunked/sharded/memory-mapped route store，不能继续依赖全量NPZ常驻和全量Unicode matrix。
-
-## 6. Legacy Compatibility Waypoint Target
-
-当前仅记录已审计的Legacy兼容目标：
-
-- Header：`QGC WPL 110`
-- Columns：12
-- Command：`MAV_CMD_NAV_WAYPOINT`
-- Frame：`MAV_FRAME_GLOBAL_RELATIVE_ALT`
-- Latitude/Longitude：Local ENU + Show Origin
-- Altitude：Local Z，不加ShowOriginAltitude
-- RGB：legacy/custom profile写入param1/param2/param3
-
-RGB不是标准NAV_WAYPOINT语义，不能写成标准ArduPilot行为。
-
-Preview SampleRate也不能证明实际Mission timing。Generator必须要求明确的Firmware/Timing Profile；未知时只能生成实验性工件，不能标记Production Ready。
-
-## 7. Artifact Workspace — PLANNED
+## 5. Waypoint Generation / Validation — IMPLEMENTED
 
 ```text
-WorkspaceRoot/
-  Show_<ShowId>/
-    source/
-    waypoints/
-    manifest/
-      route-artifacts.json
-      READY
+Route Local ENU + Show Origin + Frozen Assignment identity
+-> RouteWaypointGenerationSubsystem
+-> QGC WPL 110 per RouteSlot
+-> RouteWaypointValidator
 ```
 
-Manifest至少包含：
+生成使用 Local ENU + Show Origin，不从 UE World 反推 GPS。`MAV_FRAME_GLOBAL_RELATIVE_ALT` altitude 使用 Local Z，不叠加 ShowOriginAltitude。
 
-- Source hash。
-- Generator version。
-- Route metadata和Origin。
-- SampleRate/TimingProfile。
-- AssignmentRevision。
-- 每个文件relative path、size、hash、waypoint count。
-- Firmware profile。
-- Validation result。
+当前 legacy/custom profile 将 RGB 写入 `MAV_CMD_NAV_WAYPOINT` param1/param2/param3。这不是标准 ArduPilot NAV_WAYPOINT 语义，仍依赖定制固件。
 
-READY后ArtifactSet immutable。Upload Job必须绑定ArtifactSetId、Manifest hash和AssignmentRevision。
+Preview SampleRate 也不能证明 Mission execution timing。
 
-## 8. Validation — PLANNED
+## 6. Artifact Workspace — IMPLEMENTED
 
-UE `WaypointValidationService`至少检查：
+当前 canonical schema v2 Artifact 包含：
 
-- 文件数/RouteSlot数。
-- Frame/Waypoint count。
-- Sequence、Frame、Command。
-- Latitude/Longitude range。
-- Altitude finite。
-- RGB range。
-- Duplicate/Missing。
-- Assignment completeness。
-- File hash。
+- source dataset identity、FrameCount、RouteSlotCount、range。
+- Show Origin 与 generator identity。
+- per-route relative path、file size、digest。
+- ArtifactSetId 与 ArtifactSetDigest。
+- `manifest.json` 与 `READY`。
+- immutable `Current` publication 与 read lease / TOCTOU identity。
 
-Console在信任边界再次执行防御性parser/hash检查，但不成为第二个Waypoint生成Authority。
+Console `ConsoleArtifactConsumerV2` 在 trust boundary 内重新验证 workspace allowlist、canonical path、READY/Manifest identity、route allowlist、size/digest 与 waypoint semantics。
 
-## 9. DSP-GCS Upload Contract — PLANNED
+`UnrealGCS/Saved/RouteArtifacts/Current` 是运行期样本，不是 Production 源码提交要求。
 
-应新增独立Job消息，而不是普通短命令：
-
-- Create/SubmitUploadJob
-- StartUpload
-- CancelUpload
-- RetryDrone
-- UploadProgress
-- PerDroneUploadResult
-- UploadSummary/JobState
-- CapabilityReport
-
-DSP只传受控Artifact descriptor和operation metadata，不传整份Waypoint bytes，也不接受任意绝对文件路径。
-
-## 10. Console Route Upload Backend — PLANNED
-
-### RouteUploadManager
-
-全局Job/Scheduler Authority：
-
-- Queue
-- Max active drone jobs
-- Global packet budget
-- Per-drone upload state
-- Write window
-- Retry/backoff
-- Timeout
-- Progress
-- Cancel
-- Failure isolation
-- Overall summary
-
-### MissionArtifactReader / QGC Parser
-
-从allowlisted WorkspaceRoot读取READY/hash匹配的Artifact，并解析QGC WPL。
-
-### MissionBinaryEncoder
-
-Legacy target：10-byte mission header + N×38-byte MISSION_ITEM_INT records。这个格式在新实现前必须用真实固件和legacy fixture再次验证。
-
-### MavFtpClient
-
-每个active per-drone upload job一个实例；同一DroneSession最多一个active route transfer。负责CreateFile、WriteFile、TerminateSession、sequence、session、offset、window、ACK/NAK、timeout和retry。
-
-`DroneSession`只提供endpoint-bound send、capability和reply routing，不持有全局job。
-
-现有短命令`CommandDispatcher`保持不变，不承载整个upload。
-
-## 11. MAVFTP Target — Legacy Confirmed, New Hardware Test Required
-
-- Message：`FILE_TRANSFER_PROTOCOL #110`
-- Opcodes：CreateFile、WriteFile、TerminateSession
-- Remote path：`@MISSION/mission.dat`
-- Legacy payload metadata：target_system=0、target_component=0
-
-新DroneGCS必须复用shared UDP sender和Remote Endpoint authority。0/0只能存在于兼容profile，不能用于Fleet lookup。
-
-## 12. Reliability States — PLANNED
+## 7. Frozen Assignment DSP — IMPLEMENTED
 
 ```text
-Pending
-Preparing
-Uploading
-TransferComplete
-Verifying
-Ready
-Failed
-Cancelled
+UE Frozen Assignment
+-> DSPGCSFrozenAssignmentProtocol schema 2
+-> Console Receiver / TransactionAssembler
+-> FrozenAssignmentStore
+-> ACK / rejection
 ```
 
-`All Write ACKed != Mission Ready`。
+Upload Job 必须双绑定 Artifact 与 accepted Frozen Assignment，不得仅凭 RouteSlot 数字或任意路径启动。
 
-未来必须有：
+## 8. DSP-GCS Upload Job — IMPLEMENTED
 
-- ACK/NAK correlation。
-- timeout/retry/backoff。
-- per-drone failure isolation。
-- global concurrency和packet budget。
-- cancel。
-- local hash。
-- firmware-supported remote verification。
+`DSPGCSUploadJobProtocol` schema 2 已实现：
 
-## 13. Legacy Parameters
+- Start、Pause、Resume、Cancel、RetryFailed、SetMaxConcurrentUploads。
+- Command ACK。
+- aggregate snapshot、route state page、route state delta。
+- Artifact/Frozen Assignment dual binding、job revision 与 idempotency。
 
-旧现场经验：
+UE `UDSPGCSUploadJobSubsystem` 和 `FDSPGCSUploadJobStateMirror` 负责 operator-side command/state；Console `DSPGCSUploadJobReceiver` 与 `ConsoleUploadJobAuthority` 负责 accepted job state。
 
-- Write payload = 228 bytes
-- Write window = 16
-- Mission batch = 5001 items
-- Concurrent uploads = 50
-
-只保留概念，不冻结数值。所有参数必须在当前shared sender、固件、WiFi网络和1000-drone压力测试下重新benchmark。
-
-## 14. Firmware Capability — PLANNED / UNKNOWN
-
-未来Console capability model需表达：
-
-- firmware version/hash。
-- MAVLink version。
-- MAVFTP支持。
-- MISSION_ITEM_INT支持。
-- mission-file apply语义。
-- waypoint RGB profile。
-- mission timing profile。
-- custom protocol version。
-
-当前未知：
-
-- 真实Mission timing。
-- custom RGB执行。
-- `@MISSION/mission.dat`如何apply。
-- time-control message behavior。
-- custom MAV_CMD_USER behavior。
-- Mission Ready verification。
-
-Legacy UI的`MISSION_CURRENT.seq / 10`只是一项旧显示假设，不是新系统10Hz Production事实。
-
-## 15. Planned Operator Flow
+## 9. Console Route Upload — CURRENT PRODUCTION
 
 ```text
-Import
--> Preview
--> Overlay
--> Assign
--> Validate Assignment
--> Freeze Assignment
--> Generate
--> Validate Files
--> Freeze Artifact
--> Create Upload Job
--> Upload
--> Verify
--> Ready / Partial / Failed
+ConsoleUploadJobAuthority
+-> RouteUploadManager
+-> MissionPreparationWorker
+-> IMissionTransport
+-> MissionProtocolTransport
+-> DroneSession endpoint-bound sender
+-> ArduPilot/APM
 ```
 
-正式Operator UI继续在UE。Console只提供headless backend和diagnostics。
+`RouteUploadManager` 已实现 preparation bound、max active uploads、per-route lifecycle、cancel/retry、failure isolation、progress、metrics 与 terminal summary。
 
-## 16. Replacement Flight — DEFERRED
+当前 `RouteUploadManager::StartPrepared` 固定创建 `MissionProtocolTransport`。MAVFTP 不是生产默认 Transport。
 
-Assignment未来必须支持：
+MissionProtocol 真实硬件垂直链已完成，但最终 Production Mission Ready 仍未证明。
+
+## 10. Mission Transport Abstraction — IMPLEMENTED
+
+`IMissionTransport` 提供 `Prepare / Upload / Tick / Verify / Cancel`、terminal status、progress 与 metrics。
+
+实现：
+
+- `MissionProtocolTransport`：CURRENT PRODUCTION。
+- `MAVFTPMissionTransport`：EXPERIMENTAL / HARDWARE HARNESS。
+
+Transport abstraction 不持有 Route、Fleet 或 protocol selection Authority。
+
+## 11. MAVFTP Client / Ingress — IMPLEMENTED
+
+`MavFtpClient` 已实现：
+
+- `FILE_TRANSFER_PROTOCOL #110` ACK/NAK correlation。
+- known Remote Endpoint reply routing。
+- Create/Open/Truncate、streaming WriteFile、TerminateSession。
+- sequence/session/offset validation。
+- request timeout、retry 与 bounded file size。
+
+它复用 `DroneSession` endpoint 与 shared UDP sender，不创建 per-drone socket 或第二套 Fleet registry。
+
+## 12. MissionFtpCompiler 与分段 — IMPLEMENTED
 
 ```text
-Drone A owns Slot
--> Fault
--> Slot Vacant
--> Backup B Reserved
--> Safe Rejoin
--> Owner transfer
+Artifact Mission Items
+-> Reserved Home expansion
+-> Wire Mission Items
+-> SegmentDescriptor[]
+-> mission.dat segment byte streams
 ```
 
-仅冻结Owner/State/Revision/Timestamp/PreviousOwner/TransitionReason扩展点。本阶段不定义120-degree算法、补点轨迹、故障状态机或冲突预测。
+`MissionFtpCompiler` 是当前唯一 deterministic segment planner。
 
-## 17. Development Gates
+`CompileConfig.segmentCapacity` 的计算域是 **Wire Mission Items**，包括 Reserved Home `seq 0`。例如：
 
-不受Mission timing unknown阻塞：Overlay、Assignment、Artifact框架、Generator框架、Validation、Parser/Encoder单测、DSP job schema、MAVFTP状态机。
+```text
+Artifact = 9100
+Wire = 9101
+Capacity = 4000
+Segments = 4000 + 4000 + 1101
+```
 
-受阻：最终Waypoint timing语义、硬件表演验收、Production Mission Ready声明。
+分段合同：
+
+- 第一段 `options = 0`，CLEAR。
+- 后续段 `options = 1`，NO_CLEAR。
+- StartIndex 连续，无 gap、无 overlap。
+- descriptor 按确定顺序 streaming encode。
+
+不得新增第二套互相竞争的 `MissionSegmentPlanner`，除非明确重构并移除原 planner authority。
+
+## 13. MAVFTPMissionTransport — IMPLEMENTED / EXPLICIT ONLY
+
+每段执行：
+
+```text
+Create/Open/Truncate @MISSION/mission.dat
+-> streaming WriteFile
+-> TerminateSession
+-> wait TerminateSession ACK
+-> commit segment
+-> start next SegmentDescriptor
+```
+
+上一段 `TerminateSession ACK` 是启动下一段的 commit gate。`All Write ACKed != Mission Ready`。
+
+Hardware Harness 与 Quick Test 已实现；Quick Test 从 `Current/manifest.json` 读取 Artifact identity，再由 `ConsoleArtifactConsumerV2` 完成完整校验。
+
+当前 Quick Test 会使用默认 segment capacity `65535`，因此常规 1000～7000 items 验证均是单 segment。Legacy explicit harness 可传 segment 参数，但真实多段拼接尚未确认。
+
+## 14. NEXT — Phase 2I-C.3.D
+
+尚未开始：
+
+1. 在 deployment config 中定义 `[mavftp]` segment/retry/timeout keys。
+2. 将 `segment_items` 明确定义为 Wire Mission Items。
+3. Quick Test 读取并传递配置化 segment capacity。
+4. 将 segment retry/timeout 接入现有 client/writer。
+5. 增加明确逐段日志、公开状态与 metrics。
+6. 经用户显式授权，在真实飞控验证多段 CLEAR + NO_CLEAR 拼接。
+
+本阶段不自动授权 MAVFTP production cutover。
+
+## 15. Hardware Evidence Boundary
+
+用户提供的真实硬件观察：
+
+```text
+1000–6000 items: USER-CONFIRMED PASS
+7000 items: USER-CONFIRMED NAK 2 / Write Failed
+```
+
+仓库没有对应日志，飞控源码也未证明精确内部限制。不得写成固定“7000 item limit”。
+
+## 16. FIRMWARE UNKNOWN / NOT PROVEN
+
+- Mission execution timing。
+- custom RGB waypoint execution。
+- `@MISSION/mission.dat` apply semantics。
+- time-control 与 custom `MAV_CMD_USER` behavior。
+- remote integrity 和 Mission Ready verification。
+
+最终 Operator 状态必须区分 Transfer Complete、Verification 与 Ready。
+
+## 17. DEFERRED
+
+- MAVFTP production `RouteUploadManager` cutover，等待配置化多段、硬件证据和明确批准。
+- 10000-drone chunked/sharded Route Store。
+- Replacement Flight、backup drone、conflict predictor 与 safe rejoin trajectory。

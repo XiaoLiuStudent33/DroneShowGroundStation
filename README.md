@@ -1,67 +1,55 @@
-# DroneShowGroundStation
+# DroneGCS
 
-无人机表演地面站项目。
+无人机表演地面站生产项目。
 
 Status: CURRENT
-Last Updated: 2026-08-14
+Last Updated: 2026-08-24
 
-## Start Here
+## 系统边界
 
-完整文档入口：[Docs/README_CN.md](Docs/README_CN.md)
+- 前端：Unreal Engine 5.5.4，负责可视化与操作工作流。
+- 后端：ConsoleGCS C++，负责 MAVLink、Session、Flight Controller 网络与真实命令。
+- 正式飞控：ArduPilot / APM，不是 PX4。
+- 同机生产边界：DSP-GCS localhost UDP。
+- Fleet identity：`Remote IP + UDP Source Port`；MAVLink SYSID 不是 Fleet 唯一身份。
 
-阅读顺序：
+```text
+UnrealGCS
+    <-> DSP-GCS localhost UDP
+ConsoleGCS
+    <-> MAVLink / MAVFTP
+ArduPilot / APM
+```
 
-1. [Architecture Freeze](Docs/Architecture_Freeze_CN.md)
-2. [Current Code Architecture](Docs/Code_Architecture_CN.md)
-3. [Development Status](Docs/Development_Status_CN.md)
-4. 任务相关专项Architecture
-5. Audits与History
+## 当前状态
 
-## Project Structure
+Route Upload 框架已实现，包括 Live + Route Overlay、RouteAssignment、Artifact Workspace、Waypoint 生成与验证、Frozen Assignment、DSP Upload Job、Console `RouteUploadManager` 和 Mission Transport 抽象。
 
-- `ConsoleGCS/`：C++ backend、MAVLink/UDP、DroneSession、Command、DSP Console端。
-- `UnrealGCS/`：UE 5.5.4 frontend、Fleet UI、Route Preview、Cesium/Niagara。
-- `Shared/`：DSP-GCS Protocol、Wire Types和Transport boundary。
-- `Docs/`：当前Authority、专项架构、状态、Audit和History。
-- `Tools/`：独立辅助工具；不属于DroneGCS Production Authority。
+当前生产上传链仍使用：
 
-## Frozen Principles
+```text
+RouteUploadManager
+-> MissionProtocolTransport
+-> ArduPilot
+```
 
-- UE = Frontend / Visualization / Operator Workflow。
-- ConsoleGCS = Backend / MAVLink / Drone Network。
-- 正式同机Transport = localhost UDP DSP-GCS。
-- Fleet identity = Remote IP + UDP Source Port。
-- SYSID不是Fleet unique identity。
-- Offline Session保留，同endpoint恢复原Session/DroneID；跨Console重启持久性尚未保证。
-- `GCSServerAdapterSubsystem`是唯一Network/Worker -> GameThread Fleet submit边界。
-- `FleetManagerSubsystem`是UE real Fleet Authority。
-- Visualization保持one Actor、one Niagara System、N particles。
-- Production不得fallback到Mock。
+MAVFTP 已具备 `MavFtpClient`、FTP ACK/NAK ingress、`MissionFtpCompiler`、分段 writer、Hardware Harness 和 Quick Test，但尚未接管生产 `RouteUploadManager`。下一阶段是 `Phase 2I-C.3.D` 配置化多段 MAVFTP 上传。
 
-## Current Capabilities
+`Production Mission Ready` 尚未证明；真实 Mission timing、RGB waypoint、`@MISSION/mission.dat` apply 和最终 ready verification 仍属于固件未知项。
 
-- Multi-drone telemetry/session/command/ACK。
-- DSP-GCS Schema 3，含selected-drone LED command。
-- 1000-drone Fleet/Cesium/Niagara。
-- Fleet detail selection和command multi-selection。
-- Marquee、Orthographic TopDown、wheel zoom、MMB pan。
-- Drone ID、selection rim和7色LED preview/real command。
-- Native NPZ Route Preview、Playback、Scrub和RouteImport UI。
+## 文档阅读顺序
 
-## Current Next Phase
+1. [文档索引](Docs/README_CN.md)
+2. [Architecture Freeze](Docs/Architecture_Freeze_CN.md)
+3. [当前代码架构](Docs/Code_Architecture_CN.md)
+4. [开发状态](Docs/Development_Status_CN.md)
+5. [Route Upload Architecture](Docs/Route_Upload_Architecture_CN.md)
+6. 当前任务相关专项文档；Audit 和 `Docs/History/` 只作证据或历史参考。
 
-Route Upload前置开发从Live + Route Overlay和RouteAssignment开始。完整顺序见[Development_Status_CN.md](Docs/Development_Status_CN.md)和[Route_Upload_Architecture_CN.md](Docs/Route_Upload_Architecture_CN.md)。
+## 目录
 
-Route Upload当前尚未实现；Mission timing和定制固件Mission语义仍未确认。
-
-## Configuration
-
-- Console deployment：`ConsoleGCS/gcs-config.ini`
-- Console DSP：`ConsoleGCS/config/DSPGCSTransport.ini`
-- UE：`UnrealGCS/Config/DefaultGame.ini`
-
-具体Authority以Architecture文档和Production源码为准。
-
-## History
-
-`Docs/History/`只用于历史参考，不能作为当前Production架构依据。
+- `ConsoleGCS/`：C++ 后端、MAVLink、MAVFTP、Session、Command、Route Upload。
+- `UnrealGCS/`：UE 5.5.4 前端、Fleet UI、Route Workflow、Cesium/Niagara。
+- `Shared/`：DSP-GCS Protocol、Route Artifact、Waypoint 和 Mission wire contract。
+- `Docs/`：当前 Authority、状态、专项架构、Audit 与 History。
+- `Tools/`：独立辅助工具，不属于 DroneGCS Production Authority。

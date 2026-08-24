@@ -1,10 +1,13 @@
 # Legacy BGC2 Route Upload Audit
 
-Status: AUDIT / REFERENCE
-Authority: Legacy BGC2源码证据，不是DroneGCS当前架构Authority
+Status: ARCHIVED / HISTORICAL
+Current Authority: [../Route_Upload_Architecture_CN.md](../Route_Upload_Architecture_CN.md)
+Do Not Use As Current Implementation State
+
+Authority: Legacy BGC2 源码证据，不是 DroneGCS 当前架构 Authority
 Last Updated: 2026-08-14
 Applies To: BGC2 Route conversion/upload compatibility research
-Superseded By For New Design: [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md)
+Superseded By For Current Design: [../Route_Upload_Architecture_CN.md](../Route_Upload_Architecture_CN.md)
 
 ## 1. Purpose 与证据等级
 

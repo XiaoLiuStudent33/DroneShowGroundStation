@@ -1,16 +1,19 @@
 # DroneGCS Route Upload Current Architecture & Gap Audit
 
-Status: AUDIT / REFERENCE
-Authority: 2026-08-14当前源码差距审计，不是架构Authority
+Status: ARCHIVED / HISTORICAL
+Current Authority: [../Route_Upload_Architecture_CN.md](../Route_Upload_Architecture_CN.md)
+Do Not Use As Current Implementation State
+
+Authority: 2026-08-14 源码差距审计快照，不是当前架构 Authority
 Last Updated: 2026-08-14
 Applies To: Route Upload规划证据
-Architecture Authority: [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md)
+Architecture Authority: [../Route_Upload_Architecture_CN.md](../Route_Upload_Architecture_CN.md)
 
 ## 1. Executive Summary
 
-当前DroneGCS已具备Route Upload前半段基础：Native NPZ、Local ENU RouteData、Show Origin、Playback、Route Import、Fleet/Session/Remote Endpoint、DSP-GCS和shared UDP sender。
+在 2026-08-14 审计快照中，DroneGCS仅具备Route Upload前半段基础：Native NPZ、Local ENU RouteData、Show Origin、Playback、Route Import、Fleet/Session/Remote Endpoint、DSP-GCS和shared UDP sender。
 
-当前完全缺少：RouteAssignment、Waypoint artifacts/validation、QGC parser、Mission encoder、MAVFTP client、FTP ingress、UploadManager、job/progress DSP messages、Firmware Capability和Mission Ready verification。
+该历史快照当时尚缺少：RouteAssignment、Waypoint artifacts/validation、QGC parser、Mission encoder、MAVFTP client、FTP ingress、UploadManager、job/progress DSP messages、Firmware Capability和 Mission Ready verification；其中多项已在后续版本实现，当前状态必须查看上方 Current Authority。
 
 ## 2. Current Foundations
 
