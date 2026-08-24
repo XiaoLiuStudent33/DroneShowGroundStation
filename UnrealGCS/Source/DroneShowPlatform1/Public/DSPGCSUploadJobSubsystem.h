@@ -139,6 +139,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "DSP-GCS|Upload Job")
 	bool PrepareForNewUploadJob(FString& OutError);
 
+	/** Read-only preflight used by transactional Route Dataset replacement. */
+	bool CanPrepareForNewUploadJob(FString& OutError) const;
+
 	UFUNCTION(BlueprintCallable, Category = "DSP-GCS|Upload Job")
 	bool StartUploadJob(
 		const FString& RequestedUploadJobID,
@@ -173,6 +176,22 @@ public:
 	FDSPGCSUploadJobCommandStatus GetCommandStatus() const;
 
 	const FDSPGCSUploadJobStateMirror& GetStateMirror() const { return Mirror; }
+
+#if WITH_DEV_AUTOMATION_TESTS
+	void BindUploadJobForTest(const std::string& UploadJobID)
+	{
+		ActiveJobID = UploadJobID;
+		Mirror.PrepareForNewJob(UploadJobID);
+	}
+	bool ApplySnapshotForTest(const dspgcs::UploadJobSnapshotDTO& Snapshot)
+	{
+		return Mirror.ApplySnapshot(Snapshot);
+	}
+	bool ApplyRoutePageForTest(const dspgcs::UploadJobRouteStatePageDTO& Page)
+	{
+		return Mirror.ApplyRoutePage(Page);
+	}
+#endif
 
 private:
 	bool CaptureCurrentAuthorityBindings(

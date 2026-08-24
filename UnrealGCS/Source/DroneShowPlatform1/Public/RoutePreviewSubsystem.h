@@ -36,6 +36,17 @@ public:
 	/** Replaces the active route only after the import UI has validated its metadata. */
 	bool CommitPreparedRoute(FString& OutError);
 
+	/**
+	 * Validates the prepared route, Show Origin and Frame-0 overlay as one
+	 * candidate, then atomically replaces the active Route Dataset.
+	 */
+	bool CommitPreparedRouteForWorkflow(
+		double Latitude,
+		double Longitude,
+		double Altitude,
+		bool bEnableOverlay,
+		FString& OutError);
+
 	bool HasPreparedRoute() const { return PreparedRouteData.IsLoaded(); }
 	int32 GetPreparedFrameCount() const { return PreparedRouteData.FrameCount; }
 	int32 GetPreparedDroneCount() const { return PreparedRouteData.DroneCount; }

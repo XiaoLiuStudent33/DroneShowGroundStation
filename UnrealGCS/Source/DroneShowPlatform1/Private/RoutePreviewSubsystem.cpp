@@ -85,6 +85,117 @@ bool URoutePreviewSubsystem::CommitPreparedRoute(FString& OutError)
 	return true;
 }
 
+bool URoutePreviewSubsystem::CommitPreparedRouteForWorkflow(
+	const double Latitude,
+	const double Longitude,
+	const double Altitude,
+	const bool bEnableOverlay,
+	FString& OutError)
+{
+	OutError.Reset();
+	if (!PreparedRouteData.IsLoaded())
+	{
+		OutError = TEXT("No validated route import is prepared.");
+		return false;
+	}
+	if (!FMath::IsFinite(Latitude) || Latitude < -90.0 || Latitude > 90.0)
+	{
+		OutError = TEXT("Latitude must be finite and in [-90,90].");
+		return false;
+	}
+	if (!FMath::IsFinite(Longitude) || Longitude < -180.0 || Longitude > 180.0)
+	{
+		OutError = TEXT("Longitude must be finite and in [-180,180].");
+		return false;
+	}
+	if (!FMath::IsFinite(Altitude))
+	{
+		OutError = TEXT("Altitude must be finite.");
+		return false;
+	}
+
+	ADroneFleetVisualizationActor* VisualizationActor = nullptr;
+	TArray<FVector> CandidateWorldPositions;
+	if (bEnableOverlay)
+	{
+		VisualizationActor = FindVisualizationActor();
+		if (!VisualizationActor)
+		{
+			OutError = TEXT("DroneFleetVisualizationActor is unavailable in the current world.");
+			return false;
+		}
+		TArray<FVector3f> CandidateFramePositions;
+		CandidateFramePositions.SetNumUninitialized(PreparedRouteData.DroneCount);
+		for (int32 RouteSlotIndex = 0;
+			RouteSlotIndex < PreparedRouteData.DroneCount;
+			++RouteSlotIndex)
+		{
+			CandidateFramePositions[RouteSlotIndex] =
+				PreparedRouteData.GetPosition(0, RouteSlotIndex);
+		}
+		FVector CandidateOriginWorld = FVector::ZeroVector;
+		if (!VisualizationActor->ConvertRouteENUPositionsToWorld(
+			CandidateFramePositions,
+			Latitude,
+			Longitude,
+			Altitude,
+			CandidateWorldPositions,
+			CandidateOriginWorld,
+			OutError))
+		{
+			return false;
+		}
+		if (CandidateWorldPositions.Num() != PreparedRouteData.DroneCount)
+		{
+			OutError = TEXT("Route overlay conversion returned an unexpected target count.");
+			return false;
+		}
+	}
+
+	// Nothing above this line changes the active Dataset or render state.
+	PreparedRouteData.ShowOriginLatitude = Latitude;
+	PreparedRouteData.ShowOriginLongitude = Longitude;
+	PreparedRouteData.ShowOriginAltitude = Altitude;
+	PreparedRouteData.bShowOriginSet = true;
+	StopPlaybackTicker();
+	PlaybackState = ERoutePreviewPlaybackState::Stopped;
+	CurrentTimeSeconds = 0.0;
+	if (bPreviewModeActive)
+	{
+		ExitPreviewMode();
+	}
+
+	ActiveRouteData = MakeShared<FRoutePreviewData, ESPMode::ThreadSafe>(
+		MoveTemp(PreparedRouteData));
+	PreparedRouteData = FRoutePreviewData{};
+	const FRoutePreviewData& RouteData = GetActiveRouteData();
+	++RouteDatasetGeneration;
+	CurrentFrame = 0;
+	FramePositionsENU.SetNumUninitialized(RouteData.DroneCount);
+	FrameColors.SetNumUninitialized(RouteData.DroneCount);
+	ClearRouteOverlayRenderData();
+	bRouteOverlayEnabled = bEnableOverlay;
+	if (bEnableOverlay)
+	{
+		CachedRouteTargetWorldPositions = MoveTemp(CandidateWorldPositions);
+		VisualizationActor->SetRouteTargetPositions(CachedRouteTargetWorldPositions);
+		const bool bCanShow =
+			VisualizationActor->GetVisualizationMode() == EGCSVisualizationMode::Live;
+		VisualizationActor->SetRouteTargetsVisible(bCanShow);
+		bRouteOverlayVisible = bCanShow && VisualizationActor->AreRouteTargetsVisible();
+	}
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[RoutePreview] Workflow import committed Path=%s Frames=%d Drones=%d Overlay=%s"),
+		*PreparedRouteFilePath,
+		RouteData.FrameCount,
+		RouteData.DroneCount,
+		bRouteOverlayVisible ? TEXT("Visible") : TEXT("Hidden"));
+	PreparedRouteFilePath.Reset();
+	return true;
+}
+
 bool URoutePreviewSubsystem::LoadRoute(const FString& FilePath, FString& OutError)
 {
 	OutError.Reset();

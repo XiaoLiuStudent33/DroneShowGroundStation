@@ -94,8 +94,11 @@ struct FGCSRouteWorkflowCommandTestHooks
 	TFunction<bool(FString&)> OpenFolderDialog;
 	TFunction<bool(const FString&, FString&)> PrepareRoute;
 	TFunction<bool(FString&)> CommitRoute;
+	TFunction<bool(double, double, double, bool, FString&)> CommitRouteWorkflow;
 	TFunction<bool(double, double, double, FString&)> SetOrigin;
 	TFunction<bool(bool, FString&)> SetOverlay;
+	TFunction<bool(FString&)> CanReplaceUploadJob;
+	TFunction<bool(FString&)> ClearUploadJobForNewDataset;
 	TFunction<bool(const FString&, FString&)> SetWorkspaceRoot;
 	TFunction<bool(FString&, FString&)> ResolveWorkspaceRoot;
 	TFunction<bool(int32, FString&)> StartGeneration;
@@ -188,16 +191,28 @@ public:
 	void ClickOutputBrowseForTest() { HandleOutputBrowseClicked(); }
 	void ClickLoadPreviewForTest() { HandleLoadPreviewClicked(); }
 	void ClickGenerateWaypointsForTest() { HandleGenerateWaypointsClicked(); }
+	void ClickCloseForTest() { HandleRouteCloseClicked(); }
+	void ClickConvertTabForTest() { HandleRouteConvertTabClicked(); }
+	void ClickUploadTabForTest() { HandleRouteUploadTabClicked(); }
 	void RefreshCommandControlsForTest() { UpdateCommandControlState(); }
 	void RefreshReadOnlyStateForTest() { RefreshReadOnlyState(); }
 	const FString& GetSelectedRoutePathForTest() const { return SelectedRouteImportFilePath; }
 	const FString& GetCommandErrorForTest() const { return CommandErrorMessage; }
 	double GetCommandErrorExpiryForTest() const { return CommandErrorExpiresAtSeconds; }
+	bool IsViewVisibleForTest() const { return bViewVisible; }
+	int32 GetSelectedPageIndexForTest() const { return SelectedPageIndex; }
+	int32 GetCloseRequestCountForTest() const { return CloseRequestCountForTest; }
 #endif
 
 private:
 	UFUNCTION()
 	void HandleRouteWorkflowClicked();
+	UFUNCTION()
+	void HandleRouteCloseClicked();
+	UFUNCTION()
+	void HandleRouteConvertTabClicked();
+	UFUNCTION()
+	void HandleRouteUploadTabClicked();
 	UFUNCTION()
 	void HandleRouteBrowseClicked();
 	UFUNCTION()
@@ -231,6 +246,7 @@ private:
 		FName PreferredInstanceName,
 		FName UniqueRequiredChildName) const;
 	void ApplyReadOnlyControlState();
+	void SelectRoutePage(int32 PageIndex);
 	void BindCommandControls();
 	void UnbindCommandControls();
 	FGCSRouteWorkflowCommandGateInputs GatherCommandGateInputs() const;
@@ -263,6 +279,7 @@ private:
 
 	TWeakObjectPtr<UUserWidget> RouteConvertWidgetRef;
 	TWeakObjectPtr<UUserWidget> RouteUploadWidgetRef;
+	TMap<FName, TWeakObjectPtr<UWidget>> WorkflowWidgets;
 	TMap<FName, TWeakObjectPtr<UWidget>> ConvertWidgets;
 	TMap<FName, TWeakObjectPtr<UWidget>> UploadWidgets;
 
@@ -287,11 +304,14 @@ private:
 	bool bCommandInFlight = false;
 	FTSTicker::FDelegateHandle RefreshTickerHandle;
 	bool bBindingValid = false;
+	bool bViewVisible = false;
+	int32 SelectedPageIndex = 0;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	TFunction<UUserWidget*()> WorkflowFactoryForTest;
 	bool bSkipRequiredWidgetBindingForTest = false;
 	int32 WorkflowCreationCount = 0;
+	int32 CloseRequestCountForTest = 0;
 	FGCSRouteWorkflowCommandTestHooks CommandTestHooks;
 	TOptional<FGCSRouteWorkflowCommandGateInputs> CommandGateInputsForTest;
 #endif

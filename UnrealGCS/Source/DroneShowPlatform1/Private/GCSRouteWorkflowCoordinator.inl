@@ -167,7 +167,7 @@ void UGCSRouteWorkflowCoordinator::Shutdown()
 	if (RouteWorkflowWidget) RouteWorkflowWidget->RemoveFromParent();
 	RouteWorkflowWidget = nullptr;
 	RouteConvertWidgetRef.Reset(); RouteUploadWidgetRef.Reset();
-	ConvertWidgets.Reset(); UploadWidgets.Reset();
+	WorkflowWidgets.Reset(); ConvertWidgets.Reset(); UploadWidgets.Reset();
 	OpenWorkflowButtonRef.Reset(); RightPanelWidgetRef.Reset(); GameInstanceRef.Reset();
 	bBindingValid = false;
 	bUploadArtifactMismatch = false;
@@ -177,11 +177,14 @@ void UGCSRouteWorkflowCoordinator::Shutdown()
 	CommandErrorExpiresAtSeconds = 0.0;
 	CommandErrorCategory = EGCSRouteWorkflowCommandErrorCategory::None;
 	bCommandInFlight = false;
+	bViewVisible = false;
+	SelectedPageIndex = 0;
 #if WITH_DEV_AUTOMATION_TESTS
 	WorkflowFactoryForTest = {};
 	bSkipRequiredWidgetBindingForTest = false;
 	CommandTestHooks = {};
 	CommandGateInputsForTest.Reset();
+	CloseRequestCountForTest = 0;
 #endif
 }
 
@@ -221,7 +224,17 @@ bool UGCSRouteWorkflowCoordinator::ShowRouteWorkflow(FString& OutError)
 	const bool bTest = false;
 #endif
 	if (!bTest && !RouteWorkflowWidget->IsInViewport()) RouteWorkflowWidget->AddToViewport(100);
+	SelectRoutePage(SelectedPageIndex);
+	if (RouteWorkflowWidget->WidgetTree)
+	{
+		if (UWidget* AuthoredRoot = RouteWorkflowWidget->WidgetTree->FindWidget(
+			TEXT("BORDER_RouteWorkflow")))
+		{
+			AuthoredRoot->SetVisibility(ESlateVisibility::Visible);
+		}
+	}
 	RouteWorkflowWidget->SetVisibility(ESlateVisibility::Visible);
+	bViewVisible = true;
 	RefreshReadOnlyState();
 #if WITH_DEV_AUTOMATION_TESTS
 	if (!bTest)
@@ -229,6 +242,52 @@ bool UGCSRouteWorkflowCoordinator::ShowRouteWorkflow(FString& OutError)
 	if (UDSPGCSUploadJobSubsystem* Upload = GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>()) Upload->NotifyUploadPageOpened();
 	StartRefreshTicker();
 	return true;
+}
+
+void UGCSRouteWorkflowCoordinator::HandleRouteCloseClicked()
+{
+	if (!IsInGameThread() || !RouteWorkflowWidget) return;
+	if (UWidgetSwitcher* Switcher = GCSRouteWorkflowPrivate::Get<UWidgetSwitcher>(
+		WorkflowWidgets, TEXT("SWITCHER_RoutePages")))
+	{
+		SelectedPageIndex = Switcher->GetActiveWidgetIndex();
+	}
+	if (RouteWorkflowWidget->WidgetTree)
+	{
+		if (UWidget* AuthoredRoot = RouteWorkflowWidget->WidgetTree->FindWidget(
+			TEXT("BORDER_RouteWorkflow")))
+		{
+			AuthoredRoot->SetVisibility(ESlateVisibility::Collapsed);
+		}
+	}
+	RouteWorkflowWidget->SetVisibility(ESlateVisibility::Collapsed);
+	bViewVisible = false;
+#if WITH_DEV_AUTOMATION_TESTS
+	++CloseRequestCountForTest;
+#endif
+}
+
+void UGCSRouteWorkflowCoordinator::HandleRouteConvertTabClicked()
+{
+	SelectRoutePage(0);
+}
+
+void UGCSRouteWorkflowCoordinator::HandleRouteUploadTabClicked()
+{
+	SelectRoutePage(1);
+}
+
+void UGCSRouteWorkflowCoordinator::SelectRoutePage(const int32 PageIndex)
+{
+	if (UWidgetSwitcher* Switcher = GCSRouteWorkflowPrivate::Get<UWidgetSwitcher>(
+		WorkflowWidgets, TEXT("SWITCHER_RoutePages")))
+	{
+		if (Switcher->GetNumWidgets() > 0)
+		{
+			SelectedPageIndex = FMath::Clamp(PageIndex, 0, Switcher->GetNumWidgets() - 1);
+			Switcher->SetActiveWidgetIndex(SelectedPageIndex);
+		}
+	}
 }
 
 UUserWidget* UGCSRouteWorkflowCoordinator::CreateRouteWorkflowWidget(FString& OutError)
@@ -302,6 +361,7 @@ bool UGCSRouteWorkflowCoordinator::BindWorkflowWidgets(UUserWidget* Workflow, FS
 		TEXT("TXT_UploadPercent"),TEXT("EDT_MaxConcurrency"),TEXT("BTN_StartUpload"),TEXT("BTN_PauseUpload"),
 		TEXT("TXT_CurrentMaxConcurrencyValue"),TEXT("BTN_ResumeUpload"),TEXT("BTN_CancelUpload"),
 		TEXT("BTN_RetryFailed"),TEXT("BTN_ApplyMaxConcurrency")}), UploadWidgets, OutError)) return false;
+	WorkflowWidgets = MoveTemp(WorkflowMap);
 	RouteConvertWidgetRef = Convert; RouteUploadWidgetRef = Upload;
 	ClearRouteListModel();
 	ApplyReadOnlyControlState();
@@ -328,6 +388,21 @@ void UGCSRouteWorkflowCoordinator::ApplyReadOnlyControlState()
 void UGCSRouteWorkflowCoordinator::BindCommandControls()
 {
 	using namespace GCSRouteWorkflowPrivate;
+	if (UButton* Button = Get<UButton>(WorkflowWidgets, TEXT("BTN_RouteClose")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteCloseClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteCloseClicked);
+	}
+	if (UButton* Button = Get<UButton>(WorkflowWidgets, TEXT("BTN_RouteConvertTab")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteConvertTabClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteConvertTabClicked);
+	}
+	if (UButton* Button = Get<UButton>(WorkflowWidgets, TEXT("BTN_RouteUploadTab")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteUploadTabClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteUploadTabClicked);
+	}
 	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_RouteBrowse")))
 	{
 		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteBrowseClicked);
@@ -383,6 +458,12 @@ void UGCSRouteWorkflowCoordinator::BindCommandControls()
 void UGCSRouteWorkflowCoordinator::UnbindCommandControls()
 {
 	using namespace GCSRouteWorkflowPrivate;
+	if (UButton* Button = Get<UButton>(WorkflowWidgets, TEXT("BTN_RouteClose")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteCloseClicked);
+	if (UButton* Button = Get<UButton>(WorkflowWidgets, TEXT("BTN_RouteConvertTab")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteConvertTabClicked);
+	if (UButton* Button = Get<UButton>(WorkflowWidgets, TEXT("BTN_RouteUploadTab")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteUploadTabClicked);
 	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_RouteBrowse")))
 		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteBrowseClicked);
 	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_OutputBrowse")))
@@ -537,13 +618,32 @@ void UGCSRouteWorkflowCoordinator::HandleLoadPreviewClicked()
 {
 	if (!IsInGameThread() || bCommandInFlight || !GameInstanceRef.IsValid()) return;
 	URoutePreviewSubsystem* Preview = GameInstanceRef->GetSubsystem<URoutePreviewSubsystem>();
+	UDSPGCSUploadJobSubsystem* Upload =
+		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
 	const FGCSRouteWorkflowCommandGateInputs Inputs = GatherCommandGateInputs();
 	if (Inputs.bGenerationActive || !Inputs.bHasPreparedRoute) return;
+
+	FString Error;
+#if WITH_DEV_AUTOMATION_TESTS
+	const bool bMayReplaceUploadJob = CommandTestHooks.CanReplaceUploadJob
+		? CommandTestHooks.CanReplaceUploadJob(Error)
+		: (Upload && Upload->CanPrepareForNewUploadJob(Error));
+#else
+	const bool bMayReplaceUploadJob =
+		Upload && Upload->CanPrepareForNewUploadJob(Error);
+#endif
+	if (!bMayReplaceUploadJob)
+	{
+		SetCommandError(
+			EGCSRouteWorkflowCommandErrorCategory::Preview,
+			TEXT("当前仍有上传任务运行，请先等待完成或显式取消。"));
+		UpdateCommandControlState();
+		return;
+	}
 
 	double Latitude = 0.0;
 	double Longitude = 0.0;
 	double Altitude = 0.0;
-	FString Error;
 	using namespace GCSRouteWorkflowPrivate;
 	const UEditableTextBox* LatitudeInput = Get<UEditableTextBox>(ConvertWidgets, TEXT("EDT_OriginLatitude"));
 	const UEditableTextBox* LongitudeInput = Get<UEditableTextBox>(ConvertWidgets, TEXT("EDT_OriginLongitude"));
@@ -563,24 +663,45 @@ void UGCSRouteWorkflowCoordinator::HandleLoadPreviewClicked()
 	{
 		TGuardValue<bool> Guard(bCommandInFlight, true);
 #if WITH_DEV_AUTOMATION_TESTS
-		const bool bCommitted = CommandTestHooks.CommitRoute
-			? CommandTestHooks.CommitRoute(Error)
-			: (Preview && Preview->CommitPreparedRoute(Error));
-		const bool bOriginSet = bCommitted && (CommandTestHooks.SetOrigin
-			? CommandTestHooks.SetOrigin(Latitude, Longitude, Altitude, Error)
-			: (Preview && Preview->SetShowOrigin(Latitude, Longitude, Altitude, Error)));
-		bSucceeded = bOriginSet && (CommandTestHooks.SetOverlay
-			? CommandTestHooks.SetOverlay(true, Error)
-			: (Preview && Preview->SetRouteOverlayEnabled(true, Error)));
+		if (CommandTestHooks.CommitRouteWorkflow)
+		{
+			bSucceeded = CommandTestHooks.CommitRouteWorkflow(
+				Latitude, Longitude, Altitude, true, Error);
+		}
+		else if (CommandTestHooks.CommitRoute || CommandTestHooks.SetOrigin ||
+			CommandTestHooks.SetOverlay)
+		{
+			const bool bCommitted = CommandTestHooks.CommitRoute
+				? CommandTestHooks.CommitRoute(Error)
+				: false;
+			const bool bOriginSet = bCommitted && CommandTestHooks.SetOrigin
+				&& CommandTestHooks.SetOrigin(Latitude, Longitude, Altitude, Error);
+			bSucceeded = bOriginSet && CommandTestHooks.SetOverlay
+				&& CommandTestHooks.SetOverlay(true, Error);
+		}
+		else
+		{
+			bSucceeded = Preview && Preview->CommitPreparedRouteForWorkflow(
+				Latitude, Longitude, Altitude, true, Error);
+		}
 #else
-		bSucceeded = Preview
-			&& Preview->CommitPreparedRoute(Error)
-			&& Preview->SetShowOrigin(Latitude, Longitude, Altitude, Error)
-			&& Preview->SetRouteOverlayEnabled(true, Error);
+		bSucceeded = Preview && Preview->CommitPreparedRouteForWorkflow(
+			Latitude, Longitude, Altitude, true, Error);
 #endif
+		if (bSucceeded)
+		{
+#if WITH_DEV_AUTOMATION_TESTS
+			bSucceeded = CommandTestHooks.ClearUploadJobForNewDataset
+				? CommandTestHooks.ClearUploadJobForNewDataset(Error)
+				: (Upload && Upload->PrepareForNewUploadJob(Error));
+#else
+			bSucceeded = Upload && Upload->PrepareForNewUploadJob(Error);
+#endif
+		}
 	}
 	if (bSucceeded)
 	{
+		ClearRouteListModel();
 		ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview);
 		RefreshReadOnlyState();
 	}

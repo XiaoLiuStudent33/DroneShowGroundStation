@@ -336,6 +336,38 @@ bool UDSPGCSUploadJobSubsystem::StartUploadJob(
 bool UDSPGCSUploadJobSubsystem::PrepareForNewUploadJob(FString& OutError)
 {
 	check(IsInGameThread());
+	if (!CanPrepareForNewUploadJob(OutError))
+	{
+		return false;
+	}
+	ClearPendingSnapshotRequest();
+	bAggregateRefreshRequired = false;
+	TerminalAggregateRefreshAttemptCount = 0;
+	PendingCommandFrame.clear();
+	PendingAttemptCount = 0;
+	ActiveJobID.clear();
+	Mirror.Reset();
+	bCommandTimedOut = false;
+	bHasCommandAck = false;
+	LastCommandAckStatus = dspgcs::UploadJobCommandAckStatus::Rejected;
+	LastCommandResultCode = dspgcs::UploadJobErrorCode::None;
+	LastSafeDiagnostic.Reset();
+	RetryAtSeconds = 0.0;
+	SnapshotRetryAtSeconds = 0.0;
+	NextSnapshotPollSeconds = 0.0;
+	FDSPGCSUploadJobIncomingFrame DiscardedFrame;
+	while (IncomingFrames.Dequeue(DiscardedFrame))
+	{
+		// A successful Dataset replacement is the sole owner-authorized point
+		// at which cached frames for the previous Job may be discarded.
+	}
+	OutError.Reset();
+	return true;
+}
+
+bool UDSPGCSUploadJobSubsystem::CanPrepareForNewUploadJob(FString& OutError) const
+{
+	check(IsInGameThread());
 	if (bCommandInFlight)
 	{
 		OutError = TEXT("Cannot prepare a new Upload Job while a command is awaiting ACK.");
@@ -351,18 +383,6 @@ bool UDSPGCSUploadJobSubsystem::PrepareForNewUploadJob(FString& OutError)
 		OutError = TEXT("Only a terminal or validation-failed Upload Job can be prepared for replacement.");
 		return false;
 	}
-	ClearPendingSnapshotRequest();
-	bAggregateRefreshRequired = false;
-	TerminalAggregateRefreshAttemptCount = 0;
-	PendingCommandFrame.clear();
-	PendingAttemptCount = 0;
-	ActiveJobID.clear();
-	Mirror.Reset();
-	bCommandTimedOut = false;
-	bHasCommandAck = false;
-	LastCommandAckStatus = dspgcs::UploadJobCommandAckStatus::Rejected;
-	LastCommandResultCode = dspgcs::UploadJobErrorCode::None;
-	LastSafeDiagnostic.Reset();
 	OutError.Reset();
 	return true;
 }

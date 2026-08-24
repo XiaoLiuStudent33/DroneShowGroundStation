@@ -7,7 +7,9 @@
 #include "Components/EditableTextBox.h"
 #include "Components/ListView.h"
 #include "Components/TextBlock.h"
+#include "Components/WidgetSwitcher.h"
 #include "DSPGCSUploadJobProtocol.h"
+#include "DSPGCSUploadJobSubsystem.h"
 #include "HAL/PlatformTime.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowOwnershipTest,"DroneGCS.UI.RouteWorkflow.OwnershipAndTeardown",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
@@ -51,9 +53,34 @@ bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
 		CurrentConcurrency->GetText().ToString(),FString(TEXT("Current: --")));
 	TestEqual(TEXT("Created once"),C->GetWorkflowCreationCountForTest(),1);
 	TestTrue(TEXT("Ticker active"),C->IsRefreshTickerActiveForTest());
+	C->ClickUploadTabForTest();
+	TestEqual(TEXT("Upload tab selected"),C->GetSelectedPageIndexForTest(),1);
+	C->ClickCloseForTest();
+	TestFalse(TEXT("Close hides view"),C->IsViewVisibleForTest());
+	TestEqual(TEXT("Close collapses retained widget"),First->GetVisibility(),ESlateVisibility::Collapsed);
+	TestTrue(TEXT("Close keeps refresh ticker active"),C->IsRefreshTickerActiveForTest());
+	TestTrue(TEXT("Closed Show"),C->ShowRouteWorkflow(Error));
+	TestEqual(TEXT("Selected tab survives Close/Open"),C->GetSelectedPageIndexForTest(),1);
 	TestTrue(TEXT("Repeated Show"),C->ShowRouteWorkflow(Error));
 	TestTrue(TEXT("Repeated Show reuses"),C->GetWorkflowWidgetForTest()==First);
 	TestEqual(TEXT("Still created once"),C->GetWorkflowCreationCountForTest(),1);
+	UButton* CloseButton=First&&First->WidgetTree
+		?Cast<UButton>(First->WidgetTree->FindWidget(TEXT("BTN_RouteClose"))):nullptr;
+	TestNotNull(TEXT("Close button is C++ bound"),CloseButton);
+	const int32 CloseCountBefore=C->GetCloseRequestCountForTest();
+	if(CloseButton) CloseButton->OnClicked.Broadcast();
+	TestEqual(TEXT("One click dispatches one C++ Close handler"),
+		C->GetCloseRequestCountForTest(),CloseCountBefore+1);
+	TestTrue(TEXT("Show after authored Close"),C->ShowRouteWorkflow(Error));
+	TestTrue(TEXT("Repeated Show remains idempotent"),C->ShowRouteWorkflow(Error));
+	if(CloseButton) CloseButton->OnClicked.Broadcast();
+	TestEqual(TEXT("Reopen does not duplicate Close Delegate"),
+		C->GetCloseRequestCountForTest(),CloseCountBefore+2);
+	TestTrue(TEXT("Show after second authored Close"),C->ShowRouteWorkflow(Error));
+	UWidget* AuthoredRoot=First&&First->WidgetTree
+		?First->WidgetTree->FindWidget(TEXT("BORDER_RouteWorkflow")):nullptr;
+	TestTrue(TEXT("Open restores authored root visibility"),
+		AuthoredRoot&&AuthoredRoot->GetVisibility()==ESlateVisibility::Visible);
 	First->SetVisibility(ESlateVisibility::Hidden);
 	TestTrue(TEXT("Hidden Show"),C->ShowRouteWorkflow(Error));
 	TestTrue(TEXT("Hidden Show reuses"),C->GetWorkflowWidgetForTest()==First);
@@ -61,6 +88,266 @@ bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
 	C->Shutdown();
 	TestNull(TEXT("Reference cleared"),C->GetWorkflowWidgetForTest());
 	TestFalse(TEXT("Ticker stopped"),C->IsRefreshTickerActiveForTest());
+	GI->Shutdown();
+	return true;
+}
+
+namespace GCSRouteWorkflowViewStateTest
+{
+	std::string ID(const char Value) { return std::string(32, Value); }
+
+	dspgcs::UploadJobSnapshotDTO Snapshot(
+		const std::string& JobID,
+		const char Token,
+		const dspgcs::UploadJobState State,
+		const uint64 Revision,
+		const uint64 CompletedBytes)
+	{
+		dspgcs::UploadJobSnapshotDTO Result;
+		Result.uploadJobId = JobID;
+		Result.snapshotToken = ID(Token);
+		Result.jobState = State;
+		Result.jobRevision = Revision;
+		Result.snapshotSequence = Revision;
+		Result.routeDeltaSequence = Revision;
+		Result.matchedCount = 1;
+		Result.totalBytes = 345800;
+		Result.bytesCompleted = CompletedBytes;
+		Result.throughputBytesPerSecond = CompletedBytes > 0 ? 39166 : 0;
+		Result.elapsedMs = CompletedBytes > 0 ? 8829 : 0;
+		Result.effectiveMaxConcurrentUploads = 1;
+		switch (State)
+		{
+		case dspgcs::UploadJobState::Completed: Result.succeededCount = 1; break;
+		case dspgcs::UploadJobState::Failed: Result.failedCount = 1; break;
+		case dspgcs::UploadJobState::Cancelled: Result.cancelledCount = 1; break;
+		case dspgcs::UploadJobState::Running: Result.uploadingCount = 1; break;
+		default: Result.waitingCount = 1; break;
+		}
+		return Result;
+	}
+
+	dspgcs::UploadJobRouteStatePageDTO Page(
+		const dspgcs::UploadJobSnapshotDTO& Snapshot)
+	{
+		dspgcs::UploadJobRouteStatePageDTO Result;
+		Result.uploadJobId = Snapshot.uploadJobId;
+		Result.snapshotToken = Snapshot.snapshotToken;
+		Result.jobRevision = Snapshot.jobRevision;
+		Result.totalRouteCount = 1;
+		Result.pageStart = 0;
+		Result.nextPageStart = 1;
+		Result.hasMore = false;
+		dspgcs::UploadRouteStateDTO Route;
+		Route.routeSlotIndex = 0;
+		Route.droneId = "Drone001";
+		Route.totalBytes = Snapshot.totalBytes;
+		Route.bytesCompleted = Snapshot.bytesCompleted;
+		Route.attemptCount = 1;
+		if (Snapshot.jobState == dspgcs::UploadJobState::Completed)
+			Route.state = dspgcs::UploadRouteState::Succeeded;
+		else if (Snapshot.jobState == dspgcs::UploadJobState::Failed)
+			Route.state = dspgcs::UploadRouteState::Failed;
+		else if (Snapshot.jobState == dspgcs::UploadJobState::Cancelled)
+			Route.state = dspgcs::UploadRouteState::Cancelled;
+		else Route.state = dspgcs::UploadRouteState::Uploading;
+		Result.routes.push_back(Route);
+		return Result;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGCSRouteWorkflowViewStatePersistenceTest,
+	"DroneGCS.UI.RouteWorkflow.ViewStatePersistence",
+	EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowViewStatePersistenceTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	using namespace GCSRouteWorkflowViewStateTest;
+	UGameInstance* GI=NewObject<UGameInstance>(GEngine);
+	if(!TestNotNull(TEXT("GameInstance"),GI)) return false;
+	GI->InitializeStandalone(TEXT("GCSRouteWorkflowViewStatePersistenceTest"));
+	UDSPGCSUploadJobSubsystem* Upload=GI->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	UGCSRouteWorkflowCoordinator* C=NewObject<UGCSRouteWorkflowCoordinator>(GI);
+	C->InitializeForTest(GI);
+	UClass* WorkflowClass=LoadClass<UUserWidget>(nullptr,TEXT("/Game/UI/WBP_GCS_RouteWorkflow.WBP_GCS_RouteWorkflow_C"));
+	if(!TestNotNull(TEXT("Workflow class"),WorkflowClass)||!TestNotNull(TEXT("Upload subsystem"),Upload))
+	{
+		GI->Shutdown(); return false;
+	}
+	C->SetWorkflowFactoryForTest([GI,WorkflowClass](){return CreateWidget<UUserWidget>(GI,WorkflowClass);},false);
+	FString Error;
+	if(!TestTrue(TEXT("Show workflow"),C->ShowRouteWorkflow(Error)))
+	{
+		AddError(Error); C->Shutdown(); GI->Shutdown(); return false;
+	}
+	UUserWidget* Workflow=C->GetWorkflowWidgetForTest();
+	UUserWidget* Convert=Workflow&&Workflow->WidgetTree
+		?Cast<UUserWidget>(Workflow->WidgetTree->FindWidget(TEXT("WBP_GCS_RouteConvert"))):nullptr;
+	UUserWidget* UploadPage=Workflow&&Workflow->WidgetTree
+		?Cast<UUserWidget>(Workflow->WidgetTree->FindWidget(TEXT("WBP_GCS_RouteUpload"))):nullptr;
+	if(!TestNotNull(TEXT("Convert page"),Convert)||!TestNotNull(TEXT("Upload page"),UploadPage))
+	{
+		C->Shutdown(); GI->Shutdown(); return false;
+	}
+	const auto Text=[UploadPage](const FName Name)
+	{
+		const UTextBlock* Value=UploadPage&&UploadPage->WidgetTree
+			?Cast<UTextBlock>(UploadPage->WidgetTree->FindWidget(Name)):nullptr;
+		return Value?Value->GetText().ToString():FString();
+	};
+	const auto BindState=[this,Upload,C](const char JobChar,const char Token,
+		const dspgcs::UploadJobState State,const uint64 Revision,const uint64 Bytes)
+	{
+		const std::string JobID=ID(JobChar);
+		Upload->BindUploadJobForTest(JobID);
+		const auto Aggregate=Snapshot(JobID,Token,State,Revision,Bytes);
+		TestTrue(TEXT("Aggregate accepted"),Upload->ApplySnapshotForTest(Aggregate));
+		TestTrue(TEXT("Route page accepted"),Upload->ApplyRoutePageForTest(Page(Aggregate)));
+		C->RefreshReadOnlyStateForTest();
+	};
+	const auto ClearTerminal=[this,Upload]()
+	{
+		FString ClearError;
+		TestTrue(TEXT("Terminal Job may be cleared only explicitly"),
+			Upload->PrepareForNewUploadJob(ClearError));
+	};
+
+	BindState('a','1',dspgcs::UploadJobState::Completed,10,345800);
+	TestTrue(TEXT("Succeeded presented"),Text(TEXT("TXT_UploadJobStateValue")).Contains(TEXT("Succeeded")));
+	TestTrue(TEXT("Succeeded logical bytes presented"),Text(TEXT("TXT_UploadBytesValue")).Contains(TEXT("345800 B / 345800 B")));
+	TestEqual(TEXT("Succeeded Route row materialized"),C->GetRouteItemCountForTest(),1);
+	C->ClickUploadTabForTest();
+	C->ClickCloseForTest();
+	TestTrue(TEXT("Succeeded close keeps authoritative snapshot"),Upload->GetStateMirror().HasAuthoritativeSnapshot());
+	TestTrue(TEXT("Succeeded reopen"),C->ShowRouteWorkflow(Error));
+	TestTrue(TEXT("Succeeded survives reopen"),Text(TEXT("TXT_UploadJobStateValue")).Contains(TEXT("Succeeded")));
+	TestEqual(TEXT("Succeeded Route row survives reopen"),C->GetRouteItemCountForTest(),1);
+	TestEqual(TEXT("Upload tab survives reopen"),C->GetSelectedPageIndexForTest(),1);
+	ClearTerminal();
+
+	BindState('b','2',dspgcs::UploadJobState::Failed,20,120000);
+	C->ClickCloseForTest(); TestTrue(TEXT("Failed reopen"),C->ShowRouteWorkflow(Error));
+	TestTrue(TEXT("Failed survives reopen"),Text(TEXT("TXT_UploadJobStateValue")).Contains(TEXT("Failed")));
+	ClearTerminal();
+
+	BindState('c','3',dspgcs::UploadJobState::Cancelled,30,80000);
+	C->ClickCloseForTest(); TestTrue(TEXT("Cancelled reopen"),C->ShowRouteWorkflow(Error));
+	TestTrue(TEXT("Cancelled survives reopen"),Text(TEXT("TXT_UploadJobStateValue")).Contains(TEXT("Cancelled")));
+
+	FGCSRouteWorkflowCommandGateInputs BrowseGate;
+	BrowseGate.bWorkspaceReady=true;
+	C->SetCommandGateInputsForTest(BrowseGate);
+	int32 PrepareCalls=0;
+	FGCSRouteWorkflowCommandTestHooks Hooks;
+	Hooks.OpenNpzDialog=[](FString& Out){Out=TEXT("C:/fixtures/persistent-route.npz");return true;};
+	Hooks.PrepareRoute=[&PrepareCalls](const FString&,FString&){++PrepareCalls;return true;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	C->ClickRouteBrowseForTest();
+	TestEqual(TEXT("Browse prepares candidate once"),PrepareCalls,1);
+	const FString PreparedPath=C->GetSelectedRoutePathForTest();
+	TestTrue(TEXT("Browse does not clear terminal Job"),Upload->GetStateMirror().HasAuthoritativeSnapshot());
+
+	if(UEditableTextBox* Latitude=Cast<UEditableTextBox>(Convert->WidgetTree->FindWidget(TEXT("EDT_OriginLatitude")))) Latitude->SetText(FText::FromString(TEXT("30.5")));
+	if(UEditableTextBox* Longitude=Cast<UEditableTextBox>(Convert->WidgetTree->FindWidget(TEXT("EDT_OriginLongitude")))) Longitude->SetText(FText::FromString(TEXT("120.25")));
+	if(UEditableTextBox* Altitude=Cast<UEditableTextBox>(Convert->WidgetTree->FindWidget(TEXT("EDT_OriginAltitude")))) Altitude->SetText(FText::FromString(TEXT("50")));
+	FGCSRouteWorkflowCommandGateInputs LoadGate;
+	LoadGate.bHasPreparedRoute=true; LoadGate.bOriginValid=true; LoadGate.bWorkspaceReady=true;
+	C->SetCommandGateInputsForTest(LoadGate);
+	int32 AtomicCommitCalls=0;
+	Hooks={};
+	Hooks.CommitRouteWorkflow=[&AtomicCommitCalls](double,double,double,bool,FString& OutError)
+	{
+		++AtomicCommitCalls; OutError=TEXT("Synthetic preview creation failure"); return false;
+	};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	AddExpectedError(TEXT("Synthetic preview creation failure"),EAutomationExpectedErrorFlags::Contains,1);
+	C->ClickLoadPreviewForTest();
+	TestEqual(TEXT("Failed Load attempts candidate once"),AtomicCommitCalls,1);
+	TestTrue(TEXT("Failed Load preserves old upload result"),Upload->GetStateMirror().HasAuthoritativeSnapshot());
+
+	Hooks={};
+	Hooks.CommitRouteWorkflow=[&AtomicCommitCalls](double,double,double,bool,FString&)
+	{
+		++AtomicCommitCalls; return true;
+	};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	C->ClickLoadPreviewForTest();
+	TestFalse(TEXT("Successful Load clears prior upload result"),Upload->GetStateMirror().HasAuthoritativeSnapshot());
+	TestFalse(TEXT("Successful Load clears prior active Job binding"),Upload->GetCommandStatus().bHasActiveJobBinding);
+
+	BindState('d','4',dspgcs::UploadJobState::Completed,40,345800);
+	C->ClickLoadPreviewForTest();
+	TestFalse(TEXT("Same-file successful reload also clears prior result"),Upload->GetStateMirror().HasAuthoritativeSnapshot());
+	TestEqual(TEXT("Same-file reload retains committed path"),C->GetSelectedRoutePathForTest(),PreparedPath);
+
+	for(const dspgcs::UploadJobState ActiveState:{
+		dspgcs::UploadJobState::Created,
+		dspgcs::UploadJobState::Validating,
+		dspgcs::UploadJobState::Ready,
+		dspgcs::UploadJobState::Running,
+		dspgcs::UploadJobState::Paused,
+		dspgcs::UploadJobState::Cancelling})
+	{
+		UDSPGCSUploadJobSubsystem* StateProbe=NewObject<UDSPGCSUploadJobSubsystem>(GI);
+		const std::string ProbeID=ID(static_cast<char>('g'+static_cast<int32>(ActiveState)));
+		StateProbe->BindUploadJobForTest(ProbeID);
+		TestTrue(TEXT("Active-state probe snapshot accepted"),
+			StateProbe->ApplySnapshotForTest(Snapshot(ProbeID,'9',ActiveState,1,0)));
+		FString ProbeError;
+		TestFalse(TEXT("Every non-terminal aggregate blocks Dataset replacement"),
+			StateProbe->CanPrepareForNewUploadJob(ProbeError));
+	}
+
+	BindState('e','5',dspgcs::UploadJobState::Running,50,54188);
+	AtomicCommitCalls=0;
+	Hooks={};
+	Hooks.CommitRouteWorkflow=[&AtomicCommitCalls](double,double,double,bool,FString&){++AtomicCommitCalls;return true;};
+	C->SetCommandTestHooks(MoveTemp(Hooks));
+	AddExpectedError(TEXT("当前仍有上传任务运行"),EAutomationExpectedErrorFlags::Contains,1);
+	C->ClickLoadPreviewForTest();
+	TestEqual(TEXT("Active Job rejects Load before Dataset commit"),AtomicCommitCalls,0);
+	TestTrue(TEXT("Active Job remains bound after rejected Load"),Upload->GetCommandStatus().bHasActiveJobBinding);
+
+	C->ClickCloseForTest();
+	const int64 RevisionBeforeClose=Upload->GetMirrorStatus().JobRevision;
+	auto Progress=Snapshot(ID('e'),'5',dspgcs::UploadJobState::Running,51,170000);
+	TestTrue(TEXT("Running progress continues while View closed"),Upload->ApplySnapshotForTest(Progress));
+	C->RefreshReadOnlyStateForTest();
+	TestTrue(TEXT("Running reopen"),C->ShowRouteWorkflow(Error));
+	TestTrue(TEXT("Reopen renders latest hidden progress"),Text(TEXT("TXT_UploadBytesValue")).Contains(TEXT("170000 B")));
+	TestTrue(TEXT("Close preserves and advances authoritative revision"),
+		RevisionBeforeClose==50&&Upload->GetMirrorStatus().JobRevision==51);
+
+	C->ClickCloseForTest();
+	auto Terminal=Snapshot(ID('e'),'5',dspgcs::UploadJobState::Completed,52,345800);
+	TestTrue(TEXT("Job may become terminal while View closed"),Upload->ApplySnapshotForTest(Terminal));
+	C->RefreshReadOnlyStateForTest();
+	TestTrue(TEXT("Terminal reopen"),C->ShowRouteWorkflow(Error));
+	TestTrue(TEXT("Closed-running Job reopens terminal"),Text(TEXT("TXT_UploadJobStateValue")).Contains(TEXT("Succeeded")));
+	ClearTerminal();
+
+	BindState('f','6',dspgcs::UploadJobState::Running,60,1000);
+	const auto LateJobA=Snapshot(ID('e'),'5',dspgcs::UploadJobState::Completed,99,345800);
+	TestFalse(TEXT("Late Job A snapshot cannot overwrite Job B"),Upload->ApplySnapshotForTest(LateJobA));
+	const std::string JobBID=ID('f');
+	TestTrue(TEXT("Job B remains authoritative"),
+		Upload->GetMirrorStatus().UploadJobID==FString(UTF8_TO_TCHAR(JobBID.c_str())));
+
+	const int32 CreationCount=C->GetWorkflowCreationCountForTest();
+	for(int32 Index=0;Index<3;++Index)
+	{
+		C->ClickCloseForTest();
+		TestTrue(TEXT("Repeated reopen succeeds"),C->ShowRouteWorkflow(Error));
+	}
+	TestEqual(TEXT("Repeated Close/Open never recreates Widget"),C->GetWorkflowCreationCountForTest(),CreationCount);
+	TestTrue(TEXT("Repeated Close/Open keeps one refresh ticker"),C->IsRefreshTickerActiveForTest());
+	C->ClickConvertTabForTest(); TestEqual(TEXT("Convert tab selection"),C->GetSelectedPageIndexForTest(),0);
+	C->ClickUploadTabForTest(); TestEqual(TEXT("Upload tab selection"),C->GetSelectedPageIndexForTest(),1);
+
+	C->Shutdown();
+	TestNull(TEXT("Runtime teardown releases Widget"),C->GetWorkflowWidgetForTest());
+	TestFalse(TEXT("Runtime teardown removes refresh Delegate"),C->IsRefreshTickerActiveForTest());
 	GI->Shutdown();
 	return true;
 }
