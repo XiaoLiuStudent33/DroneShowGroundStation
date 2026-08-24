@@ -208,6 +208,9 @@ namespace dronegcs::mission_ftp
         metrics_.artifactRouteItems = metrics_.wireMissionItems > 0
             ? metrics_.wireMissionItems - 1 : 0;
         mavftpMetrics_ = {};
+        mavftpMetrics_.segmentsPlanned =
+            snapshot_->GetSegmentDescriptors().size();
+        mavftpMetrics_.segmentCapacity = config_.compileConfig.segmentCapacity;
         currentSegmentIndex_ = 0;
         safeDiagnostic_.clear();
         verificationMismatchDiagnostic_.clear();
@@ -249,6 +252,7 @@ namespace dronegcs::mission_ftp
             return false;
         }
         const SegmentDescriptor& segment = segments[currentSegmentIndex_];
+        mavftpMetrics_.activeSegmentIndex = currentSegmentIndex_;
         std::string error;
         if (!client_.StartWriteFileStream(
             MissionPath,
@@ -431,4 +435,3 @@ namespace dronegcs::mission_ftp
         return metrics_;
     }
 }
-

@@ -50,6 +50,8 @@ struct DroneSessionConfig
     bool receiveOnly = false;
     bool realCommandEnabled = false;
     bool mavFtpServiceEnabled = false;
+    int mavFtpRequestTimeoutMs = 750;
+    std::uint32_t mavFtpRequestRetryCount = 3;
     bool missionUploadServiceEnabled = false;
     IMavlinkDatagramSender* sharedMavlinkEndpoint = nullptr;
     std::uint8_t discoveredSystemId = 0;

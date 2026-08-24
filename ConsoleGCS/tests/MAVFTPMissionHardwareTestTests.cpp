@@ -1,5 +1,8 @@
 #include "MAVFTPMissionHardwareTest.h"
 
+#include "AppConfig.h"
+#include "MavlinkDatagramSender.h"
+
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -73,6 +76,35 @@ namespace
         }
     }
 
+    void TestTransportConfigurationPrecedence()
+    {
+        AppConfig config;
+        config.mavftpSegmentItems = 4000U;
+        config.mavftpRequestTimeoutMs = 750;
+        config.mavftpRequestRetryCount = 3U;
+        MAVFTPMissionHardwareTestOptions options;
+        std::string error;
+
+        Expect(ResolveMAVFTPMissionTransportOptions(
+            config, false, options, error) &&
+            options.segmentItemCapacity == 4000U &&
+            options.requestTimeoutMs == 750 &&
+            options.requestRetryCount == 3U,
+            "missing CLI did not use the INI-derived MAVFTP values");
+
+        options.segmentItemCapacity = 4U;
+        Expect(ResolveMAVFTPMissionTransportOptions(
+            config, true, options, error) &&
+            options.segmentItemCapacity == 4U,
+            "explicit CLI segment capacity did not override INI");
+
+        options.segmentItemCapacity = 0U;
+        Expect(!ResolveMAVFTPMissionTransportOptions(
+            config, true, options, error) &&
+            options.segmentItemCapacity == 0U,
+            "explicit CLI zero fell back to INI instead of failing");
+    }
+
     void TestQuickModeResolvesCanonicalCurrentIdentity()
     {
         namespace artifact = dronegcs::route_artifact;
@@ -129,6 +161,9 @@ namespace
         options.droneId = "Drone001";
         options.confirmedDroneId = options.droneId;
         options.routeSlotIndex = 0;
+        options.segmentItemCapacity = 4;
+        options.requestTimeoutMs = 1234;
+        options.requestRetryCount = 2;
         std::string error;
         const bool resolved = ResolveMAVFTPQuickTestOptionsFromCurrent(
             root.u8string(), options, error);
@@ -138,11 +173,80 @@ namespace
         Expect(options.artifactSetId == manifest.ArtifactSetId &&
             options.artifactSetDigest == manifest.ArtifactSetDigest &&
             options.artifactItemLimit == 10 &&
-            options.segmentItemCapacity ==
-                dronegcs::mission_ftp::MAVFTPMissionTransportConfig{}
-                    .compileConfig.segmentCapacity &&
+            options.segmentItemCapacity == 4 &&
+            options.requestTimeoutMs == 1234 &&
+            options.requestRetryCount == 2 &&
             ValidateMAVFTPMissionHardwareTestOptions(options, error),
-            "quick mode did not resolve canonical Current authority");
+            "quick resolver changed transport configuration or failed Current authority");
+    }
+
+    class CountingSender final : public IMavlinkDatagramSender
+    {
+    public:
+        bool SendTo(
+            const std::string& targetIp,
+            const std::uint16_t targetPort,
+            const std::uint8_t* data,
+            const int length) override
+        {
+            if (targetIp != "127.0.0.1" || targetPort != 30007 ||
+                data == nullptr || length <= 0)
+                return false;
+            ++sendCount;
+            return true;
+        }
+
+        std::size_t sendCount = 0;
+    };
+
+    void TestSessionAppliesEndpointClientRetryConfiguration()
+    {
+        AppConfig appConfig;
+        appConfig.mavftpRequestTimeoutMs = 100;
+        appConfig.mavftpRequestRetryCount = 1;
+        CountingSender sender;
+        DroneSessionConfig sessionConfig;
+        sessionConfig.droneId = "Drone001";
+        sessionConfig.remoteIp = "127.0.0.1";
+        sessionConfig.remotePort = 30007;
+        sessionConfig.receiveOnly = true;
+        sessionConfig.mavFtpServiceEnabled = true;
+        sessionConfig.mavFtpRequestTimeoutMs =
+            appConfig.mavftpRequestTimeoutMs;
+        sessionConfig.mavFtpRequestRetryCount =
+            appConfig.mavftpRequestRetryCount;
+        sessionConfig.sharedMavlinkEndpoint = &sender;
+        sessionConfig.discoveredSystemId = 7;
+        sessionConfig.discoveredComponentId = 1;
+        DroneSession session(sessionConfig);
+        Expect(session.Start(), "configured DroneSession did not start");
+        DiscoveredDroneIdentity identity;
+        identity.systemId = sessionConfig.discoveredSystemId;
+        identity.componentId = sessionConfig.discoveredComponentId;
+        identity.sourceIp = sessionConfig.remoteIp;
+        identity.sourcePort =
+            static_cast<std::uint16_t>(sessionConfig.remotePort);
+        identity.observedAt = std::chrono::steady_clock::now();
+        Expect(session.RefreshDiscoveredPresence(identity),
+            "configured DroneSession did not become online");
+        auto* client = session.GetMavFtpClient();
+        std::string error;
+        Expect(client && client->StartResetSessions(error),
+            "endpoint-bound client did not start configured request");
+        const auto startedAt = std::chrono::steady_clock::now();
+        const std::size_t initialSends = sender.sendCount;
+        client->Tick(startedAt + std::chrono::milliseconds(50));
+        Expect(sender.sendCount == initialSends,
+            "configured request retried before its 100 ms timeout");
+        client->Tick(startedAt + std::chrono::milliseconds(150));
+        Expect(sender.sendCount == initialSends + 1 &&
+            client->GetStats().retriesSent == 1,
+            "configured endpoint-bound client did not perform one retry");
+        client->Tick(startedAt + std::chrono::milliseconds(300));
+        const auto result = client->ConsumeResult();
+        Expect(result && !result->success && result->retryCount == 1 &&
+            !client->IsBusy(),
+            "configured retry limit did not fail the endpoint-bound request");
     }
 
     void TestReportContainsRequiredMetrics()
@@ -154,13 +258,20 @@ namespace
         report.targetPort = 14550;
         report.artifactRouteItems = 10;
         report.wireMissionItems = 11;
-        report.segmentCount = 1;
+        report.segmentCapacity = 4;
+        report.segmentCount = 3;
+        report.mavftpMetrics.segmentsPlanned = 3;
+        report.mavftpMetrics.segmentsCommitted = 3;
         report.mavftpMetrics.writeBytes = 428;
         report.mavftpMetrics.writeBlocks = 2;
         report.mavftpMetrics.retryCount = 1;
         const std::string summary = report.ToHumanSummary();
         Expect(summary.find("ArtifactRouteItems=10") != std::string::npos &&
             summary.find("WireMissionItems=11") != std::string::npos &&
+            summary.find("SegmentCapacityDomain=WireMissionItems") != std::string::npos &&
+            summary.find("SegmentCapacity=4") != std::string::npos &&
+            summary.find("SegmentCount=3") != std::string::npos &&
+            summary.find("SegmentsCommitted=3") != std::string::npos &&
             summary.find("WriteBytes=428") != std::string::npos &&
             summary.find("WriteBlocks=2") != std::string::npos &&
             summary.find("RetryCount=1") != std::string::npos,
@@ -175,7 +286,9 @@ int RunMAVFTPMissionHardwareTestTests()
         TestDefaultSelectionRemainsMissionProtocol();
         TestExplicitSafetyContract();
         TestRuntimeItemCountsAreNotFrozen();
+        TestTransportConfigurationPrecedence();
         TestQuickModeResolvesCanonicalCurrentIdentity();
+        TestSessionAppliesEndpointClientRetryConfiguration();
         TestReportContainsRequiredMetrics();
         std::cout << "MAVFTP Mission hardware harness safety tests passed\n";
         return 0;

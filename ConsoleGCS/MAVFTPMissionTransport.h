@@ -42,7 +42,10 @@ namespace dronegcs::mission_ftp
         std::uint64_t terminateDurationMs = 0;
         std::uint64_t commitDurationMs = 0;
         std::uint64_t totalMavftpDurationMs = 0;
+        std::uint64_t segmentsPlanned = 0;
         std::uint64_t segmentsCommitted = 0;
+        std::uint64_t activeSegmentIndex = 0;
+        std::uint32_t segmentCapacity = 0;
     };
 
     /**
@@ -116,4 +119,3 @@ namespace dronegcs::mission_ftp
         std::string terminalPhase_ = "Idle";
     };
 }
-

@@ -166,6 +166,7 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
     bool quickOnlyOptionSeen = false;
     bool quickRouteSlotSeen = false;
     bool legacyHardwareEntrySeen = false;
+    bool segmentItemsProvidedByCli = false;
     for (int index = 1; index < argc; ++index)
     {
         const std::string argument = argv[index] ? argv[index] : "";
@@ -289,6 +290,7 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
         }
         else if (argument == "--mavftp-segment-items")
         {
+            segmentItemsProvidedByCli = true;
             std::string value;
             if (!ReadOptionValue("--mavftp-segment-items", index, argc, argv,
                 value) || !ParseInteger(value,
@@ -349,7 +351,12 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
     }
 
     std::string hardwareOptionsError;
-    if (!ResolveMAVFTPQuickTestOptionsFromCurrent(
+    if (!ResolveMAVFTPMissionTransportOptions(
+            appConfig,
+            segmentItemsProvidedByCli,
+            hardwareTestOptions,
+            hardwareOptionsError) ||
+        !ResolveMAVFTPQuickTestOptionsFromCurrent(
             appConfig.artifactWorkspaceRoot,
             hardwareTestOptions,
             hardwareOptionsError) ||
@@ -515,6 +522,10 @@ int ConsoleGCSApplication::RunProductionMavlink(
         appConfig.realCommandEnabled;
     discoveredSessionDefaults.mavFtpServiceEnabled =
         probeOptions.enabled || hardwareTestOptions.enabled;
+    discoveredSessionDefaults.mavFtpRequestTimeoutMs =
+        appConfig.mavftpRequestTimeoutMs;
+    discoveredSessionDefaults.mavFtpRequestRetryCount =
+        appConfig.mavftpRequestRetryCount;
     discoveredSessionDefaults.missionUploadServiceEnabled =
         appConfig.routeUploadEnabled;
 

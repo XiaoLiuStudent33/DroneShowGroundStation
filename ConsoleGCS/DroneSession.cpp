@@ -94,7 +94,12 @@ bool DroneSession::Start()
         peer.remotePort = static_cast<std::uint16_t>(config.remotePort);
         peer.systemId = config.discoveredSystemId;
         peer.componentId = config.discoveredComponentId;
-        mavFtpClient = std::make_unique<dronegcs::mavftp::Client>(*this, peer);
+        dronegcs::mavftp::ClientConfig clientConfig;
+        clientConfig.requestTimeout =
+            std::chrono::milliseconds(config.mavFtpRequestTimeoutMs);
+        clientConfig.maximumRetries = config.mavFtpRequestRetryCount;
+        mavFtpClient = std::make_unique<dronegcs::mavftp::Client>(
+            *this, peer, clientConfig);
     }
     SetState(DroneSessionState::WaitingForHeartbeat);
 

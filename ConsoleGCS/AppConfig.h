@@ -1,11 +1,12 @@
 /**
- * @brief ¶¨Òå Console Æô¶¯ÅäÖÃ¼°Æä°²È«Ä¬ÈÏÖµ¡£
+ * @brief å®šä¹‰ Console å¯åŠ¨é…ç½®åŠå…¶å®‰å…¨é»˜è®¤å€¼ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * µ±Ç°¶à»úÁ´Ê¹ÓÃ MAVLink bind¡¢DSP¡¢timeout ºÍ°²È«ÏŞÖÆ£»ÎŞÈË»ú Remote Endpoint À´×ÔÊµ¼ÊÊÕ°üÀ´Ô´¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * å½“å‰å¤šæœºé“¾ä½¿ç”¨ MAVLink bindã€DSPã€timeout å’Œå®‰å…¨é™åˆ¶ï¼›æ— äººæœº Remote Endpoint æ¥è‡ªå®é™…æ”¶åŒ…æ¥æºã€‚
  */
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace AppConfigDefaults
@@ -17,6 +18,9 @@ namespace AppConfigDefaults
     inline constexpr int MaxPacketsPerDrain = 4096;
     inline constexpr int SnapshotDatagramBytes = 60 * 1024;
     inline constexpr int SnapshotItemsPerChunk = 512;
+    inline constexpr std::uint32_t MavftpSegmentItems = 65535U;
+    inline constexpr int MavftpRequestTimeoutMs = 750;
+    inline constexpr std::uint32_t MavftpRequestRetryCount = 3U;
 
 }
 
@@ -41,6 +45,13 @@ struct AppConfig
     int maxPacketsPerDrain = AppConfigDefaults::MaxPacketsPerDrain;
     int snapshotDatagramBytes = AppConfigDefaults::SnapshotDatagramBytes;
     int snapshotItemsPerChunk = AppConfigDefaults::SnapshotItemsPerChunk;
+    /** Maximum Wire Mission Items per MAVFTP segment, including Reserved Home. */
+    std::uint32_t mavftpSegmentItems =
+        AppConfigDefaults::MavftpSegmentItems;
+    int mavftpRequestTimeoutMs =
+        AppConfigDefaults::MavftpRequestTimeoutMs;
+    std::uint32_t mavftpRequestRetryCount =
+        AppConfigDefaults::MavftpRequestRetryCount;
 
     int heartbeatTimeoutMs = AppConfigDefaults::HeartbeatTimeoutMs;
     float takeoffAltitudeLimitMeters = 5.0f;

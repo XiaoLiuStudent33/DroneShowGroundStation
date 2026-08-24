@@ -1,5 +1,6 @@
 #include "MAVFTPMissionHardwareTest.h"
 
+#include "AppConfig.h"
 #include "ConsoleUI.h"
 #include "RouteArtifactContractV2.h"
 
@@ -28,6 +29,29 @@ namespace
     {
         return value ? "yes" : "no";
     }
+}
+
+bool ResolveMAVFTPMissionTransportOptions(
+    const AppConfig& appConfig,
+    const bool segmentItemsProvidedByCli,
+    MAVFTPMissionHardwareTestOptions& options,
+    std::string& error)
+{
+    error.clear();
+    if (!segmentItemsProvidedByCli)
+        options.segmentItemCapacity = appConfig.mavftpSegmentItems;
+    options.requestTimeoutMs = appConfig.mavftpRequestTimeoutMs;
+    options.requestRetryCount = appConfig.mavftpRequestRetryCount;
+
+    if (options.segmentItemCapacity == 0 ||
+        options.segmentItemCapacity > 65535U)
+        error = "MAVFTP segment capacity must be within 1..65535 Wire Mission Items.";
+    else if (options.requestTimeoutMs < 100 ||
+        options.requestTimeoutMs > 60000)
+        error = "MAVFTP request timeout must be within 100..60000 milliseconds.";
+    else if (options.requestRetryCount > 10U)
+        error = "MAVFTP request retry count must be within 0..10.";
+    return error.empty();
 }
 
 bool ResolveMAVFTPQuickTestOptionsFromCurrent(
@@ -100,9 +124,6 @@ bool ResolveMAVFTPQuickTestOptionsFromCurrent(
 
     options.artifactSetId = manifest.ArtifactSetId;
     options.artifactSetDigest = manifest.ArtifactSetDigest;
-    options.segmentItemCapacity =
-        dronegcs::mission_ftp::MAVFTPMissionTransportConfig{}
-            .compileConfig.segmentCapacity;
     return true;
 }
 
@@ -145,6 +166,11 @@ bool ValidateMAVFTPMissionHardwareTestOptions(
     else if (options.segmentItemCapacity == 0 ||
         options.segmentItemCapacity > 65535U)
         error = "MAVFTP hardware test segment capacity must be within 1..65535.";
+    else if (options.requestTimeoutMs < 100 ||
+        options.requestTimeoutMs > 60000)
+        error = "MAVFTP hardware test request timeout must be within 100..60000 milliseconds.";
+    else if (options.requestRetryCount > 10U)
+        error = "MAVFTP hardware test request retry count must be within 0..10.";
     return error.empty();
 }
 
@@ -158,7 +184,10 @@ std::string MAVFTPMissionHardwareTestReport::ToHumanSummary() const
         << " RouteSlot=" << routeSlotIndex
         << " ArtifactRouteItems=" << artifactRouteItems
         << " WireMissionItems=" << wireMissionItems
+        << " SegmentCapacityDomain=WireMissionItems"
+        << " SegmentCapacity=" << segmentCapacity
         << " SegmentCount=" << segmentCount
+        << " SegmentsCommitted=" << mavftpMetrics.segmentsCommitted
         << " MissionCount=";
     if (flightControllerMissionCount)
         output << *flightControllerMissionCount;
@@ -189,6 +218,7 @@ MAVFTPMissionHardwareTest::MAVFTPMissionHardwareTest(
 {
     report_.droneId = options_.droneId;
     report_.routeSlotIndex = options_.routeSlotIndex;
+    report_.segmentCapacity = options_.segmentItemCapacity;
 }
 
 MAVFTPMissionHardwareTest::~MAVFTPMissionHardwareTest() noexcept
@@ -234,8 +264,11 @@ bool MAVFTPMissionHardwareTest::Start(
         " RouteSlotIndex=" + std::to_string(options_.routeSlotIndex) +
         " RequestedArtifactItems=" +
         std::to_string(options_.artifactItemLimit) +
-        " SegmentItemCapacity=" +
-        std::to_string(options_.segmentItemCapacity));
+        " SegmentCapacityDomain=WireMissionItems" +
+        " SegmentCapacity=" +
+        std::to_string(options_.segmentItemCapacity) +
+        " RequestTimeoutMs=" + std::to_string(options_.requestTimeoutMs) +
+        " RequestRetryCount=" + std::to_string(options_.requestRetryCount));
     return true;
 }
 
@@ -330,10 +363,22 @@ void MAVFTPMissionHardwareTest::PollPreparation()
     report_.segmentCount =
         compiledSnapshot_->GetSegmentDescriptors().size();
     state_ = State::WaitingSources;
-    Log("Compile complete ArtifactRouteItems=" +
+    Log("Compile complete ArtifactItems=" +
         std::to_string(report_.artifactRouteItems) +
         " WireMissionItems=" + std::to_string(report_.wireMissionItems) +
+        " SegmentCapacityDomain=WireMissionItems" +
+        " SegmentCapacity=" + std::to_string(report_.segmentCapacity) +
         " SegmentCount=" + std::to_string(report_.segmentCount));
+    for (const auto& segment : compiledSnapshot_->GetSegmentDescriptors())
+    {
+        Log("SegmentPlan Index=" + std::to_string(segment.segmentIndex) +
+            " Options=" + std::string(segment.options ==
+                dronegcs::route_mission::FirstContainerOptionsV1
+                    ? "CLEAR" : "NO_CLEAR") +
+            " StartIndex=" + std::to_string(segment.startIndex) +
+            " ItemCount=" + std::to_string(segment.itemCount) +
+            " EncodedBytes=" + std::to_string(segment.encodedBytes));
+    }
     if (options_.quickTest)
         Log("WireItems: " + std::to_string(report_.wireMissionItems));
 }
@@ -363,6 +408,12 @@ void MAVFTPMissionHardwareTest::TryBeginUpload(
         Finish(false, "Target DroneSession has no endpoint-bound MAVFTP client.");
         return;
     }
+    if (sessionConfig.mavFtpRequestTimeoutMs != options_.requestTimeoutMs ||
+        sessionConfig.mavFtpRequestRetryCount != options_.requestRetryCount)
+    {
+        Finish(false, "Target DroneSession MAVFTP request configuration differs from the hardware-test snapshot.");
+        return;
+    }
     report_.targetIp = sessionConfig.remoteIp;
     report_.targetPort = static_cast<std::uint16_t>(sessionConfig.remotePort);
     Log("MAVFTP HARDWARE TEST MODE TargetDroneID=" + options_.droneId +
@@ -383,16 +434,29 @@ void MAVFTPMissionHardwareTest::TryBeginUpload(
     identity.generation = 1;
     std::string diagnostic;
     if (!writer_->PrepareCompiled(
-            std::move(identity), compiledSnapshot_, diagnostic) ||
-        !writer_->Upload(now))
+            std::move(identity), compiledSnapshot_, diagnostic))
     {
         Finish(false, diagnostic.empty()
             ? writer_->GetSafeDiagnostic()
             : diagnostic);
         return;
     }
+    if (!writer_->Upload(now))
+    {
+        LogWriterLifecycle();
+        if (!segmentFailureLogged_)
+        {
+            LogSegmentEvent("SegmentFailed", 0);
+            segmentFailureLogged_ = true;
+        }
+        Finish(false, writer_->GetSafeDiagnostic().empty()
+            ? "MAVFTP upload could not start."
+            : writer_->GetSafeDiagnostic());
+        return;
+    }
     state_ = State::Uploading;
-    Log("MAVFTP upload started.");
+    LogSegmentEvent("SegmentStart", 0);
+    loggedSegmentStart_ = 0;
 }
 
 void MAVFTPMissionHardwareTest::Tick(
@@ -425,6 +489,7 @@ void MAVFTPMissionHardwareTest::Tick(
             return;
         }
         writer_->Tick(now);
+        LogWriterLifecycle();
         if (writer_->IsTerminal())
         {
             CaptureWriterMetrics();
@@ -571,6 +636,79 @@ bool MAVFTPMissionHardwareTest::HandleMissionMessage(
 void MAVFTPMissionHardwareTest::CaptureWriterMetrics()
 {
     if (writer_) report_.mavftpMetrics = writer_->GetMavFtpMetrics();
+}
+
+void MAVFTPMissionHardwareTest::LogSegmentEvent(
+    const char* const event,
+    const std::size_t segmentIndex) const
+{
+    if (!compiledSnapshot_ ||
+        segmentIndex >= compiledSnapshot_->GetSegmentDescriptors().size())
+        return;
+    const auto& segment =
+        compiledSnapshot_->GetSegmentDescriptors()[segmentIndex];
+    const auto metrics = writer_
+        ? writer_->GetMavFtpMetrics()
+        : dronegcs::mission_ftp::MAVFTPMissionTransportMetrics{};
+    const std::uint64_t segmentsPlanned = metrics.segmentsPlanned > 0
+        ? metrics.segmentsPlanned : report_.segmentCount;
+    Log(std::string(event) +
+        " Index=" + std::to_string(segment.segmentIndex) +
+        " StartIndex=" + std::to_string(segment.startIndex) +
+        " ItemCount=" + std::to_string(segment.itemCount) +
+        " SegmentsCommitted=" +
+        std::to_string(metrics.segmentsCommitted) +
+        " SegmentsPlanned=" + std::to_string(segmentsPlanned));
+}
+
+void MAVFTPMissionHardwareTest::LogWriterLifecycle()
+{
+    if (!writer_ || !compiledSnapshot_) return;
+    const auto metrics = writer_->GetMavFtpMetrics();
+    const std::size_t activeIndex =
+        static_cast<std::size_t>(metrics.activeSegmentIndex);
+
+    if (std::string(writer_->GetTerminalPhaseName()) == "TerminatePending" &&
+        loggedTerminatePending_ != activeIndex)
+    {
+        LogSegmentEvent("SegmentTerminatePending", activeIndex);
+        loggedTerminatePending_ = activeIndex;
+    }
+
+    while (loggedSegmentsCommitted_ < metrics.segmentsCommitted)
+    {
+        const std::size_t committedIndex =
+            static_cast<std::size_t>(loggedSegmentsCommitted_);
+        if (loggedTerminatePending_ != committedIndex)
+        {
+            LogSegmentEvent("SegmentTerminatePending", committedIndex);
+            loggedTerminatePending_ = committedIndex;
+        }
+        LogSegmentEvent("SegmentCommitted",
+            committedIndex);
+        ++loggedSegmentsCommitted_;
+    }
+
+    if (!writer_->IsTerminal() &&
+        metrics.segmentsCommitted > 0 &&
+        loggedSegmentStart_ != activeIndex)
+    {
+        LogSegmentEvent("SegmentStart", activeIndex);
+        loggedSegmentStart_ = activeIndex;
+    }
+
+    if (writer_->GetStatus() == MissionTransportStatus::Failed &&
+        !segmentFailureLogged_)
+    {
+        if (std::string(writer_->GetTerminalPhaseName()) == "TerminateFailed" &&
+            loggedTerminatePending_ != activeIndex)
+        {
+            LogSegmentEvent("SegmentTerminatePending", activeIndex);
+            loggedTerminatePending_ = activeIndex;
+        }
+        LogSegmentEvent("SegmentFailed", activeIndex);
+        segmentFailureLogged_ = true;
+    }
 }
 
 void MAVFTPMissionHardwareTest::Cancel(

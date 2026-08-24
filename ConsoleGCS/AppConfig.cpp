@@ -1,7 +1,7 @@
 /**
- * @brief ½âÎö²¢Ğ£Ñé gcs-config.ini£¬Éú³É Console µ¥Ò»Æô¶¯ÅäÖÃ¿ìÕÕ¡£
+ * @brief è§£æå¹¶æ ¡éªŒ gcs-config.iniï¼Œç”Ÿæˆ Console å•ä¸€å¯åŠ¨é…ç½®å¿«ç…§ã€‚
  *
- * ·ÖÀà£ºProduction£»Ö»¶ÁÈ¡ÅäÖÃ£¬²»´´½¨ Socket »òĞŞ¸ÄĞ­ÒéĞĞÎª¡£
+ * åˆ†ç±»ï¼šProductionï¼›åªè¯»å–é…ç½®ï¼Œä¸åˆ›å»º Socket æˆ–ä¿®æ”¹åè®®è¡Œä¸ºã€‚
  */
 #include "AppConfig.h"
 
@@ -440,6 +440,38 @@ bool AppConfig::Load(
     {
         return false;
     }
+
+    int mavftpSegmentItems = static_cast<int>(config.mavftpSegmentItems);
+    int mavftpRequestRetryCount =
+        static_cast<int>(config.mavftpRequestRetryCount);
+    if (!ParseOptionalInteger(
+            values,
+            "mavftp.segment_items",
+            1,
+            65535,
+            mavftpSegmentItems,
+            error) ||
+        !ParseOptionalInteger(
+            values,
+            "mavftp.request_timeout_ms",
+            100,
+            60000,
+            config.mavftpRequestTimeoutMs,
+            error) ||
+        !ParseOptionalInteger(
+            values,
+            "mavftp.request_retry_count",
+            0,
+            10,
+            mavftpRequestRetryCount,
+            error))
+    {
+        return false;
+    }
+    config.mavftpSegmentItems =
+        static_cast<std::uint32_t>(mavftpSegmentItems);
+    config.mavftpRequestRetryCount =
+        static_cast<std::uint32_t>(mavftpRequestRetryCount);
 
     constexpr float defaultLimitMeters = 5.0f;
     constexpr float maximumConfigurableLimitMeters = 1000.0f;

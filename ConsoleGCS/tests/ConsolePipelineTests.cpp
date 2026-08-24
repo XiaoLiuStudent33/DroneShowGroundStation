@@ -108,6 +108,10 @@ mavlink_receive_buffer_bytes=8388608
 max_packets_per_drain=8192
 snapshot_datagram_bytes=60000
 snapshot_items_per_chunk=256
+[mavftp]
+segment_items=4000
+request_timeout_ms=750
+request_retry_count=3
 )" );
 
         AppConfig config;
@@ -128,6 +132,11 @@ snapshot_items_per_chunk=256
             config.snapshotDatagramBytes == 60000 &&
             config.snapshotItemsPerChunk == 256,
             "Production performance values were not loaded");
+        Expect(
+            config.mavftpSegmentItems == 4000U &&
+            config.mavftpRequestTimeoutMs == 750 &&
+            config.mavftpRequestRetryCount == 3U,
+            "legal MAVFTP configuration values were not loaded");
         Expect(
             config.artifactWorkspaceRoot == "C:\\DroneGCSArtifactWorkspace",
             "Artifact Workspace root was not loaded");
@@ -185,10 +194,44 @@ dspgcs_command_enabled=false
             fallbackConfig.snapshotDatagramBytes ==
                 AppConfigDefaults::SnapshotDatagramBytes &&
             fallbackConfig.snapshotItemsPerChunk ==
-                AppConfigDefaults::SnapshotItemsPerChunk,
-            "missing performance keys did not preserve fallbacks");
+                AppConfigDefaults::SnapshotItemsPerChunk &&
+            fallbackConfig.mavftpSegmentItems ==
+                AppConfigDefaults::MavftpSegmentItems &&
+            fallbackConfig.mavftpRequestTimeoutMs ==
+                AppConfigDefaults::MavftpRequestTimeoutMs &&
+            fallbackConfig.mavftpRequestRetryCount ==
+                AppConfigDefaults::MavftpRequestRetryCount,
+            "missing optional keys did not preserve code defaults");
         Expect(!fallbackConfig.routeUploadEnabled,
             "route_upload_enabled did not default fail-closed");
+
+        const auto expectInvalidMavftp = [](
+            const std::string& name,
+            const std::string& setting)
+        {
+            TemporaryConfigFile invalid(name, std::string(R"(
+safe_test_mode=true
+mavlink_network_enabled=false
+real_command_enabled=false
+heartbeat_timeout_ms=3000
+dspgcs_telemetry_enabled=false
+dspgcs_command_enabled=false
+[mavftp]
+)") + setting + "\n");
+            AppConfig invalidConfig;
+            std::string invalidError;
+            Expect(!AppConfig::Load(
+                invalid.GetPath(), invalidConfig, invalidError),
+                "invalid MAVFTP setting was accepted: " + setting);
+            Expect(invalidError.find("mavftp.") != std::string::npos,
+                "invalid MAVFTP setting produced an unrelated diagnostic");
+        };
+        expectInvalidMavftp("segment-zero", "segment_items=0");
+        expectInvalidMavftp("segment-overflow", "segment_items=65536");
+        expectInvalidMavftp("timeout-low", "request_timeout_ms=99");
+        expectInvalidMavftp("timeout-high", "request_timeout_ms=60001");
+        expectInvalidMavftp("retry-negative", "request_retry_count=-1");
+        expectInvalidMavftp("retry-high", "request_retry_count=11");
 
         TemporaryConfigFile invalidRouteGate("invalid-route-gate", R"(
 safe_test_mode=true

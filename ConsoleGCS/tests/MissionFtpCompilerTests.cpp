@@ -226,46 +226,67 @@ namespace
         }
     }
 
-    void VerifyCrossSegmentPlan()
+    void VerifySegmentBoundaryCase(
+        const std::size_t artifactCount,
+        const std::uint32_t capacity,
+        const std::vector<std::uint16_t>& expectedCounts)
     {
-        const compiler::CompileResult result = Compile(BuildArtifact(10), 4);
-        Expect(result.IsValid(), "cross-segment compile failed");
+        const compiler::CompileResult result =
+            Compile(BuildArtifact(artifactCount), capacity);
+        Expect(result.IsValid(), "segment boundary compile failed");
         const auto& segments = result.snapshot->GetSegmentDescriptors();
-        Expect(segments.size() == 3,
-            "eleven wire items at capacity four did not produce three segments");
-        const std::uint16_t starts[] = { 0, 4, 8 };
-        const std::uint16_t counts[] = { 4, 4, 3 };
+        Expect(result.snapshot->GetTotalWireMissionItems() ==
+            artifactCount + 1,
+            "Artifact plus Reserved Home wire count differs");
+        Expect(segments.size() == expectedCounts.size(),
+            "segment boundary produced the wrong segment count");
         std::uint32_t next = 0;
         for (std::size_t index = 0; index < segments.size(); ++index)
         {
-            Expect(segments[index].startIndex == starts[index] &&
-                segments[index].itemCount == counts[index],
-                "cross-segment descriptor start/count differs");
-            Expect(segments[index].startIndex == next,
-                "segment plan contains a gap or overlap");
-            next += segments[index].itemCount;
+            const auto& segment = segments[index];
+            Expect(segment.segmentIndex == index &&
+                segment.startIndex == next &&
+                segment.itemCount == expectedCounts[index] &&
+                segment.itemCount > 0 &&
+                segment.options == (index == 0
+                    ? mission::FirstContainerOptionsV1
+                    : mission::SubsequentContainerOptionsV1) &&
+                segment.encodedBytes ==
+                    mission::LegacyMissionFtpContainerBytesV1 +
+                    static_cast<std::uint64_t>(segment.itemCount) *
+                        mission::MissionItemRecordBytesV1,
+                "segment descriptor index/options/range/bytes differ");
+            next += segment.itemCount;
 
             StreamCapture encoded;
             const compiler::ValidationResult streamed =
                 compiler::MissionFtpCompiler::StreamSegment(
                     *result.snapshot, index, &CaptureBytes, &encoded);
             Expect(streamed.IsValid() &&
-                encoded.bytes.size() == segments[index].encodedBytes,
-                "cross-segment encoded byte count differs");
+                encoded.bytes.size() == segment.encodedBytes,
+                "segment encoded byte count differs");
             Expect(ReadU16(encoded.bytes.data() + 0) ==
                     mission::LegacyMissionFtpMagicV1 &&
                 ReadU16(encoded.bytes.data() + 2) ==
                     mission::LegacyMissionTypeV1 &&
                 ReadU16(encoded.bytes.data() + 4) ==
-                    segments[index].options &&
+                    segment.options &&
                 ReadU16(encoded.bytes.data() + 6) ==
-                    segments[index].startIndex &&
+                    segment.startIndex &&
                 ReadU16(encoded.bytes.data() + 8) ==
-                    segments[index].itemCount,
-                "cross-segment streamed header differs from its descriptor");
+                    segment.itemCount,
+                "segment streamed header differs from its descriptor");
         }
         Expect(next == result.snapshot->GetTotalWireMissionItems(),
             "segment plan does not cover the complete wire Mission");
+    }
+
+    void VerifyConfiguredSegmentBoundaries()
+    {
+        VerifySegmentBoundaryCase(10, 4, { 4, 4, 3 });
+        VerifySegmentBoundaryCase(3999, 4000, { 4000 });
+        VerifySegmentBoundaryCase(4000, 4000, { 4000, 1 });
+        VerifySegmentBoundaryCase(9100, 4000, { 4000, 4000, 1101 });
     }
 
     void VerifyMaximumBoundary()
@@ -376,7 +397,7 @@ int RunMissionFtpCompilerTests()
         VerifySingleArtifactAndGoldenBytes();
         VerifyContiguousWireSequence();
         VerifyCapacityOnePlan();
-        VerifyCrossSegmentPlan();
+        VerifyConfiguredSegmentBoundaries();
         VerifyMaximumBoundary();
         VerifyValidationFailures();
         VerifyDeterministicCompileAndStreamingFailure();

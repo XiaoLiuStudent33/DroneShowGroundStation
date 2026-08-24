@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+struct AppConfig;
+
 enum class MissionTransportMode : std::uint8_t
 {
     MissionProtocol,
@@ -32,8 +34,17 @@ struct MAVFTPMissionHardwareTestOptions
     dronegcs::route_artifact::Digest256 artifactSetDigest;
     std::int32_t routeSlotIndex = -1;
     std::uint32_t artifactItemLimit = 0;
-    std::uint32_t segmentItemCapacity = 0;
+    std::uint32_t segmentItemCapacity = 65535U;
+    int requestTimeoutMs = 750;
+    std::uint32_t requestRetryCount = 3;
 };
+
+/** Applies the single CLI > INI > code-default transport configuration merge. */
+bool ResolveMAVFTPMissionTransportOptions(
+    const AppConfig& appConfig,
+    bool segmentItemsProvidedByCli,
+    MAVFTPMissionHardwareTestOptions& options,
+    std::string& error);
 
 bool ValidateMAVFTPMissionHardwareTestOptions(
     const MAVFTPMissionHardwareTestOptions& options,
@@ -59,6 +70,7 @@ struct MAVFTPMissionHardwareTestReport
     std::int32_t routeSlotIndex = -1;
     std::uint64_t artifactRouteItems = 0;
     std::uint64_t wireMissionItems = 0;
+    std::uint32_t segmentCapacity = 0;
     std::uint64_t segmentCount = 0;
     std::optional<std::uint16_t> flightControllerMissionCount;
     bool homeSlotObserved = false;
@@ -116,6 +128,8 @@ private:
     void TickMissionCount(std::chrono::steady_clock::time_point now);
     void TickSample(std::chrono::steady_clock::time_point now);
     void CaptureWriterMetrics();
+    void LogSegmentEvent(const char* event, std::size_t segmentIndex) const;
+    void LogWriterLifecycle();
     void Finish(bool success, std::string diagnostic);
     void Log(const std::string& line) const;
 
@@ -137,4 +151,8 @@ private:
     std::chrono::steady_clock::time_point overallDeadline_{};
     std::chrono::steady_clock::time_point responseDeadline_{};
     std::uint32_t responseRetries_ = 0;
+    std::uint64_t loggedSegmentsCommitted_ = 0;
+    std::size_t loggedSegmentStart_ = static_cast<std::size_t>(-1);
+    std::size_t loggedTerminatePending_ = static_cast<std::size_t>(-1);
+    bool segmentFailureLogged_ = false;
 };

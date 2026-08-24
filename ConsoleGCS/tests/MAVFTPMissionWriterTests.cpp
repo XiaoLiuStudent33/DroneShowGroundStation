@@ -268,7 +268,10 @@ namespace
                 ExpectedSegment(*fixture.compiled.snapshot, 0),
             "writer bytes differ from MissionFtpCompiler::StreamSegment");
         const auto metrics = writer.GetMavFtpMetrics();
-        Expect(metrics.segmentsCommitted == 1 &&
+        Expect(metrics.segmentsPlanned == 1 &&
+            metrics.segmentsCommitted == 1 &&
+            metrics.activeSegmentIndex == 0 &&
+            metrics.segmentCapacity == 32 &&
             metrics.writeBytes == driven.segmentBytes.front().size() &&
             metrics.writeBlocks > 1,
             "writer success metrics are incomplete");
@@ -335,7 +338,7 @@ namespace
         clientConfig.requestTimeout = std::chrono::milliseconds(1);
         clientConfig.maximumRetries = 1;
         ftp::Client client(wire, TestPeer(), clientConfig);
-        auto fixture = CompileFixture(1, 32, ftp::MaximumDataBytes);
+        auto fixture = CompileFixture(5, 3, ftp::MaximumDataBytes);
         compiler::MAVFTPMissionTransport writer(client, fixture.writerConfig);
         std::string diagnostic;
         Expect(writer.PrepareCompiled(TestIdentity(), fixture.compiled.snapshot,
@@ -349,10 +352,55 @@ namespace
             "terminate fixture never reached commit gate");
         writer.Tick(now + std::chrono::seconds(2));
         writer.Tick(now + std::chrono::seconds(4));
+        std::size_t createRequests = 0;
+        for (std::size_t index = 0; index < wire.sent.size(); ++index)
+        {
+            if (wire.Decode(index).opcode == ftp::Opcode::CreateFile)
+                ++createRequests;
+        }
+        const auto metrics = writer.GetMavFtpMetrics();
         Expect(writer.GetStatus() == MissionTransportStatus::Failed &&
             std::string(writer.GetTerminalPhaseName()) == "TerminateFailed" &&
-            !writer.Verify(),
-            "missing Terminate ACK did not fail the commit gate");
+            !writer.Verify() && createRequests == 1 &&
+            metrics.segmentsPlanned == 2 &&
+            metrics.segmentsCommitted == 0 &&
+            metrics.activeSegmentIndex == 0,
+            "missing Terminate ACK committed or advanced beyond the failed segment");
+    }
+
+    void TestNextSegmentStartsOnlyAfterTerminateAck()
+    {
+        FakeWire wire;
+        ftp::Client client(wire, TestPeer());
+        auto fixture = CompileFixture(5, 3, ftp::MaximumDataBytes);
+        compiler::MAVFTPMissionTransport writer(client, fixture.writerConfig);
+        std::string diagnostic;
+        Expect(writer.PrepareCompiled(TestIdentity(), fixture.compiled.snapshot,
+            diagnostic), "commit-gate writer prepare failed");
+        const auto now = std::chrono::steady_clock::now();
+        Expect(writer.Upload(now), "commit-gate writer upload did not start");
+        wire.Ack(client, wire.Last(), 23);
+        while (wire.Last().opcode == ftp::Opcode::WriteFile)
+            wire.Ack(client, wire.Last(), 23);
+        Expect(wire.Last().opcode == ftp::Opcode::TerminateSession,
+            "commit-gate fixture never reached TerminateSession");
+        const std::size_t beforeTerminateAck = wire.sent.size();
+        writer.Tick(now);
+        Expect(wire.sent.size() == beforeTerminateAck &&
+            writer.GetMavFtpMetrics().segmentsCommitted == 0 &&
+            writer.GetMavFtpMetrics().activeSegmentIndex == 0,
+            "second segment started before the first Terminate ACK");
+
+        wire.Ack(client, wire.Last(), 23);
+        Expect(writer.GetMavFtpMetrics().segmentsCommitted == 0,
+            "client ACK bypassed the writer commit gate");
+        writer.Tick(now);
+        Expect(wire.sent.size() == beforeTerminateAck + 1 &&
+            wire.Last().opcode == ftp::Opcode::CreateFile &&
+            writer.GetMavFtpMetrics().segmentsCommitted == 1 &&
+            writer.GetMavFtpMetrics().activeSegmentIndex == 1,
+            "second segment did not start immediately after Terminate ACK commit");
+        writer.Cancel(now);
     }
 
     void TestMultipleSegmentsRemainOrdered()
@@ -440,6 +488,7 @@ int RunMAVFTPMissionWriterTests()
         TestWriteTimeoutRetriesSameBlock();
         TestOffsetMismatchFails();
         TestTerminateAckTimeoutFails();
+        TestNextSegmentStartsOnlyAfterTerminateAck();
         TestMultipleSegmentsRemainOrdered();
         TestStreamingRejectionStopsWrites();
         std::cout << "MAVFTP Mission writer core tests passed\n";
