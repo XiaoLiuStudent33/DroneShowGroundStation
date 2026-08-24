@@ -51,6 +51,7 @@ struct DroneSessionConfig
     bool realCommandEnabled = false;
     bool mavFtpServiceEnabled = false;
     int mavFtpRequestTimeoutMs = 750;
+    int mavFtpTerminateTimeoutMs = 2500;
     std::uint32_t mavFtpRequestRetryCount = 3;
     std::uint32_t mavFtpWriteWindow = 1;
     bool missionUploadServiceEnabled = false;

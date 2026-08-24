@@ -167,6 +167,7 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
     bool quickRouteSlotSeen = false;
     bool legacyHardwareEntrySeen = false;
     bool segmentItemsProvidedByCli = false;
+    bool terminateTimeoutProvidedByCli = false;
     bool writeWindowProvidedByCli = false;
     for (int index = 1; index < argc; ++index)
     {
@@ -312,6 +313,18 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
                 return -1;
             }
         }
+        else if (argument == "--mavftp-terminate-timeout-ms")
+        {
+            terminateTimeoutProvidedByCli = true;
+            std::string value;
+            if (!ReadOptionValue("--mavftp-terminate-timeout-ms", index,
+                argc, argv, value) || !ParseInteger(value,
+                    hardwareTestOptions.terminateTimeoutMs))
+            {
+                std::cerr << "--mavftp-terminate-timeout-ms requires an int32 value.\n";
+                return -1;
+            }
+        }
         else if (!argument.empty() && argument[0] == '-')
         {
             std::cerr << "Unknown command-line option.\n";
@@ -366,6 +379,7 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
     if (!ResolveMAVFTPMissionTransportOptions(
             appConfig,
             segmentItemsProvidedByCli,
+            terminateTimeoutProvidedByCli,
             writeWindowProvidedByCli,
             hardwareTestOptions,
             hardwareOptionsError) ||
@@ -537,6 +551,10 @@ int ConsoleGCSApplication::RunProductionMavlink(
         probeOptions.enabled || hardwareTestOptions.enabled;
     discoveredSessionDefaults.mavFtpRequestTimeoutMs =
         appConfig.mavftpRequestTimeoutMs;
+    discoveredSessionDefaults.mavFtpTerminateTimeoutMs =
+        hardwareTestOptions.enabled
+        ? hardwareTestOptions.terminateTimeoutMs
+        : appConfig.mavftpTerminateTimeoutMs;
     discoveredSessionDefaults.mavFtpRequestRetryCount =
         appConfig.mavftpRequestRetryCount;
     discoveredSessionDefaults.mavFtpWriteWindow = hardwareTestOptions.enabled

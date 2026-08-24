@@ -47,6 +47,8 @@ namespace dronegcs::mavftp
     {
         if (config_.requestTimeout.count() <= 0)
             config_.requestTimeout = std::chrono::milliseconds(750);
+        if (config_.terminateTimeout.count() <= 0)
+            config_.terminateTimeout = std::chrono::milliseconds(2500);
         if (config_.maximumFileBytes == 0)
             config_.maximumFileBytes = 64U * 1024U * 1024U;
         if (config_.writeWindow == 0 || config_.writeWindow > 16)
@@ -64,6 +66,21 @@ namespace dronegcs::mavftp
         if (IsBusy() || !ValidPeer(peer)) return false;
         peer_ = peer;
         return true;
+    }
+
+    std::chrono::steady_clock::time_point Client::Now() const
+    {
+        return config_.clockNow
+            ? config_.clockNow(config_.clockContext)
+            : std::chrono::steady_clock::now();
+    }
+
+    std::chrono::milliseconds Client::TimeoutForOpcode(
+        const Opcode opcode) const
+    {
+        return opcode == Opcode::TerminateSession
+            ? config_.terminateTimeout
+            : config_.requestTimeout;
     }
 
     bool Client::Begin(
@@ -100,7 +117,7 @@ namespace dronegcs::mavftp
         terminateRetriesAtStart_ = stats_.terminateRetries;
         duplicateAcksAtStart_ = stats_.duplicateWriteAcks;
         staleAcksAtStart_ = stats_.staleOrMismatchedWriteAcks;
-        operationStartedAt_ = std::chrono::steady_clock::now();
+        operationStartedAt_ = Now();
         if (!SendNewRequest(phase, opcode, session, offset,
             std::move(data), error))
         {
@@ -241,6 +258,7 @@ namespace dronegcs::mavftp
         phase_ = phase;
         pending_ = true;
         retriesUsed_ = 0;
+        pendingTimeout_ = TimeoutForOpcode(opcode);
         return SendPending(false, error);
     }
 
@@ -266,7 +284,7 @@ namespace dronegcs::mavftp
         {
             ++stats_.requestsSent;
         }
-        deadline_ = std::chrono::steady_clock::now() + config_.requestTimeout;
+        deadline_ = Now() + pendingTimeout_;
         error.clear();
         return true;
     }
@@ -297,14 +315,16 @@ namespace dronegcs::mavftp
         if (!pending_ || now < deadline_) return;
         if (retriesUsed_ >= config_.maximumRetries)
         {
-            BestEffortTerminate();
+            if (pendingRequest_.opcode != Opcode::TerminateSession)
+                BestEffortTerminate();
             CompleteFailure("MAVFTP request retry limit exhausted.");
             return;
         }
         std::string error;
         if (!SendPending(true, error))
         {
-            BestEffortTerminate();
+            if (pendingRequest_.opcode != Opcode::TerminateSession)
+                BestEffortTerminate();
             CompleteFailure(error);
         }
     }
@@ -431,10 +451,11 @@ namespace dronegcs::mavftp
             error = "Endpoint-bound MAVFTP WriteFile send failed.";
             return false;
         }
-        const auto sentAt = std::chrono::steady_clock::now();
+        const auto sentAt = Now();
         pending.firstSentAt = sentAt;
         pending.lastSentAt = sentAt;
-        pending.deadline = sentAt + config_.requestTimeout;
+        pending.timeout = config_.requestTimeout;
+        pending.deadline = sentAt + pending.timeout;
         pendingWrites_.push_back(std::move(pending));
         ++stats_.requestsSent;
         ++writeBlocksSent_;
@@ -471,9 +492,9 @@ namespace dronegcs::mavftp
             return false;
         }
         auto& pending = pendingWrites_[index];
-        const auto sentAt = std::chrono::steady_clock::now();
+        const auto sentAt = Now();
         pending.lastSentAt = sentAt;
-        pending.deadline = sentAt + config_.requestTimeout;
+        pending.deadline = sentAt + pending.timeout;
         ++pending.retriesUsed;
         ++stats_.retriesSent;
         ++stats_.writeRetries;
@@ -569,7 +590,7 @@ namespace dronegcs::mavftp
             return true;
         }
 
-        const auto acknowledgedAt = std::chrono::steady_clock::now();
+        const auto acknowledgedAt = Now();
         const std::uint64_t rtt = ElapsedMilliseconds(
             pending->lastSentAt, acknowledgedAt);
         ackRttSumMs_ += rtt;
@@ -703,7 +724,7 @@ namespace dronegcs::mavftp
             sessionOpen_ = true;
             transferred_ = 0;
             nextWriteOffset_ = 0;
-            createConfirmedAt_ = std::chrono::steady_clock::now();
+            createConfirmedAt_ = Now();
             phase_ = Phase::AwaitWrite;
             if (!FillWriteWindow(error))
             {
@@ -877,7 +898,7 @@ namespace dronegcs::mavftp
 
     void Client::PopulateOperationMetrics(OperationResult& result) const
     {
-        const auto completedAt = std::chrono::steady_clock::now();
+        const auto completedAt = Now();
         result.writeBytes = transferred_;
         result.writeBlocks = writeBlocksCompleted_;
         result.writeBlocksSent = writeBlocksSent_;

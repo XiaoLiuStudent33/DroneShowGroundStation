@@ -34,10 +34,13 @@ namespace dronegcs::mavftp
     struct ClientConfig
     {
         std::chrono::milliseconds requestTimeout{ 750 };
+        std::chrono::milliseconds terminateTimeout{ 2500 };
         std::uint32_t maximumRetries = 3;
         std::uint32_t maximumFileBytes = 64U * 1024U * 1024U;
         std::uint32_t writeWindow = 1;
         std::uint16_t initialRequestSequence = 0;
+        std::chrono::steady_clock::time_point (*clockNow)(void*) = nullptr;
+        void* clockContext = nullptr;
     };
 
     enum class OperationKind : std::uint8_t
@@ -151,6 +154,10 @@ namespace dronegcs::mavftp
         const ClientStats& GetStats() const { return stats_; }
         std::uint32_t GetConfiguredWriteWindow() const
             { return config_.writeWindow; }
+        std::chrono::milliseconds GetConfiguredRequestTimeout() const
+            { return config_.requestTimeout; }
+        std::chrono::milliseconds GetConfiguredTerminateTimeout() const
+            { return config_.terminateTimeout; }
 
     private:
         enum class Phase : std::uint8_t
@@ -193,6 +200,8 @@ namespace dronegcs::mavftp
         void PopulateOperationMetrics(OperationResult& result) const;
         void ResetWriteSource();
         std::uint16_t ReserveRequestSequence();
+        std::chrono::steady_clock::time_point Now() const;
+        std::chrono::milliseconds TimeoutForOpcode(Opcode opcode) const;
 
         struct PendingWrite
         {
@@ -201,6 +210,7 @@ namespace dronegcs::mavftp
             std::chrono::steady_clock::time_point firstSentAt{};
             std::chrono::steady_clock::time_point lastSentAt{};
             std::chrono::steady_clock::time_point deadline{};
+            std::chrono::milliseconds timeout{ 0 };
             std::uint32_t retriesUsed = 0;
         };
 
@@ -222,6 +232,7 @@ namespace dronegcs::mavftp
         std::array<std::uint8_t, PayloadBytes> pendingWire_{};
         bool pending_ = false;
         std::uint32_t retriesUsed_ = 0;
+        std::chrono::milliseconds pendingTimeout_{ 0 };
         std::chrono::steady_clock::time_point deadline_{};
         std::uint8_t activeSession_ = 0;
         bool sessionOpen_ = false;

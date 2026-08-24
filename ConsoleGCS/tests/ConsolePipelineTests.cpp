@@ -108,10 +108,11 @@ mavlink_receive_buffer_bytes=8388608
 max_packets_per_drain=8192
 snapshot_datagram_bytes=60000
 snapshot_items_per_chunk=256
-[mavftp]
-segment_items=4000
-request_timeout_ms=750
-request_retry_count=3
+ [mavftp]
+ segment_items=4000
+ request_timeout_ms=750
+ terminate_timeout_ms=2500
+ request_retry_count=3
 write_window=10
 )" );
 
@@ -134,9 +135,10 @@ write_window=10
             config.snapshotItemsPerChunk == 256,
             "Production performance values were not loaded");
         Expect(
-            config.mavftpSegmentItems == 4000U &&
-            config.mavftpRequestTimeoutMs == 750 &&
-            config.mavftpRequestRetryCount == 3U &&
+             config.mavftpSegmentItems == 4000U &&
+             config.mavftpRequestTimeoutMs == 750 &&
+             config.mavftpTerminateTimeoutMs == 2500 &&
+             config.mavftpRequestRetryCount == 3U &&
             config.mavftpWriteWindow == 10U,
             "legal MAVFTP configuration values were not loaded");
         Expect(
@@ -199,8 +201,10 @@ dspgcs_command_enabled=false
                 AppConfigDefaults::SnapshotItemsPerChunk &&
             fallbackConfig.mavftpSegmentItems ==
                 AppConfigDefaults::MavftpSegmentItems &&
-            fallbackConfig.mavftpRequestTimeoutMs ==
-                AppConfigDefaults::MavftpRequestTimeoutMs &&
+             fallbackConfig.mavftpRequestTimeoutMs ==
+                 AppConfigDefaults::MavftpRequestTimeoutMs &&
+             fallbackConfig.mavftpTerminateTimeoutMs ==
+                 AppConfigDefaults::MavftpTerminateTimeoutMs &&
             fallbackConfig.mavftpRequestRetryCount ==
                 AppConfigDefaults::MavftpRequestRetryCount &&
             fallbackConfig.mavftpWriteWindow ==
@@ -232,15 +236,19 @@ dspgcs_command_enabled=false
         };
         expectInvalidMavftp("segment-zero", "segment_items=0");
         expectInvalidMavftp("segment-overflow", "segment_items=65536");
-        expectInvalidMavftp("timeout-low", "request_timeout_ms=99");
-        expectInvalidMavftp("timeout-high", "request_timeout_ms=60001");
+         expectInvalidMavftp("timeout-low", "request_timeout_ms=99");
+         expectInvalidMavftp("timeout-high", "request_timeout_ms=60001");
+         expectInvalidMavftp("terminate-timeout-zero", "terminate_timeout_ms=0");
+         expectInvalidMavftp("terminate-timeout-negative", "terminate_timeout_ms=-1");
+         expectInvalidMavftp("terminate-timeout-low", "terminate_timeout_ms=99");
+         expectInvalidMavftp("terminate-timeout-high", "terminate_timeout_ms=60001");
         expectInvalidMavftp("retry-negative", "request_retry_count=-1");
         expectInvalidMavftp("retry-high", "request_retry_count=11");
         expectInvalidMavftp("window-zero", "write_window=0");
         expectInvalidMavftp("window-negative", "write_window=-1");
         expectInvalidMavftp("window-high", "write_window=17");
 
-        for (const int window : { 1, 2, 4, 8, 10, 16 })
+         for (const int window : { 1, 2, 4, 8, 10, 16 })
         {
             TemporaryConfigFile legalWindow(
                 "window-" + std::to_string(window), std::string(R"(
@@ -257,7 +265,27 @@ write_window=)") + std::to_string(window) + "\n");
             Expect(AppConfig::Load(legalWindow.GetPath(), legalConfig, legalError) &&
                 legalConfig.mavftpWriteWindow == static_cast<std::uint32_t>(window),
                 "legal MAVFTP write window was rejected");
-        }
+         }
+
+         for (const int timeout : { 100, 2500, 60000 })
+         {
+             TemporaryConfigFile legalTerminateTimeout(
+                 "terminate-timeout-" + std::to_string(timeout), std::string(R"(
+ safe_test_mode=true
+ mavlink_network_enabled=false
+ real_command_enabled=false
+ heartbeat_timeout_ms=3000
+ dspgcs_telemetry_enabled=false
+ dspgcs_command_enabled=false
+ [mavftp]
+ terminate_timeout_ms=)") + std::to_string(timeout) + "\n");
+             AppConfig legalConfig;
+             std::string legalError;
+             Expect(AppConfig::Load(legalTerminateTimeout.GetPath(),
+                 legalConfig, legalError) &&
+                 legalConfig.mavftpTerminateTimeoutMs == timeout,
+                 "legal MAVFTP terminate timeout was rejected");
+         }
 
         TemporaryConfigFile invalidRouteGate("invalid-route-gate", R"(
 safe_test_mode=true

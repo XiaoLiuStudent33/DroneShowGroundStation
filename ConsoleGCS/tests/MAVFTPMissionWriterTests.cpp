@@ -336,6 +336,7 @@ namespace
         FakeWire wire;
         ftp::ClientConfig clientConfig;
         clientConfig.requestTimeout = std::chrono::milliseconds(1);
+        clientConfig.terminateTimeout = std::chrono::milliseconds(1);
         clientConfig.maximumRetries = 1;
         ftp::Client client(wire, TestPeer(), clientConfig);
         auto fixture = CompileFixture(5, 3, ftp::MaximumDataBytes);

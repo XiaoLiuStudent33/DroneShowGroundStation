@@ -36,6 +36,7 @@ struct MAVFTPMissionHardwareTestOptions
     std::uint32_t artifactItemLimit = 0;
     std::uint32_t segmentItemCapacity = 65535U;
     int requestTimeoutMs = 750;
+    int terminateTimeoutMs = 2500;
     std::uint32_t requestRetryCount = 3;
     std::uint32_t writeWindow = 1;
 };
@@ -44,6 +45,7 @@ struct MAVFTPMissionHardwareTestOptions
 bool ResolveMAVFTPMissionTransportOptions(
     const AppConfig& appConfig,
     bool segmentItemsProvidedByCli,
+    bool terminateTimeoutProvidedByCli,
     bool writeWindowProvidedByCli,
     MAVFTPMissionHardwareTestOptions& options,
     std::string& error);
@@ -74,6 +76,10 @@ struct MAVFTPMissionHardwareTestReport
     std::uint64_t wireMissionItems = 0;
     std::uint32_t segmentCapacity = 0;
     std::uint64_t segmentCount = 0;
+    int requestTimeoutMs = 750;
+    int terminateTimeoutMs = 2500;
+    std::uint32_t requestRetryCount = 3;
+    std::uint32_t configuredWriteWindow = 1;
     std::optional<std::uint16_t> flightControllerMissionCount;
     bool homeSlotObserved = false;
     bool firstArtifactItemObserved = false;

@@ -81,36 +81,46 @@ namespace
         AppConfig config;
         config.mavftpSegmentItems = 4000U;
         config.mavftpRequestTimeoutMs = 750;
+        config.mavftpTerminateTimeoutMs = 2500;
         config.mavftpRequestRetryCount = 3U;
         config.mavftpWriteWindow = 8U;
         MAVFTPMissionHardwareTestOptions options;
         std::string error;
 
         Expect(ResolveMAVFTPMissionTransportOptions(
-            config, false, false, options, error) &&
+            config, false, false, false, options, error) &&
             options.segmentItemCapacity == 4000U &&
             options.requestTimeoutMs == 750 &&
+            options.terminateTimeoutMs == 2500 &&
             options.requestRetryCount == 3U &&
             options.writeWindow == 8U,
             "missing CLI did not use the INI-derived MAVFTP values");
 
         options.segmentItemCapacity = 4U;
+        options.terminateTimeoutMs = 5000;
         options.writeWindow = 4U;
         Expect(ResolveMAVFTPMissionTransportOptions(
-            config, true, true, options, error) &&
-            options.segmentItemCapacity == 4U && options.writeWindow == 4U,
+            config, true, true, true, options, error) &&
+            options.segmentItemCapacity == 4U &&
+            options.terminateTimeoutMs == 5000 && options.writeWindow == 4U,
             "explicit CLI transport values did not override INI");
 
         options.segmentItemCapacity = 0U;
         Expect(!ResolveMAVFTPMissionTransportOptions(
-            config, true, true, options, error) &&
+            config, true, true, true, options, error) &&
             options.segmentItemCapacity == 0U,
             "explicit CLI zero fell back to INI instead of failing");
         options.segmentItemCapacity = 4U;
         options.writeWindow = 0U;
         Expect(!ResolveMAVFTPMissionTransportOptions(
-            config, true, true, options, error) && options.writeWindow == 0U,
+            config, true, true, true, options, error) && options.writeWindow == 0U,
             "explicit CLI write-window zero fell back instead of failing");
+        options.writeWindow = 4U;
+        options.terminateTimeoutMs = 0;
+        Expect(!ResolveMAVFTPMissionTransportOptions(
+            config, true, true, true, options, error) &&
+            options.terminateTimeoutMs == 0,
+            "explicit CLI terminate-timeout zero fell back instead of failing");
     }
 
     void TestQuickModeResolvesCanonicalCurrentIdentity()
@@ -171,6 +181,7 @@ namespace
         options.routeSlotIndex = 0;
         options.segmentItemCapacity = 4;
         options.requestTimeoutMs = 1234;
+        options.terminateTimeoutMs = 4321;
         options.requestRetryCount = 2;
         options.writeWindow = 8;
         std::string error;
@@ -184,6 +195,7 @@ namespace
             options.artifactItemLimit == 10 &&
             options.segmentItemCapacity == 4 &&
             options.requestTimeoutMs == 1234 &&
+            options.terminateTimeoutMs == 4321 &&
             options.requestRetryCount == 2 &&
             options.writeWindow == 8 &&
             ValidateMAVFTPMissionHardwareTestOptions(options, error),
@@ -213,6 +225,7 @@ namespace
     {
         AppConfig appConfig;
         appConfig.mavftpRequestTimeoutMs = 100;
+        appConfig.mavftpTerminateTimeoutMs = 2500;
         appConfig.mavftpRequestRetryCount = 1;
         appConfig.mavftpWriteWindow = 4;
         CountingSender sender;
@@ -224,6 +237,8 @@ namespace
         sessionConfig.mavFtpServiceEnabled = true;
         sessionConfig.mavFtpRequestTimeoutMs =
             appConfig.mavftpRequestTimeoutMs;
+        sessionConfig.mavFtpTerminateTimeoutMs =
+            appConfig.mavftpTerminateTimeoutMs;
         sessionConfig.mavFtpRequestRetryCount =
             appConfig.mavftpRequestRetryCount;
         sessionConfig.mavFtpWriteWindow = appConfig.mavftpWriteWindow;
@@ -244,6 +259,10 @@ namespace
         auto* client = session.GetMavFtpClient();
         std::string error;
         Expect(client && client->GetConfiguredWriteWindow() == 4 &&
+            client->GetConfiguredRequestTimeout() ==
+                std::chrono::milliseconds(100) &&
+            client->GetConfiguredTerminateTimeout() ==
+                std::chrono::milliseconds(2500) &&
             client->StartResetSessions(error),
             "endpoint-bound client did not start configured request");
         const auto startedAt = std::chrono::steady_clock::now();
@@ -278,6 +297,10 @@ namespace
         report.mavftpMetrics.writeBytes = 428;
         report.mavftpMetrics.writeBlocks = 2;
         report.mavftpMetrics.retryCount = 1;
+        report.requestTimeoutMs = 750;
+        report.terminateTimeoutMs = 2500;
+        report.requestRetryCount = 3;
+        report.configuredWriteWindow = 8;
         report.mavftpMetrics.configuredWriteWindow = 8;
         report.mavftpMetrics.maxObservedOutstanding = 8;
         report.mavftpMetrics.writeBlocksSent = 2;
@@ -293,6 +316,9 @@ namespace
             summary.find("SegmentsCommitted=3") != std::string::npos &&
             summary.find("WriteBytes=428") != std::string::npos &&
             summary.find("WriteBlocks=2") != std::string::npos &&
+            summary.find("RequestTimeoutMs=750") != std::string::npos &&
+            summary.find("TerminateTimeoutMs=2500") != std::string::npos &&
+            summary.find("RequestRetryCount=3") != std::string::npos &&
             summary.find("ConfiguredWriteWindow=8") != std::string::npos &&
             summary.find("WriteDataDurationMs=50") != std::string::npos &&
             summary.find("HardwareValidationDurationMs=100") != std::string::npos &&

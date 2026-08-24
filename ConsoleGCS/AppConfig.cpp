@@ -461,6 +461,13 @@ bool AppConfig::Load(
             error) ||
         !ParseOptionalInteger(
             values,
+            "mavftp.terminate_timeout_ms",
+            100,
+            60000,
+            config.mavftpTerminateTimeoutMs,
+            error) ||
+        !ParseOptionalInteger(
+            values,
             "mavftp.request_retry_count",
             0,
             10,

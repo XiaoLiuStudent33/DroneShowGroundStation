@@ -34,6 +34,7 @@ namespace
 bool ResolveMAVFTPMissionTransportOptions(
     const AppConfig& appConfig,
     const bool segmentItemsProvidedByCli,
+    const bool terminateTimeoutProvidedByCli,
     const bool writeWindowProvidedByCli,
     MAVFTPMissionHardwareTestOptions& options,
     std::string& error)
@@ -44,6 +45,8 @@ bool ResolveMAVFTPMissionTransportOptions(
     if (!writeWindowProvidedByCli)
         options.writeWindow = appConfig.mavftpWriteWindow;
     options.requestTimeoutMs = appConfig.mavftpRequestTimeoutMs;
+    if (!terminateTimeoutProvidedByCli)
+        options.terminateTimeoutMs = appConfig.mavftpTerminateTimeoutMs;
     options.requestRetryCount = appConfig.mavftpRequestRetryCount;
 
     if (options.segmentItemCapacity == 0 ||
@@ -52,6 +55,9 @@ bool ResolveMAVFTPMissionTransportOptions(
     else if (options.requestTimeoutMs < 100 ||
         options.requestTimeoutMs > 60000)
         error = "MAVFTP request timeout must be within 100..60000 milliseconds.";
+    else if (options.terminateTimeoutMs < 100 ||
+        options.terminateTimeoutMs > 60000)
+        error = "MAVFTP terminate timeout must be within 100..60000 milliseconds.";
     else if (options.requestRetryCount > 10U)
         error = "MAVFTP request retry count must be within 0..10.";
     else if (options.writeWindow == 0 || options.writeWindow > 16U)
@@ -174,6 +180,9 @@ bool ValidateMAVFTPMissionHardwareTestOptions(
     else if (options.requestTimeoutMs < 100 ||
         options.requestTimeoutMs > 60000)
         error = "MAVFTP hardware test request timeout must be within 100..60000 milliseconds.";
+    else if (options.terminateTimeoutMs < 100 ||
+        options.terminateTimeoutMs > 60000)
+        error = "MAVFTP hardware test terminate timeout must be within 100..60000 milliseconds.";
     else if (options.requestRetryCount > 10U)
         error = "MAVFTP hardware test request retry count must be within 0..10.";
     else if (options.writeWindow == 0 || options.writeWindow > 16U)
@@ -203,10 +212,13 @@ std::string MAVFTPMissionHardwareTestReport::ToHumanSummary() const
     output << " HomeSlotObserved=" << YesNo(homeSlotObserved)
         << " FirstArtifactItemObserved=" << YesNo(firstArtifactItemObserved)
         << " LastItemObserved=" << YesNo(lastItemObserved)
+        << " RequestTimeoutMs=" << requestTimeoutMs
+        << " TerminateTimeoutMs=" << terminateTimeoutMs
+        << " RequestRetryCount=" << requestRetryCount
+        << " ConfiguredWriteWindow=" << configuredWriteWindow
         << " CreateDurationMs=" << mavftpMetrics.createDurationMs
         << " WriteBytes=" << mavftpMetrics.writeBytes
         << " WriteBlocks=" << mavftpMetrics.writeBlocks
-        << " ConfiguredWriteWindow=" << mavftpMetrics.configuredWriteWindow
         << " MaxObservedOutstanding=" << mavftpMetrics.maxObservedOutstanding
         << " WriteBlocksSent=" << mavftpMetrics.writeBlocksSent
         << " WriteBlocksAcked=" << mavftpMetrics.writeBlocksAcked
@@ -245,6 +257,10 @@ MAVFTPMissionHardwareTest::MAVFTPMissionHardwareTest(
     report_.droneId = options_.droneId;
     report_.routeSlotIndex = options_.routeSlotIndex;
     report_.segmentCapacity = options_.segmentItemCapacity;
+    report_.requestTimeoutMs = options_.requestTimeoutMs;
+    report_.terminateTimeoutMs = options_.terminateTimeoutMs;
+    report_.requestRetryCount = options_.requestRetryCount;
+    report_.configuredWriteWindow = options_.writeWindow;
 }
 
 MAVFTPMissionHardwareTest::~MAVFTPMissionHardwareTest() noexcept
@@ -296,6 +312,7 @@ bool MAVFTPMissionHardwareTest::Start(
         " SegmentCapacity=" +
         std::to_string(options_.segmentItemCapacity) +
         " RequestTimeoutMs=" + std::to_string(options_.requestTimeoutMs) +
+        " TerminateTimeoutMs=" + std::to_string(options_.terminateTimeoutMs) +
         " RequestRetryCount=" + std::to_string(options_.requestRetryCount) +
         " WriteWindow=" + std::to_string(options_.writeWindow));
     return true;
@@ -438,6 +455,7 @@ void MAVFTPMissionHardwareTest::TryBeginUpload(
         return;
     }
     if (sessionConfig.mavFtpRequestTimeoutMs != options_.requestTimeoutMs ||
+        sessionConfig.mavFtpTerminateTimeoutMs != options_.terminateTimeoutMs ||
         sessionConfig.mavFtpRequestRetryCount != options_.requestRetryCount ||
         sessionConfig.mavFtpWriteWindow != options_.writeWindow)
     {

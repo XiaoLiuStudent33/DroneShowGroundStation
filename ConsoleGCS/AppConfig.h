@@ -20,6 +20,7 @@ namespace AppConfigDefaults
     inline constexpr int SnapshotItemsPerChunk = 512;
     inline constexpr std::uint32_t MavftpSegmentItems = 65535U;
     inline constexpr int MavftpRequestTimeoutMs = 750;
+    inline constexpr int MavftpTerminateTimeoutMs = 2500;
     inline constexpr std::uint32_t MavftpRequestRetryCount = 3U;
     inline constexpr std::uint32_t MavftpWriteWindow = 1U;
 
@@ -51,6 +52,8 @@ struct AppConfig
         AppConfigDefaults::MavftpSegmentItems;
     int mavftpRequestTimeoutMs =
         AppConfigDefaults::MavftpRequestTimeoutMs;
+    int mavftpTerminateTimeoutMs =
+        AppConfigDefaults::MavftpTerminateTimeoutMs;
     std::uint32_t mavftpRequestRetryCount =
         AppConfigDefaults::MavftpRequestRetryCount;
     std::uint32_t mavftpWriteWindow =

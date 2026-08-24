@@ -93,6 +93,22 @@ namespace
         std::vector<std::array<std::uint8_t, ftp::PayloadBytes>> sent;
     };
 
+    struct FakeClock
+    {
+        std::chrono::steady_clock::time_point now{
+            std::chrono::milliseconds(100000) };
+
+        static std::chrono::steady_clock::time_point Read(void* context)
+        {
+            return static_cast<FakeClock*>(context)->now;
+        }
+
+        void Advance(const std::chrono::milliseconds amount)
+        {
+            now += amount;
+        }
+    };
+
     std::vector<std::uint8_t> U32(const std::uint32_t value)
     {
         std::vector<std::uint8_t> bytes(4);
@@ -224,6 +240,178 @@ namespace
             requestOpcode, sequenceDelta, offset);
         Expect(client.HandleResponse(TestPeer(), wire.data(), wire.size()),
             "expected fake MAVFTP response was rejected");
+    }
+
+    std::size_t CountOpcode(
+        const FakeTransport& transport,
+        const ftp::Opcode opcode)
+    {
+        std::size_t count = 0;
+        for (const auto& wire : transport.sent)
+        {
+            ftp::Payload request;
+            ftp::Error error;
+            Expect(ftp::DecodePayload(wire.data(), wire.size(), request, error),
+                "captured timeout fixture request did not decode");
+            if (request.opcode == opcode) ++count;
+        }
+        return count;
+    }
+
+    void TestPerOpcodeTimeoutAndTerminateSafety()
+    {
+        FakeClock clock;
+        ftp::ClientConfig config;
+        config.requestTimeout = std::chrono::milliseconds(750);
+        config.terminateTimeout = std::chrono::milliseconds(2500);
+        config.maximumRetries = 1;
+        config.clockNow = &FakeClock::Read;
+        config.clockContext = &clock;
+
+        FakeTransport ordinaryTransport;
+        ftp::Client ordinaryClient(ordinaryTransport, TestPeer(), config);
+        std::string error;
+        Expect(ordinaryClient.StartResetSessions(error),
+            "ordinary timeout fixture did not start");
+        const auto resetWire = ordinaryTransport.sent.back();
+        clock.Advance(std::chrono::milliseconds(749));
+        ordinaryClient.Tick(clock.now);
+        Expect(ordinaryTransport.sent.size() == 1,
+            "ordinary request retried before 750 ms");
+        clock.Advance(std::chrono::milliseconds(1));
+        ordinaryClient.Tick(clock.now);
+        Expect(ordinaryTransport.sent.size() == 2 &&
+            ordinaryTransport.sent.back() == resetWire,
+            "ordinary request did not retry at the 750 ms boundary");
+        Accept(ordinaryClient, ordinaryTransport, ftp::Opcode::Ack);
+        const auto ordinaryResult = ordinaryClient.ConsumeResult();
+        Expect(ordinaryResult && ordinaryResult->success &&
+            ordinaryResult->retryCount == 1,
+            "ordinary request timeout selection did not complete correctly");
+
+        FakeTransport writeTransport;
+        ftp::Client writeClient(writeTransport, TestPeer(), config);
+        Expect(writeClient.StartWriteFile(
+            "@MISSION/mission.dat", { 0x5a }, error),
+            "per-opcode timeout Write fixture did not start");
+        const auto createWire = writeTransport.sent.back();
+        clock.Advance(std::chrono::milliseconds(749));
+        writeClient.Tick(clock.now);
+        Expect(writeTransport.sent.size() == 1,
+            "Create retried before its 750 ms request timeout");
+        clock.Advance(std::chrono::milliseconds(1));
+        writeClient.Tick(clock.now);
+        Expect(writeTransport.sent.size() == 2 &&
+            writeTransport.sent.back() == createWire,
+            "Create did not retry at the 750 ms boundary");
+        Accept(writeClient, writeTransport, ftp::Opcode::Ack, {}, 41);
+        const auto writeWire = writeTransport.sent.back();
+        clock.Advance(std::chrono::milliseconds(749));
+        writeClient.Tick(clock.now);
+        Expect(writeTransport.sent.size() == 3,
+            "Write block retried before its 750 ms request timeout");
+        clock.Advance(std::chrono::milliseconds(1));
+        writeClient.Tick(clock.now);
+        Expect(writeTransport.sent.size() == 4 &&
+            writeTransport.sent.back() == writeWire,
+            "Write block did not retry at the 750 ms boundary");
+        Accept(writeClient, writeTransport, ftp::Opcode::Ack, U32(1), 41);
+        const auto terminateWire = writeTransport.sent.back();
+        Expect(writeTransport.Last().opcode == ftp::Opcode::TerminateSession,
+            "timeout fixture did not reach TerminateSession");
+        const std::size_t writesBeforeTerminateRetry =
+            CountOpcode(writeTransport, ftp::Opcode::WriteFile);
+        clock.Advance(std::chrono::milliseconds(2499));
+        writeClient.Tick(clock.now);
+        Expect(writeTransport.sent.back() == terminateWire &&
+            writeTransport.sent.size() == 5,
+            "Terminate retried before 2500 ms");
+        clock.Advance(std::chrono::milliseconds(1));
+        writeClient.Tick(clock.now);
+        Expect(writeTransport.sent.size() == 6 &&
+            writeTransport.sent.back() == terminateWire &&
+            CountOpcode(writeTransport, ftp::Opcode::WriteFile) ==
+                writesBeforeTerminateRetry,
+            "Terminate boundary retry changed identity or resent Write");
+        const auto duplicateTerminateAck = writeTransport.ReplyWire(
+            ftp::Opcode::Ack, {}, 41);
+        Accept(writeClient, writeTransport, ftp::Opcode::Ack, {}, 41);
+        Expect(!writeClient.HandleResponse(TestPeer(),
+            duplicateTerminateAck.data(), duplicateTerminateAck.size()),
+            "duplicate Terminate ACK completed the operation twice");
+        const auto writeResult = writeClient.ConsumeResult();
+        Expect(writeResult && writeResult->success &&
+            writeResult->createRetries == 1 &&
+            writeResult->writeRetries == 1 &&
+            writeResult->terminateRetries == 1 &&
+            writeResult->writeBlocksAcked == 1 &&
+            !writeClient.ConsumeResult(),
+            "per-opcode retries or result-once behavior are incorrect");
+
+        FakeTransport earlyTransport;
+        ftp::Client earlyClient(earlyTransport, TestPeer(), config);
+        Expect(earlyClient.StartWriteFile(
+            "@MISSION/mission.dat", { 0x6b }, error),
+            "early Terminate ACK fixture did not start");
+        Accept(earlyClient, earlyTransport, ftp::Opcode::Ack, {}, 42);
+        Accept(earlyClient, earlyTransport, ftp::Opcode::Ack, U32(1), 42);
+        clock.Advance(std::chrono::milliseconds(2499));
+        Accept(earlyClient, earlyTransport, ftp::Opcode::Ack, {}, 42);
+        const auto earlyResult = earlyClient.ConsumeResult();
+        Expect(earlyResult && earlyResult->success &&
+            earlyResult->terminateRetries == 0,
+            "Terminate ACK before its first deadline caused a retry");
+
+        FakeTransport exhaustedTransport;
+        ftp::Client exhaustedClient(exhaustedTransport, TestPeer(), config);
+        Expect(exhaustedClient.StartWriteFile(
+            "@MISSION/mission.dat", { 0x7c }, error),
+            "Terminate exhaustion fixture did not start");
+        Accept(exhaustedClient, exhaustedTransport, ftp::Opcode::Ack, {}, 43);
+        Accept(exhaustedClient, exhaustedTransport, ftp::Opcode::Ack, U32(1), 43);
+        const auto exhaustedTerminate = exhaustedTransport.Last();
+        const auto staleSequence = exhaustedTransport.ReplyWire(
+            ftp::Opcode::Ack, {}, 43, -1, 0);
+        Expect(!exhaustedClient.HandleResponse(TestPeer(),
+            staleSequence.data(), staleSequence.size()) &&
+            exhaustedClient.IsBusy(),
+            "wrong-identity Terminate ACK advanced the operation");
+        const auto wrongSession = exhaustedTransport.ReplyWire(
+            ftp::Opcode::Ack, {}, 44);
+        Expect(!exhaustedClient.HandleResponse(TestPeer(),
+            wrongSession.data(), wrongSession.size()) &&
+            exhaustedClient.IsBusy(),
+            "wrong-session Terminate ACK advanced the operation");
+        const std::size_t writesBeforeExhaustion =
+            CountOpcode(exhaustedTransport, ftp::Opcode::WriteFile);
+        clock.Advance(std::chrono::milliseconds(2500));
+        exhaustedClient.Tick(clock.now);
+        Expect(exhaustedTransport.Last().sequence ==
+                exhaustedTerminate.sequence &&
+            exhaustedTransport.Last().session == exhaustedTerminate.session &&
+            exhaustedTransport.Last().opcode ==
+                ftp::Opcode::TerminateSession &&
+            exhaustedTransport.Last().data == exhaustedTerminate.data &&
+            CountOpcode(exhaustedTransport, ftp::Opcode::WriteFile) ==
+                writesBeforeExhaustion,
+            "Terminate retry did not preserve its immutable request");
+        const auto lateAck = exhaustedTransport.ReplyWire(
+            ftp::Opcode::Ack, {}, 43);
+        const std::size_t sendsBeforeExhaustion = exhaustedTransport.sent.size();
+        clock.Advance(std::chrono::milliseconds(2500));
+        exhaustedClient.Tick(clock.now);
+        const auto exhaustedResult = exhaustedClient.ConsumeResult();
+        Expect(exhaustedResult && !exhaustedResult->success &&
+            exhaustedResult->terminalRequestOpcode ==
+                ftp::Opcode::TerminateSession &&
+            exhaustedResult->terminateRetries == 1 &&
+            exhaustedResult->writeBlocksAcked == 1 &&
+            exhaustedTransport.sent.size() == sendsBeforeExhaustion &&
+            !exhaustedClient.IsBusy(),
+            "Terminate retry exhaustion resent cleanup or committed the segment");
+        Expect(!exhaustedClient.HandleResponse(TestPeer(), lateAck.data(),
+            lateAck.size()) && !exhaustedClient.ConsumeResult(),
+            "late Terminate ACK recovered an exhausted operation");
     }
 
     void TestCodec()
@@ -942,6 +1130,7 @@ int RunMavFtpProbeTests()
         TestArduPilotPathCompatibility();
         TestClientReadWriteAndCorrelation();
         TestClientTimeoutCancelShutdown();
+        TestPerOpcodeTimeoutAndTerminateSafety();
         TestProbeReadOnlyAndGuards();
         TestIngressDispatcher();
         std::cout << "MAVFTP protocol/client and MissionProfileProbe tests passed\n";

@@ -50,6 +50,7 @@ namespace dronegcs::mission_ftp
         std::uint32_t configuredWriteWindow = 1;
         std::uint32_t maxObservedOutstanding = 0;
         std::uint64_t writeDataDurationMs = 0;
+        /** Sum of Terminate request-to-ACK durations across all segments. */
         std::uint64_t terminateDurationMs = 0;
         std::uint64_t commitDurationMs = 0;
         std::uint64_t totalMavftpDurationMs = 0;
