@@ -44,6 +44,11 @@ struct MissionPreparationResult
     std::string safeDiagnostic;
     std::vector<dronegcs::route_mission::MissionItemIntV1> mission;
     std::uint64_t bytesRead = 0;
+    std::uint64_t routeFileOpenDurationMs = 0;
+    std::uint64_t routeReadDurationMs = 0;
+    std::uint64_t waypointParseCompileDurationMs = 0;
+    std::uint64_t hashFinalizeDurationMs = 0;
+    std::uint64_t missionItemsParsed = 0;
     std::uint64_t prepareDurationMs = 0;
 
     bool Succeeded() const { return error == MissionPreparationError::None; }
@@ -83,4 +88,3 @@ private:
     std::atomic_bool cancel_{ false };
     bool inFlight_ = false;
 };
-

@@ -120,8 +120,10 @@ namespace
     {
     public:
         FakeManagerMissionTransport(bool& allowCompletion,
-            const bool firstMismatch, const bool lastMismatch)
+            bool& allowLiveProgress, const bool firstMismatch,
+            const bool lastMismatch)
             : allowCompletion_(allowCompletion)
+            , allowLiveProgress_(allowLiveProgress)
             , firstMismatch_(firstMismatch)
             , lastMismatch_(lastMismatch)
         {
@@ -151,8 +153,16 @@ namespace
 
         void Tick(std::chrono::steady_clock::time_point) override
         {
-            if (status_ != MissionTransportStatus::Uploading || !allowCompletion_)
+            if (status_ != MissionTransportStatus::Uploading) return;
+            if (!allowCompletion_)
+            {
+                if (allowLiveProgress_ && acknowledgedItems_ < artifactItems_)
+                {
+                    ++acknowledgedItems_;
+                    progressChanged_ = true;
+                }
                 return;
+            }
             if (firstMismatch_ || lastMismatch_)
             {
                 status_ = MissionTransportStatus::Failed;
@@ -201,7 +211,8 @@ namespace
             MissionTransportMetrics metrics;
             metrics.logicalBytesCompleted =
                 status_ == MissionTransportStatus::Succeeded
-                ? artifactItems_ * mission::MissionItemRecordBytesV1 : 0;
+                ? artifactItems_ * mission::MissionItemRecordBytesV1
+                : acknowledgedItems_ * mission::MissionItemRecordBytesV1;
             metrics.artifactRouteItems = artifactItems_;
             metrics.wireMissionItems = artifactItems_ + 1;
             metrics.uniqueItemsServed = artifactItems_ + 1;
@@ -220,9 +231,11 @@ namespace
 
     private:
         bool& allowCompletion_;
+        bool& allowLiveProgress_;
         bool firstMismatch_ = false;
         bool lastMismatch_ = false;
         std::size_t artifactItems_ = 0;
+        std::size_t acknowledgedItems_ = 0;
         MissionTransportStatus status_ = MissionTransportStatus::Idle;
         bool progressChanged_ = false;
         std::string safeDiagnostic_;
@@ -1109,7 +1122,8 @@ namespace
         const bool firstTargetInitiallyOffline = false,
         const bool shutdownWhileUploading = false,
         const bool firstVerificationMismatch = false,
-        const bool lastVerificationMismatch = false)
+        const bool lastVerificationMismatch = false,
+        const bool verifyLiveAggregate = false)
     {
         ScopedCoutCapture runtimeLog(
             firstVerificationMismatch || lastVerificationMismatch);
@@ -1181,17 +1195,19 @@ namespace
                     "fake Drone discovery failed");
         }
         bool allowTransportCompletion = false;
+        bool allowLiveProgress = false;
         RouteUploadManagerConfig managerConfig;
         managerConfig.routeUploadEnabled = true;
         managerConfig.testTransportFactory =
-            [&allowTransportCompletion, firstVerificationMismatch,
+            [&allowTransportCompletion, &allowLiveProgress,
+                firstVerificationMismatch,
                 lastVerificationMismatch](DroneSession&,
                     const RouteUploadManagerConfig&, std::string& diagnostic)
             {
                 diagnostic.clear();
                 return std::make_unique<FakeManagerMissionTransport>(
-                    allowTransportCompletion, firstVerificationMismatch,
-                    lastVerificationMismatch);
+                    allowTransportCompletion, allowLiveProgress,
+                    firstVerificationMismatch, lastVerificationMismatch);
             };
         RouteUploadManager manager(authority, drones, std::move(managerConfig));
         const auto deadline = std::chrono::steady_clock::now() +
@@ -1209,6 +1225,33 @@ namespace
             manager.GetSocketCountForTest() == 0 &&
             manager.GetTimerCountForTest() == 0,
             "scheduler resource bounds were violated");
+        if (verifyLiveAggregate)
+        {
+            authority.DrainRouteDeltas();
+            allowLiveProgress = true;
+            const auto base = std::chrono::steady_clock::now();
+            manager.Tick(base);
+            manager.Tick(base + std::chrono::milliseconds(250));
+            const auto* firstLive = authority.FindCurrentSnapshotForTest(jobId);
+            Expect(firstLive && firstLive->bytesCompleted > 0 &&
+                firstLive->bytesCompleted < firstLive->totalBytes &&
+                firstLive->throughputWindowMs >= 250,
+                "first bounded live Aggregate omitted acknowledged logical bytes");
+            const auto firstRevision = firstLive->jobRevision;
+            const auto firstBytes = firstLive->bytesCompleted;
+            manager.Tick(base + std::chrono::milliseconds(251));
+            const auto* throttled = authority.FindCurrentSnapshotForTest(jobId);
+            Expect(throttled && throttled->jobRevision == firstRevision &&
+                throttled->bytesCompleted == firstBytes,
+                "live Aggregate published once per Transport progress event");
+            manager.Tick(base + std::chrono::milliseconds(500));
+            const auto* secondLive = authority.FindCurrentSnapshotForTest(jobId);
+            Expect(secondLive && secondLive->jobRevision > firstRevision &&
+                secondLive->bytesCompleted >= firstBytes &&
+                secondLive->bytesCompleted <= secondLive->totalBytes &&
+                authority.DrainRouteDeltas().size() == 2,
+                "live Aggregate cadence or monotonic progress regressed");
+        }
         allowTransportCompletion = true;
 
         if (shutdownWhileUploading)
@@ -1408,7 +1451,7 @@ namespace
     void RunManagerIntegrationTests()
     {
         VerifyProductionTransportFactoryAndOwnership();
-        RunManagerScenario(1);
+        RunManagerScenario(1, false, false, false, false, false, true);
         RunManagerScenario(2);
         RunManagerScenario(3);
         RunManagerScenario(1, true);

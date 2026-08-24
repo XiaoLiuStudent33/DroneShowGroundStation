@@ -862,6 +862,10 @@ namespace
                 originalTarget->routeArtifactDigest &&
             targetAfterRetry->droneId == originalTarget->droneId,
             "Retry rebound immutable Job authorities");
+        const auto* resetProgress = authority.FindCurrentSnapshotForTest(
+            start.uploadJobId);
+        Expect(resetProgress && resetProgress->bytesCompleted == 0,
+            "RetryFailed retained acknowledged bytes from the old Attempt");
 
         const auto* retrySnapshot = authority.FindCurrentSnapshotForTest(
             start.uploadJobId);
@@ -1120,6 +1124,55 @@ namespace
         routes.front().bytesCompleted = 10;
         Expect(authority.ApplyExecutorRouteUpdates(
             Id('8'), { routes.front() }, 100, 1000, 10, error), error);
+		const auto* liveAggregate = authority.FindCurrentSnapshotForTest(Id('8'));
+		Expect(liveAggregate && liveAggregate->bytesCompleted == 10,
+			"live Aggregate did not sum acknowledged Route bytes");
+		const auto revisionBeforeRefresh = liveAggregate->jobRevision;
+		Expect(authority.RefreshExecutorAggregate(
+			Id('8'), 200, 250, 50, error), error);
+		liveAggregate = authority.FindCurrentSnapshotForTest(Id('8'));
+		Expect(liveAggregate && liveAggregate->jobRevision ==
+				revisionBeforeRefresh + 1 &&
+			liveAggregate->bytesCompleted == 10 &&
+			liveAggregate->throughputBytesPerSecond == 200 &&
+			liveAggregate->throughputWindowMs == 250 &&
+			liveAggregate->elapsedMs == 50 && authority.DrainRouteDeltas().size() == 1,
+			"Aggregate-only refresh changed Route progress or emitted a Route Delta");
+
+		auto staleProgress = routes.front();
+		staleProgress.state = dspgcs::UploadRouteState::Uploading;
+		staleProgress.bytesCompleted = 9;
+		Expect(!authority.ApplyExecutorRouteUpdates(
+			Id('8'), { staleProgress }, 0, 250, 60, error),
+			"same-Attempt acknowledged bytes were allowed to regress");
+		auto invalidNextAttempt = routes[1];
+		invalidNextAttempt.state = dspgcs::UploadRouteState::Preparing;
+		invalidNextAttempt.attemptCount = 1;
+		invalidNextAttempt.bytesCompleted = 1;
+		Expect(!authority.ApplyExecutorRouteUpdates(
+			Id('8'), { invalidNextAttempt }, 0, 250, 60, error),
+			"new Attempt accepted stale non-zero progress");
+		invalidNextAttempt.bytesCompleted = 0;
+		Expect(authority.ApplyExecutorRouteUpdates(
+			Id('8'), { invalidNextAttempt }, 0, 250, 60, error), error);
+		invalidNextAttempt.state = dspgcs::UploadRouteState::Uploading;
+		invalidNextAttempt.bytesCompleted = 20;
+		Expect(authority.ApplyExecutorRouteUpdates(
+			Id('8'), { invalidNextAttempt }, 300, 250, 70, error), error);
+		liveAggregate = authority.FindCurrentSnapshotForTest(Id('8'));
+		Expect(liveAggregate && liveAggregate->bytesCompleted == 30,
+			"future multi-target Aggregate did not sum logical bytes");
+		auto oldAttempt = routes[1];
+		oldAttempt.state = dspgcs::UploadRouteState::Uploading;
+		oldAttempt.bytesCompleted = 30;
+		Expect(!authority.ApplyExecutorRouteUpdates(
+			Id('8'), { oldAttempt }, 0, 250, 80, error),
+			"late old-Attempt progress polluted the current Attempt");
+		Expect(authority.DrainRouteDeltas().size() == 2,
+			"Attempt isolation emitted an unexpected number of Route Deltas");
+		routes.front().bytesCompleted = 11;
+		Expect(authority.ApplyExecutorRouteUpdates(
+			Id('8'), { routes.front() }, 300, 250, 80, error), error);
 		dspgcs::UploadJobSnapshotRequestDTO frozenPageRequest;
 		frozenPageRequest.clientRequestId = Id('a');
 		frozenPageRequest.uploadJobId = Id('8');
@@ -1174,6 +1227,36 @@ namespace
             << " pageBytes=" << tenThousand.pageBytes << '\n'
             << "routes=20000 existingStateRegression=PASS\n";
     }
+    void VerifySingleMatchedTargetBoundsThousandRouteArtifact()
+    {
+        auto fixture = MakeArtifact("selected-target-1000", 1000, 2);
+        FrozenAssignmentStore store;
+        const auto frozen = AcceptFrozen(
+            store, MakeFrozen(fixture, 1, 999));
+        ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+        ConsoleUploadJobAuthority authority(
+            fixture.workspace->root.u8string(), &consumer, &store);
+        const auto start = StartCommand(fixture, *frozen, Id('c'), Id('d'));
+        const auto acknowledgement = authority.HandleCommand(
+            "selected-client", start, EncodeCommand(start));
+        Expect(acknowledgement.status ==
+            dspgcs::UploadJobCommandAckStatus::Accepted,
+            "single-target 1000-route Start was rejected");
+        const auto snapshot = WaitForStart(authority, start.uploadJobId);
+        const auto view = authority.GetExecutionView(start.uploadJobId);
+        const auto acceptedArtifact = consumer.GetAcceptedSnapshot();
+        Expect(snapshot.resultCode == dspgcs::UploadJobErrorCode::None
+            && snapshot.matchedCount == 1
+            && snapshot.vacantCount == 999
+            && authority.GetFrozenPageRouteCountForTest(start.uploadJobId) == 1
+            && view && view->targets.size() == 1
+            && view->targets[0].routeSlotIndex == 0
+            && acceptedArtifact
+            && acceptedArtifact->validationScope.matchedRoutes.size() == 1
+            && acceptedArtifact->routes[0].validationConfirmed
+            && !acceptedArtifact->routes[1].validationConfirmed,
+            "1000-route Artifact materialized or validated Vacant targets");
+    }
 }
 
 int RunDSPUploadJobProtocolTests()
@@ -1187,6 +1270,7 @@ int RunDSPUploadJobProtocolTests()
         VerifyMissionPayloadByteAuthority();
         VerifyLifecycleAndLease();
         VerifyScaleAndSnapshotDelta();
+        VerifySingleMatchedTargetBoundsThousandRouteArtifact();
         std::cout << "DSP Upload Job schema2 dual-binding tests passed\n";
         return 0;
     }

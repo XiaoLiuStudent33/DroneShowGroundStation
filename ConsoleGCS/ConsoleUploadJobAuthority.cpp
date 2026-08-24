@@ -1,4 +1,5 @@
 #include "ConsoleUploadJobAuthority.h"
+#include "ConsoleUI.h"
 #include "RouteMissionCodec.h"
 
 #include <algorithm>
@@ -38,6 +39,23 @@ namespace
             dspgcs::UploadFrozenAssignmentBindingEqual(
                 snapshot.frozenAssignmentBinding,
                 command.frozenAssignmentBinding);
+    }
+
+    bool IsTerminalJobState(const dspgcs::UploadJobState state)
+    {
+        return state == dspgcs::UploadJobState::Completed ||
+            state == dspgcs::UploadJobState::Failed ||
+            state == dspgcs::UploadJobState::Cancelled;
+    }
+
+    std::uint64_t ElapsedSince(
+        const std::chrono::steady_clock::time_point start)
+    {
+        if (start == std::chrono::steady_clock::time_point{}) return 0;
+        const auto now = std::chrono::steady_clock::now();
+        if (now <= start) return 0;
+        return static_cast<std::uint64_t>(std::chrono::duration_cast<
+            std::chrono::milliseconds>(now - start).count());
     }
 }
 
@@ -172,6 +190,7 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
     const dspgcs::UploadJobCommandDTO& command,
     const std::vector<std::uint8_t>& canonicalCommandPayload)
 {
+    const auto commandStartedAt = std::chrono::steady_clock::now();
     const std::string idempotencyKey =
         clientSessionId + ":" + command.clientCommandId;
     const auto previous = idempotency_.find(idempotencyKey);
@@ -262,13 +281,46 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
                     pending.snapshot.updatedAtUtcMs = UtcNowMs();
                     pending.snapshot.effectiveMaxConcurrentUploads =
                         command.requestedMaxConcurrentUploads;
+                    pending.createdAt = std::chrono::steady_clock::now();
                     pending.idempotencyKey = idempotencyKey;
                     pending.command = command;
                     pending.expectedArtifact =
                         ToExpectedIdentity(command.artifactBinding);
                     pending.frozenSnapshot = frozen;
+                    ConsoleArtifactV2ValidationScope validationScope;
+                    validationScope.fullArtifactValidation = false;
+                    validationScope.frozenAssignmentRevision =
+                        frozen->identity.assignmentRevision;
+                    std::copy(frozen->canonicalPayloadDigest.begin(),
+                        frozen->canonicalPayloadDigest.end(),
+                        validationScope.frozenAssignmentDigest.begin());
+                    validationScope.matchedRoutes.reserve(
+                        frozen->matchedMappings.size());
+                    for (const auto& mapping : frozen->matchedMappings)
+                    {
+                        validationScope.matchedRoutes.push_back(
+                            { mapping.droneId, mapping.routeSlotIndex });
+                    }
+                    pending.authorityLookupDurationMs = ElapsedSince(commandStartedAt);
+                    pending.validationRequestedAt = std::chrono::steady_clock::now();
                     pending.validationGeneration =
-                        artifactConsumer_->RequestValidation(pending.expectedArtifact);
+                        artifactConsumer_->RequestValidation(
+                            pending.expectedArtifact, std::move(validationScope));
+                    ConsoleUI::AddLog(
+                        "[UploadJobStage] Stage=JobAccepted UploadJobID=" +
+                        command.uploadJobId + " ArtifactSetID=" +
+                        pending.expectedArtifact.artifactSetId +
+                        " FrozenRevision=" +
+                        std::to_string(frozen->identity.assignmentRevision) +
+                        " MatchedTargets=" +
+                        std::to_string(frozen->matchedMappings.size()) +
+                        " RouteSlots=" + std::to_string(frozen->routeSlotCount) +
+                        " Vacant=" + std::to_string(frozen->vacantCount) +
+                        " DurationMs=" +
+                        std::to_string(pending.authorityLookupDurationMs) +
+                        " ValidationGeneration=" +
+                        std::to_string(pending.validationGeneration) +
+                        " WaitOrRetry=no");
                     validationStarts_[pending.validationGeneration] =
                         command.uploadJobId;
                     const std::uint64_t revision = pending.snapshot.jobRevision;
@@ -333,6 +385,7 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
                     if (route.state == dspgcs::UploadRouteState::Failed)
                     {
                         route.state = dspgcs::UploadRouteState::Waiting;
+                        route.bytesCompleted = 0;
                         route.errorCode = dspgcs::RouteUploadErrorCode::None;
                         route.safeFailureSummary.clear();
                         route.retryable = false;
@@ -434,6 +487,9 @@ void ConsoleUploadJobAuthority::CompletePendingStart(
     PendingStart pending,
     const ConsoleArtifactV2ValidationResult& result)
 {
+    const auto materializationStartedAt = std::chrono::steady_clock::now();
+    std::uint64_t routeResolutionDurationMs = 0;
+    std::uint64_t leaseDurationMs = 0;
     auto fail = [this, &uploadJobId, &pending](
         const dspgcs::UploadJobErrorCode code, const char* message)
     {
@@ -537,7 +593,8 @@ void ConsoleUploadJobAuthority::CompletePendingStart(
         if (routeIndex >= result.snapshot->routes.size() ||
             result.snapshot->routes[routeIndex].routeSlotIndex !=
                 mapping.routeSlotIndex ||
-            result.snapshot->routes[routeIndex].fileByteSize < 0)
+            result.snapshot->routes[routeIndex].fileByteSize < 0 ||
+            !result.snapshot->routes[routeIndex].validationConfirmed)
         {
             fail(dspgcs::UploadJobErrorCode::RouteRecordMissing,
                 "A Frozen Assignment RouteSlot has no validated Artifact record.");
@@ -566,6 +623,7 @@ void ConsoleUploadJobAuthority::CompletePendingStart(
         {
             return left.metadata.routeSlotIndex < right.metadata.routeSlotIndex;
         });
+    routeResolutionDurationMs = ElapsedSince(materializationStartedAt);
 
     const std::string currentFleetSessionId =
         frozenAssignmentStore_->GetCurrentFleetSessionID();
@@ -594,6 +652,7 @@ void ConsoleUploadJobAuthority::CompletePendingStart(
 
     std::unique_ptr<dronegcs::route_artifact::ArtifactReadLease> lease;
     ConsoleArtifactV2Diagnostic diagnostic;
+    const auto leaseStartedAt = std::chrono::steady_clock::now();
     if (!AcquireArtifactLease(
         pending, result.snapshot->currentDirectoryIdentity, lease, diagnostic))
     {
@@ -607,6 +666,7 @@ void ConsoleUploadJobAuthority::CompletePendingStart(
         fail(code, "Artifact Current changed or its read lease could not be acquired.");
         return;
     }
+    leaseDurationMs = ElapsedSince(leaseStartedAt);
 
     Job job;
     job.snapshot = pending.snapshot;
@@ -626,6 +686,7 @@ void ConsoleUploadJobAuthority::CompletePendingStart(
     job.frozenSnapshot = pending.frozenSnapshot;
     job.currentDirectoryIdentity = result.snapshot->currentDirectoryIdentity;
     job.artifactLease = std::move(lease);
+    job.createdAt = pending.createdAt;
     RecalculateAggregate(job);
 
     const std::uint64_t revision = job.snapshot.jobRevision;
@@ -645,6 +706,19 @@ void ConsoleUploadJobAuthority::CompletePendingStart(
         record->second.acknowledgement =
             Accept(pending.command, revision, concurrency);
     }
+    ConsoleUI::AddLog(
+        "[UploadJobStage] Stage=TargetCreation UploadJobID=" + uploadJobId +
+        " ArtifactSetID=" + pending.expectedArtifact.artifactSetId +
+        " FrozenRevision=" + std::to_string(frozen.identity.assignmentRevision) +
+        " MatchedTargets=" + std::to_string(frozen.matchedMappings.size()) +
+        " RouteSlots=" + std::to_string(frozen.routeSlotCount) +
+        " RouteFilesAccessed=0 BytesRead=0 ParsedMissionItems=0 CacheHit=" +
+        (result.metrics.cacheHit ? "yes" : "no") +
+        " RouteResolutionMs=" + std::to_string(routeResolutionDurationMs) +
+        " LeaseMs=" + std::to_string(leaseDurationMs) +
+        " DurationMs=" + std::to_string(ElapsedSince(materializationStartedAt)) +
+        " AcceptedToReadyMs=" + std::to_string(ElapsedSince(pending.createdAt)) +
+        " WaitOrRetry=no");
 }
 
 void ConsoleUploadJobAuthority::Tick()
@@ -661,6 +735,37 @@ void ConsoleUploadJobAuthority::Tick()
         if (pendingItem == pendingStarts_.end()) continue;
         PendingStart pending = std::move(pendingItem->second);
         pendingStarts_.erase(pendingItem);
+        ConsoleUI::AddLog(
+            "[UploadJobStage] Stage=ArtifactValidation UploadJobID=" +
+            uploadJobId + " ArtifactSetID=" +
+            pending.expectedArtifact.artifactSetId + " FrozenRevision=" +
+            std::to_string(pending.frozenSnapshot
+                ? pending.frozenSnapshot->identity.assignmentRevision : 0) +
+            " DurationMs=" + std::to_string(
+                ElapsedSince(pending.validationRequestedAt)) +
+            " MetadataMs=" +
+            std::to_string(result.metrics.metadataDurationMs) +
+            " RouteValidationMs=" +
+            std::to_string(result.metrics.routeValidationDurationMs) +
+            " RecheckMs=" +
+            std::to_string(result.metrics.metadataRecheckDurationMs) +
+            " CacheIdentityMs=" +
+            std::to_string(result.metrics.cacheIdentityCheckDurationMs) +
+            " CacheHit=" + (result.metrics.cacheHit ? "yes" : "no") +
+            " ManifestRoutes=" +
+            std::to_string(result.metrics.manifestRouteCount) +
+            " SelectedRoutes=" +
+            std::to_string(result.metrics.selectedRouteCount) +
+            " RouteFilesRead=" +
+            std::to_string(result.metrics.routeFilesRead) +
+            " RouteFilesOpened=" +
+            std::to_string(result.metrics.physicalRouteOpenCount) +
+            " BytesRead=" + std::to_string(result.metrics.bytesRead) +
+            " ParsedMissionItems=" +
+            std::to_string(result.metrics.rowsParsed) +
+            " ValidationGeneration=" +
+            std::to_string(result.generation) + " WaitOrRetry=no Result=" +
+            (result.success ? "Succeeded" : "Failed"));
         CompletePendingStart(uploadJobId, std::move(pending), result);
     }
 }
@@ -721,6 +826,8 @@ dspgcs::UploadJobSnapshotDTO ConsoleUploadJobAuthority::BuildSnapshot(
     Job* job = FindJob(request.uploadJobId);
     if (job)
     {
+        if (!IsTerminalJobState(job->snapshot.jobState))
+            job->snapshot.elapsedMs = ElapsedSince(job->createdAt);
         job->snapshot.clientRequestId = request.clientRequestId;
         job->snapshot.snapshotToken = MakeCanonicalId();
         ++job->snapshot.snapshotSequence;
@@ -736,6 +843,7 @@ dspgcs::UploadJobSnapshotDTO ConsoleUploadJobAuthority::BuildSnapshot(
     if (pendingItem != pendingStarts_.end())
     {
         auto& snapshot = pendingItem->second.snapshot;
+        snapshot.elapsedMs = ElapsedSince(pendingItem->second.createdAt);
         snapshot.clientRequestId = request.clientRequestId;
         snapshot.snapshotToken = MakeCanonicalId();
         ++snapshot.snapshotSequence;
@@ -881,6 +989,16 @@ bool ConsoleUploadJobAuthority::ApplyExecutorRouteUpdates(
             error = "Executor route update identity is invalid.";
             return false;
         }
+        if (update.attemptCount < item->state.attemptCount ||
+            update.attemptCount > item->state.attemptCount + 1 ||
+            (update.attemptCount == item->state.attemptCount &&
+                update.bytesCompleted < item->state.bytesCompleted) ||
+            (update.attemptCount > item->state.attemptCount &&
+                update.bytesCompleted != 0))
+        {
+            error = "Executor route update attempt or progress is stale.";
+            return false;
+        }
         resolvedUpdates.emplace_back(
             static_cast<std::size_t>(item - job->targets.begin()), &update);
     }
@@ -921,6 +1039,28 @@ bool ConsoleUploadJobAuthority::ApplyExecutorRouteUpdates(
     job->snapshot.elapsedMs = elapsedMs;
     if (failureSetChanged) RecalculateFirstFailure(*job);
     QueueRouteDeltas(*job, updates);
+    error.clear();
+    return true;
+}
+
+bool ConsoleUploadJobAuthority::RefreshExecutorAggregate(
+    const std::string& uploadJobId,
+    const std::uint64_t throughputBytesPerSecond,
+    const std::uint32_t throughputWindowMs,
+    const std::uint64_t elapsedMs,
+    std::string& error)
+{
+    Job* job = FindJob(uploadJobId);
+    if (!job || !job->artifactLease || IsTerminalJobState(job->snapshot.jobState))
+    {
+        error = "Executor aggregate refresh requires a live leased Job.";
+        return false;
+    }
+    ++job->snapshot.jobRevision;
+    job->snapshot.updatedAtUtcMs = UtcNowMs();
+    job->snapshot.throughputBytesPerSecond = throughputBytesPerSecond;
+    job->snapshot.throughputWindowMs = throughputWindowMs;
+    job->snapshot.elapsedMs = elapsedMs;
     error.clear();
     return true;
 }
@@ -971,6 +1111,7 @@ ConsoleUploadJobAuthority::GetExecutionView(
     UploadJobExecutionView view;
     view.uploadJobId = job.snapshot.uploadJobId;
     view.jobRevision = job.snapshot.jobRevision;
+    view.createdAt = job.createdAt;
     view.artifactBinding = job.snapshot.artifactBinding;
     view.frozenBinding = job.snapshot.frozenAssignmentBinding;
     view.effectiveMaxConcurrentUploads =

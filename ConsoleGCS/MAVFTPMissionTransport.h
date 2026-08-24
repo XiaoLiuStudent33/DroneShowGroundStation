@@ -134,6 +134,7 @@ namespace dronegcs::mission_ftp
             std::string& error);
         bool StartCurrentSegment();
         void ApplyOperationMetrics(const mavftp::OperationResult& result);
+        void UpdateLiveLogicalProgress();
         void Fail(std::string phase, std::string diagnostic,
             std::chrono::steady_clock::time_point now);
         void UpdateElapsed(std::chrono::steady_clock::time_point now);

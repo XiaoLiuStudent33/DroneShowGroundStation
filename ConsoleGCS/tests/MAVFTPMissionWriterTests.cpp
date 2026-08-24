@@ -319,6 +319,78 @@ namespace
             "writer success metrics are incomplete");
     }
 
+    void TestAcknowledgedLogicalProgressBeforeTerminate()
+    {
+        FakeWire wire;
+        ftp::Client client(wire, TestPeer());
+        auto fixture = CompileFixture(5, 32, ftp::MaximumDataBytes);
+        compiler::MAVFTPMissionTransport writer(client, fixture.writerConfig);
+        std::string diagnostic;
+        Expect(writer.PrepareCompiled(TestIdentity(), fixture.compiled.snapshot,
+            diagnostic), "live progress writer prepare failed: " + diagnostic);
+        const auto now = std::chrono::steady_clock::now();
+        Expect(writer.Upload(now), "live progress writer upload did not start");
+
+        const ftp::Payload create = wire.Decode(0);
+        Expect(create.opcode == ftp::Opcode::CreateFile,
+            "live progress did not start with CreateFile");
+        wire.Ack(client, create, 23);
+        writer.Tick(now);
+        const ftp::Payload write = wire.Decode(1);
+        Expect(write.opcode == ftp::Opcode::WriteFile,
+            "live progress did not issue WriteFile");
+        wire.Ack(client, write, 23);
+        writer.Tick(now);
+
+        const std::uint64_t expectedLogicalBytes =
+            5 * mission::MissionItemRecordBytesV1;
+        Expect(client.GetAcknowledgedWriteBytes() == write.data.size() &&
+            client.GetAcknowledgedWriteBlocks() == 1 &&
+            writer.GetMetrics().logicalBytesCompleted == expectedLogicalBytes &&
+            writer.GetMavFtpMetrics().segmentsCommitted == 0 &&
+            writer.GetStatus() == MissionTransportStatus::WaitingAck,
+            "Write ACK did not expose logical progress before Terminate ACK");
+        Expect(writer.ConsumeProgressChanged(),
+            "Write ACK did not raise the bounded progress signal");
+
+        const ftp::Payload terminate = wire.Decode(2);
+        Expect(terminate.opcode == ftp::Opcode::TerminateSession,
+            "live progress did not preserve Terminate gate");
+        wire.Ack(client, terminate, 23);
+        writer.Tick(now);
+        Expect(writer.Verify() &&
+            writer.GetMetrics().logicalBytesCompleted == expectedLogicalBytes,
+            "Terminate ACK changed acknowledged logical progress");
+    }
+
+    void TestCancelFreezesLatestAcknowledgedLogicalProgress()
+    {
+        FakeWire wire;
+        ftp::Client client(wire, TestPeer());
+        auto fixture = CompileFixture(50, 64, ftp::MaximumDataBytes);
+        compiler::MAVFTPMissionTransport writer(client, fixture.writerConfig);
+        std::string diagnostic;
+        Expect(writer.PrepareCompiled(TestIdentity(), fixture.compiled.snapshot,
+            diagnostic), "cancel progress writer prepare failed: " + diagnostic);
+        const auto now = std::chrono::steady_clock::now();
+        Expect(writer.Upload(now), "cancel progress writer upload did not start");
+        const ftp::Payload create = wire.Decode(0);
+        wire.Ack(client, create, 29);
+        writer.Tick(now);
+        const ftp::Payload write = wire.Decode(1);
+        wire.Ack(client, write, 29);
+
+        writer.Cancel(now);
+        const std::uint64_t frozen = writer.GetMetrics().logicalBytesCompleted;
+        Expect(writer.GetStatus() == MissionTransportStatus::Cancelled &&
+            frozen > 0 && frozen <
+                50 * mission::MissionItemRecordBytesV1,
+            "Cancel discarded or fabricated the latest ACK progress");
+        writer.Tick(now + std::chrono::seconds(1));
+        Expect(writer.GetMetrics().logicalBytesCompleted == frozen,
+            "Cancelled progress continued after the terminal state");
+    }
+
     void TestProductionCutoverLifecycleAndTickOwnership()
     {
         FakeWire ftpWire;
@@ -923,6 +995,8 @@ int RunMAVFTPMissionWriterTests()
     try
     {
         TestCreateWriteTerminateSuccess();
+        TestAcknowledgedLogicalProgressBeforeTerminate();
+        TestCancelFreezesLatestAcknowledgedLogicalProgress();
         TestProductionCutoverLifecycleAndTickOwnership();
         TestWriteTimeoutRetriesSameBlock();
         TestOffsetMismatchFails();

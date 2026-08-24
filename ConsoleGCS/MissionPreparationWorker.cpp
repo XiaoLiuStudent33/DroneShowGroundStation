@@ -159,12 +159,21 @@ MissionPreparationResult MissionPreparationWorker::PrepareForTest(
     const std::atomic_bool* cancelled)
 {
     const auto startedAt = std::chrono::steady_clock::now();
+    std::chrono::nanoseconds routeReadTime{};
+    std::chrono::nanoseconds parseCompileTime{};
     MissionPreparationResult result;
     result.uploadJobId = request.uploadJobId;
     result.generation = request.generation;
     result.target = request.target;
-    auto finish = [&result, startedAt]() -> MissionPreparationResult
+    auto finish = [&result, startedAt, &routeReadTime,
+        &parseCompileTime]() -> MissionPreparationResult
     {
+        result.routeReadDurationMs = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                routeReadTime).count());
+        result.waypointParseCompileDurationMs = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                parseCompileTime).count());
         result.prepareDurationMs = static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - startedAt).count());
@@ -191,6 +200,7 @@ MissionPreparationResult MissionPreparationWorker::PrepareForTest(
         return fail(MissionPreparationError::MissionConversionFailed,
             "Artifact route item count exceeds the ArduPilot Mission wire limit.");
 
+    const auto routeOpenStartedAt = std::chrono::steady_clock::now();
     std::error_code pathError;
     const fs::path root = fs::weakly_canonical(
         fs::u8path(request.artifactSnapshot->resolvedCurrentRoot), pathError);
@@ -223,6 +233,9 @@ MissionPreparationResult MissionPreparationWorker::PrepareForTest(
     if (fileSize.QuadPart != request.target.fileByteSize)
         return fail(MissionPreparationError::RouteSizeMismatch,
             "Route source file size differs from the held Artifact.");
+    result.routeFileOpenDurationMs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - routeOpenStartedAt).count());
 
     result.mission.reserve(request.target.missionItemCount);
     RowContext rowContext{ &result.mission, cancelled };
@@ -237,12 +250,15 @@ MissionPreparationResult MissionPreparationWorker::PrepareForTest(
             return fail(MissionPreparationError::Cancelled,
                 "Mission preparation was cancelled.");
         DWORD read = 0;
+        const auto readStartedAt = std::chrono::steady_clock::now();
         if (!ReadFile(handle.value, buffer.data(),
             static_cast<DWORD>(buffer.size()), &read, nullptr))
             return fail(MissionPreparationError::IoFailure,
                 "Route source read failed.");
+        routeReadTime += std::chrono::steady_clock::now() - readStartedAt;
         if (read == 0) break;
         result.bytesRead += read;
+        const auto parseStartedAt = std::chrono::steady_clock::now();
         if (!sha.Update(buffer.data(), read) || !parser.Consume(buffer.data(), read))
         {
             if (cancelled && cancelled->load())
@@ -255,18 +271,26 @@ MissionPreparationResult MissionPreparationWorker::PrepareForTest(
                     ? "Route row could not be converted to a Mission item."
                     : "Route WPL grammar or semantics are invalid.");
         }
+        parseCompileTime += std::chrono::steady_clock::now() - parseStartedAt;
     }
+    const auto parseFinishStartedAt = std::chrono::steady_clock::now();
     if (!parser.Finish() || result.mission.size() != request.target.missionItemCount)
         return fail(MissionPreparationError::WaypointValidationFailed,
             "Route WPL row count differs from the held Artifact.");
+    parseCompileTime += std::chrono::steady_clock::now() - parseFinishStartedAt;
+    result.missionItemsParsed = result.mission.size();
 
     artifact::Digest256 digest;
     BY_HANDLE_FILE_INFORMATION after{};
+    const auto hashFinalizeStartedAt = std::chrono::steady_clock::now();
     if (!sha.Finalize(digest) ||
         !GetFileInformationByHandle(handle.value, &after) ||
         !SameFile(before, after))
         return fail(MissionPreparationError::IoFailure,
             "Route source changed during Mission preparation.");
+    result.hashFinalizeDurationMs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - hashFinalizeStartedAt).count());
     if (result.bytesRead != static_cast<std::uint64_t>(request.target.fileByteSize))
         return fail(MissionPreparationError::RouteSizeMismatch,
             "Route bytes read differ from the held Artifact.");

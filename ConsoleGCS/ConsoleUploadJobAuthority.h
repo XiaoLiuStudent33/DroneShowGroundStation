@@ -6,6 +6,7 @@
 #include "RouteArtifactReadLease.h"
 
 #include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -30,6 +31,7 @@ struct UploadJobExecutionView
 {
     std::string uploadJobId;
     std::uint64_t jobRevision = 0;
+    std::chrono::steady_clock::time_point createdAt{};
     dspgcs::UploadArtifactBindingDTO artifactBinding;
     dspgcs::UploadFrozenAssignmentBindingDTO frozenBinding;
     std::uint32_t effectiveMaxConcurrentUploads = 0;
@@ -70,6 +72,12 @@ public:
     bool ApplyExecutorRouteUpdates(
         const std::string& uploadJobId,
         const std::vector<dspgcs::UploadRouteStateDTO>& updates,
+        std::uint64_t throughputBytesPerSecond,
+        std::uint32_t throughputWindowMs,
+        std::uint64_t elapsedMs,
+        std::string& error);
+    bool RefreshExecutorAggregate(
+        const std::string& uploadJobId,
         std::uint64_t throughputBytesPerSecond,
         std::uint32_t throughputWindowMs,
         std::uint64_t elapsedMs,
@@ -139,6 +147,7 @@ private:
         std::shared_ptr<const FrozenAssignmentAcceptedSnapshot> frozenSnapshot;
         RouteArtifactV2CurrentDirectoryIdentity currentDirectoryIdentity;
         std::unique_ptr<dronegcs::route_artifact::ArtifactReadLease> artifactLease;
+        std::chrono::steady_clock::time_point createdAt{};
     };
 
     struct PendingStart
@@ -149,6 +158,9 @@ private:
         dspgcs::UploadJobCommandDTO command;
         ExpectedRouteArtifactV2Identity expectedArtifact;
         std::shared_ptr<const FrozenAssignmentAcceptedSnapshot> frozenSnapshot;
+        std::chrono::steady_clock::time_point createdAt{};
+        std::chrono::steady_clock::time_point validationRequestedAt{};
+        std::uint64_t authorityLookupDurationMs = 0;
     };
 
     struct StartOutcome

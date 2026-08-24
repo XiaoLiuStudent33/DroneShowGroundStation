@@ -79,6 +79,94 @@ namespace
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDSPGCSUploadJobLiveAggregateTest,
+	"DroneGCS.Data.DSPGCSUploadJob.LiveAggregate",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDSPGCSUploadJobLiveAggregateTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FDSPGCSUploadJobStateMirror Mirror;
+	auto Aggregate = Snapshot();
+	TestTrue(TEXT("Initial Aggregate applies"), Mirror.ApplySnapshot(Aggregate));
+
+	dspgcs::UploadJobRouteStatePageDTO Page;
+	Page.uploadJobId = Aggregate.uploadJobId;
+	Page.snapshotToken = Aggregate.snapshotToken;
+	Page.jobRevision = Aggregate.jobRevision;
+	Page.totalRouteCount = 2;
+	Page.nextPageStart = 2;
+	Page.routes = { Route(0), Route(1) };
+	TestTrue(TEXT("Initial Route page applies"), Mirror.ApplyRoutePage(Page));
+
+	dspgcs::UploadJobRouteStateDeltaDTO Delta;
+	Delta.uploadJobId = Aggregate.uploadJobId;
+	Delta.jobRevision = Aggregate.jobRevision + 1;
+	Delta.deltaSequence = Aggregate.routeDeltaSequence + 1;
+	auto Progress = Route(0);
+	Progress.state = dspgcs::UploadRouteState::Uploading;
+	Progress.bytesCompleted = 25;
+	Progress.attemptCount = 1;
+	Delta.routes.push_back(Progress);
+	bool bDuplicate = false;
+	TestTrue(TEXT("ACK progress Delta applies"),
+		Mirror.ApplyRouteDelta(Delta, bDuplicate));
+
+	auto Live = Aggregate;
+	Live.jobRevision = Delta.jobRevision + 1;
+	Live.snapshotSequence++;
+	Live.routeDeltaSequence = Delta.deltaSequence;
+	Live.bytesCompleted = 25;
+	Live.throughputBytesPerSecond = 100;
+	Live.throughputWindowMs = 250;
+	Live.elapsedMs = 250;
+	Live.uploadingCount = 1;
+	Live.waitingCount = 1;
+	TestTrue(TEXT("Live Aggregate applies"), Mirror.ApplySnapshot(Live));
+	const auto* Preserved = Mirror.FindRoute(0);
+	TestTrue(TEXT("Aggregate poll preserves current Route page"),
+		Mirror.IsRoutePageComplete() && Preserved &&
+		Preserved->bytesCompleted == 25 && Preserved->attemptCount == 1);
+	const auto* Current = Mirror.GetSnapshot();
+	TestTrue(TEXT("Logical progress metrics remain authoritative"),
+		Current && Current->bytesCompleted == 25 &&
+		Current->totalBytes == 200 &&
+		Current->throughputBytesPerSecond == 100 &&
+		Current->throughputWindowMs == 250 && Current->elapsedMs == 250);
+
+	auto Stale = Live;
+	--Stale.jobRevision;
+	TestFalse(TEXT("Stale Aggregate revision is rejected"),
+		Mirror.ApplySnapshot(Stale));
+	auto RegressedDelta = Live;
+	++RegressedDelta.jobRevision;
+	--RegressedDelta.routeDeltaSequence;
+	TestFalse(TEXT("Aggregate cannot regress Route Delta sequence"),
+		Mirror.ApplySnapshot(RegressedDelta));
+	auto CrossJob = Live;
+	CrossJob.uploadJobId = Id('9');
+	TestFalse(TEXT("Cross-Job Aggregate is rejected"),
+		Mirror.ApplySnapshot(CrossJob));
+
+	auto Terminal = Live;
+	Terminal.jobRevision += 2;
+	Terminal.jobState = dspgcs::UploadJobState::Completed;
+	Terminal.bytesCompleted = Terminal.totalBytes;
+	Terminal.elapsedMs = 9000;
+	Terminal.throughputBytesPerSecond = 22;
+	Terminal.succeededCount = 2;
+	Terminal.uploadingCount = 0;
+	Terminal.waitingCount = 0;
+	TestTrue(TEXT("Terminal Aggregate applies"), Mirror.ApplySnapshot(Terminal));
+	Current = Mirror.GetSnapshot();
+	TestTrue(TEXT("Succeeded Aggregate is exact and terminal"),
+		Current && Current->jobState == dspgcs::UploadJobState::Completed &&
+		Current->bytesCompleted == Current->totalBytes &&
+		Current->elapsedMs == 9000);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDSPGCSUploadJobMirrorReliabilityTest,
 	"DroneGCS.Data.DSPGCSUploadJob.MirrorReliability",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -157,19 +245,26 @@ bool FDSPGCSUploadJobMirrorReliabilityTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Delta gap is rejected"), Mirror.ApplyRouteDelta(Gap, bDuplicate));
 	TestTrue(TEXT("Delta gap requests recovery"), Mirror.IsRecoveryRequired());
 
-	Mirror.ApplySnapshot(Baseline);
+	auto Recovery = Baseline;
+	Recovery.jobRevision = Gap.jobRevision;
+	Recovery.snapshotSequence++;
+	Recovery.routeDeltaSequence = Gap.deltaSequence;
+	TestTrue(TEXT("Authoritative gap recovery snapshot applies"),
+		Mirror.ApplySnapshot(Recovery));
 	auto ReorderedPage = Page;
+	ReorderedPage.jobRevision = Recovery.jobRevision;
 	ReorderedPage.pageStart = 1;
 	TestFalse(TEXT("Reordered page rejected"), Mirror.ApplyRoutePage(ReorderedPage));
-	Mirror.ApplySnapshot(Baseline);
+	TestTrue(TEXT("Authoritative snapshot retries after bad page"),
+		Mirror.ApplySnapshot(Recovery));
 	Mirror.MarkTransportReconnected();
 	TestTrue(TEXT("Reconnect requests snapshot"), Mirror.IsRecoveryRequired());
 	TestTrue(TEXT("Lost snapshot leaves recovery pending"), Mirror.IsRecoveryRequired());
-	TestTrue(TEXT("Retried snapshot recovers mirror"), Mirror.ApplySnapshot(Baseline));
+	TestTrue(TEXT("Retried snapshot recovers mirror"), Mirror.ApplySnapshot(Recovery));
 	TestFalse(TEXT("Recovered snapshot clears recovery"), Mirror.IsRecoveryRequired());
 	Mirror.MarkPageOpened();
 	TestTrue(TEXT("Page reopen requests snapshot"), Mirror.IsRecoveryRequired());
-	Mirror.ApplySnapshot(Baseline);
+	TestTrue(TEXT("Page reopen snapshot applies"), Mirror.ApplySnapshot(Recovery));
 	Mirror.MarkRoutePageStale();
 	TestTrue(TEXT("Stale Route page retains aggregate and requests recovery"),
 		Mirror.HasAuthoritativeSnapshot() && Mirror.IsRecoveryRequired() &&

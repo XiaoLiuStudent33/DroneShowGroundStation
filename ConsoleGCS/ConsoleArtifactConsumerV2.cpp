@@ -284,6 +284,28 @@ namespace
             && left.ftLastWriteTime.dwLowDateTime == right.ftLastWriteTime.dwLowDateTime;
     }
 
+    RouteArtifactV2FileIdentity ToRouteFileIdentity(
+        const BY_HANDLE_FILE_INFORMATION& information)
+    {
+        RouteArtifactV2FileIdentity identity;
+        identity.volumeSerialNumber = information.dwVolumeSerialNumber;
+        identity.fileIndexHigh = information.nFileIndexHigh;
+        identity.fileIndexLow = information.nFileIndexLow;
+        identity.fileSizeHigh = information.nFileSizeHigh;
+        identity.fileSizeLow = information.nFileSizeLow;
+        identity.lastWriteTimeHigh = information.ftLastWriteTime.dwHighDateTime;
+        identity.lastWriteTimeLow = information.ftLastWriteTime.dwLowDateTime;
+        return identity;
+    }
+
+    std::uint64_t MillisecondsSince(
+        const std::chrono::steady_clock::time_point started)
+    {
+        return static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started).count());
+    }
+
     bool ReadSmallFile(
         const fs::path& current,
         const std::wstring& currentFinal,
@@ -559,6 +581,7 @@ namespace
     bool ValidateRoute(
         const LoadedMetadata& metadata,
         const artifact::RouteRecord& route,
+        RouteArtifactV2FileIdentity& validatedIdentity,
         ConsoleArtifactV2ValidationMetrics& metrics,
         ConsoleArtifactV2Diagnostic& diagnostic,
         const std::function<bool()>& cancelled,
@@ -667,6 +690,7 @@ namespace
         ++metrics.routeFilesRead;
         metrics.rowsParsed += rowCounter.rows;
         metrics.bytesRead += total;
+        validatedIdentity = ToRouteFileIdentity(after);
         return true;
     }
 
@@ -676,10 +700,14 @@ namespace
         const std::function<bool()>& cancelled,
         const std::uint64_t generation,
         const std::chrono::steady_clock::time_point deadline,
-        const ConsoleArtifactConsumerV2::RouteValidatedHook& routeValidatedHook)
+        const ConsoleArtifactConsumerV2::RouteValidatedHook& routeValidatedHook,
+        const ConsoleArtifactV2ValidationScope& validationScope,
+        const std::shared_ptr<const AcceptedRouteArtifactV2>& cacheCandidate)
     {
         ConsoleArtifactV2ValidationResult result;
         result.generation = generation;
+        result.metrics.fullArtifactValidation =
+            validationScope.fullArtifactValidation;
         const auto started = std::chrono::steady_clock::now();
         const auto Finish = [&result, started]()
         {
@@ -693,30 +721,165 @@ namespace
             return result;
         }
         LoadedMetadata metadata;
+        const auto metadataStarted = std::chrono::steady_clock::now();
         if (!LoadMetadata(workspaceRoot, expected, metadata,
-                result.diagnostic, true))
+                result.diagnostic, result.metrics.fullArtifactValidation))
         {
+            result.metrics.metadataDurationMs = MillisecondsSince(metadataStarted);
             Finish();
             return result;
         }
-        for (const auto& route : metadata.manifest.Routes)
+        result.metrics.metadataDurationMs = MillisecondsSince(metadataStarted);
+        result.metrics.manifestRouteCount = metadata.manifest.Routes.size();
+
+        std::vector<std::size_t> selectedRouteIndices;
+        if (validationScope.fullArtifactValidation)
         {
-            if (!ValidateRoute(metadata, route, result.metrics,
-                    result.diagnostic, cancelled, deadline))
+            selectedRouteIndices.reserve(metadata.manifest.Routes.size());
+            for (std::size_t index = 0; index < metadata.manifest.Routes.size(); ++index)
+                selectedRouteIndices.push_back(index);
+        }
+        else
+        {
+            if (validationScope.matchedRoutes.empty())
             {
+                SetError(result.diagnostic,
+                    ConsoleArtifactV2ErrorCode::ArtifactIdentityMismatch,
+                    "Selected Artifact validation requires at least one matched Route.");
                 Finish();
                 return result;
             }
-            if (routeValidatedHook) routeValidatedHook(route.RouteSlotIndex);
+            std::set<std::string> droneIds;
+            std::set<std::int32_t> routeSlots;
+            selectedRouteIndices.reserve(validationScope.matchedRoutes.size());
+            for (const auto& binding : validationScope.matchedRoutes)
+            {
+                if (binding.droneId.empty() || binding.routeSlotIndex < 0
+                    || !droneIds.insert(binding.droneId).second
+                    || !routeSlots.insert(binding.routeSlotIndex).second)
+                {
+                    SetError(result.diagnostic,
+                        ConsoleArtifactV2ErrorCode::ArtifactIdentityMismatch,
+                        "Artifact validation scope contains an invalid or duplicate binding.");
+                    Finish();
+                    return result;
+                }
+                const auto route = std::lower_bound(
+                    metadata.manifest.Routes.begin(), metadata.manifest.Routes.end(),
+                    binding.routeSlotIndex,
+                    [](const artifact::RouteRecord& record, const std::int32_t slot)
+                    { return record.RouteSlotIndex < slot; });
+                if (route == metadata.manifest.Routes.end()
+                    || route->RouteSlotIndex != binding.routeSlotIndex)
+                {
+                    SetError(result.diagnostic,
+                        ConsoleArtifactV2ErrorCode::RouteMissing,
+                        "A selected RouteSlot has no Manifest record.",
+                        binding.routeSlotIndex);
+                    Finish();
+                    return result;
+                }
+                selectedRouteIndices.push_back(static_cast<std::size_t>(
+                    route - metadata.manifest.Routes.begin()));
+            }
+        }
+        result.metrics.selectedRouteCount = selectedRouteIndices.size();
+
+        if (!validationScope.fullArtifactValidation && cacheCandidate
+            && cacheCandidate->artifactSetId == expected.artifactSetId
+            && cacheCandidate->artifactSetDigest == expected.artifactSetDigest
+            && cacheCandidate->validationScope == validationScope
+            && cacheCandidate->currentDirectoryIdentity == metadata.currentIdentity
+            && cacheCandidate->routes.size() == metadata.manifest.Routes.size())
+        {
+            const auto cacheStarted = std::chrono::steady_clock::now();
+            bool cacheValid = true;
+            for (const std::size_t index : selectedRouteIndices)
+            {
+                const auto& manifestRoute = metadata.manifest.Routes[index];
+                const auto& cachedRoute = cacheCandidate->routes[index];
+                WinHandle handle;
+                BY_HANDLE_FILE_INFORMATION information{};
+                if (!cachedRoute.validationConfirmed
+                    || cachedRoute.routeSlotIndex != manifestRoute.RouteSlotIndex
+                    || cachedRoute.relativePath != manifestRoute.RelativePath
+                    || cachedRoute.fileByteSize != manifestRoute.FileByteSize
+                    || cachedRoute.routeArtifactDigest != manifestRoute.RouteArtifactDigest
+                    || !OpenSafeFile(metadata.current, metadata.currentFinal,
+                        fs::u8path(manifestRoute.RelativePath), handle,
+                        result.diagnostic)
+                    || !GetFileInformationByHandle(handle.Get(), &information)
+                    || !(cachedRoute.validatedFileIdentity ==
+                        ToRouteFileIdentity(information)))
+                {
+                    cacheValid = false;
+                    result.diagnostic = {};
+                    break;
+                }
+                ++result.metrics.physicalRouteOpenCount;
+            }
+            result.metrics.cacheIdentityCheckDurationMs =
+                MillisecondsSince(cacheStarted);
+            if (cacheValid)
+            {
+                LoadedMetadata recheck;
+                const auto recheckStarted = std::chrono::steady_clock::now();
+                cacheValid = LoadMetadata(workspaceRoot, expected, recheck,
+                        result.diagnostic, false)
+                    && metadata.currentIdentity == recheck.currentIdentity;
+                result.metrics.metadataRecheckDurationMs =
+                    MillisecondsSince(recheckStarted);
+            }
+            if (cacheValid)
+            {
+                auto snapshot = std::make_shared<AcceptedRouteArtifactV2>(
+                    *cacheCandidate);
+                snapshot->validatedAtUtcMs =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                snapshot->validationGeneration = generation;
+                result.metrics.cacheHit = true;
+                result.success = true;
+                result.snapshot = std::move(snapshot);
+                SampleProcessMetrics(result.metrics);
+                Finish();
+                return result;
+            }
+            result.diagnostic = {};
         }
 
-        LoadedMetadata recheck;
-        if (!LoadMetadata(workspaceRoot, expected, recheck,
-                result.diagnostic, true))
+        std::vector<RouteArtifactV2FileIdentity> validatedIdentities(
+            metadata.manifest.Routes.size());
+        std::vector<bool> validationConfirmed(metadata.manifest.Routes.size(), false);
+        const auto routeValidationStarted = std::chrono::steady_clock::now();
+        for (const std::size_t index : selectedRouteIndices)
         {
+            const auto& route = metadata.manifest.Routes[index];
+            if (!ValidateRoute(metadata, route, validatedIdentities[index],
+                    result.metrics, result.diagnostic, cancelled, deadline))
+            {
+                result.metrics.routeValidationDurationMs =
+                    MillisecondsSince(routeValidationStarted);
+                Finish();
+                return result;
+            }
+            validationConfirmed[index] = true;
+            if (routeValidatedHook) routeValidatedHook(route.RouteSlotIndex);
+        }
+        result.metrics.routeValidationDurationMs =
+            MillisecondsSince(routeValidationStarted);
+
+        LoadedMetadata recheck;
+        const auto recheckStarted = std::chrono::steady_clock::now();
+        if (!LoadMetadata(workspaceRoot, expected, recheck,
+                result.diagnostic, result.metrics.fullArtifactValidation))
+        {
+            result.metrics.metadataRecheckDurationMs =
+                MillisecondsSince(recheckStarted);
             Finish();
             return result;
         }
+        result.metrics.metadataRecheckDurationMs = MillisecondsSince(recheckStarted);
         if (!(metadata.currentIdentity == recheck.currentIdentity))
         {
             SetError(result.diagnostic,
@@ -749,10 +912,12 @@ namespace
             metadata.manifest.WaypointGeneratorVersion;
         snapshot->generatorInputDigest = metadata.manifest.GeneratorInputDigest;
         snapshot->routes.reserve(metadata.manifest.Routes.size());
-        for (const auto& route : metadata.manifest.Routes)
+        for (std::size_t index = 0; index < metadata.manifest.Routes.size(); ++index)
         {
+            const auto& route = metadata.manifest.Routes[index];
             snapshot->routes.push_back({ route.RouteSlotIndex, route.RelativePath,
-                route.FileByteSize, route.RouteArtifactDigest });
+                route.FileByteSize, route.RouteArtifactDigest,
+                validationConfirmed[index], validatedIdentities[index] });
         }
         snapshot->canonicalWorkspaceRoot = metadata.canonicalRoot;
         snapshot->resolvedCurrentRoot = metadata.resolvedCurrent;
@@ -761,6 +926,7 @@ namespace
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count();
         snapshot->validationGeneration = generation;
+        snapshot->validationScope = validationScope;
 
         result.success = true;
         result.snapshot = std::move(snapshot);
@@ -789,10 +955,29 @@ std::uint64_t ConsoleArtifactConsumerV2::RequestValidation(
     ExpectedRouteArtifactV2Identity expectedIdentity,
     const std::chrono::milliseconds deadline)
 {
+    return RequestValidation(
+        std::move(expectedIdentity), ConsoleArtifactV2ValidationScope{}, deadline);
+}
+
+std::uint64_t ConsoleArtifactConsumerV2::RequestValidation(
+    ExpectedRouteArtifactV2Identity expectedIdentity,
+    ConsoleArtifactV2ValidationScope validationScope,
+    const std::chrono::milliseconds deadline)
+{
+    std::sort(validationScope.matchedRoutes.begin(),
+        validationScope.matchedRoutes.end(),
+        [](const ConsoleArtifactV2MatchedRoute& left,
+            const ConsoleArtifactV2MatchedRoute& right)
+        {
+            if (left.routeSlotIndex != right.routeSlotIndex)
+                return left.routeSlotIndex < right.routeSlotIndex;
+            return left.droneId < right.droneId;
+        });
     std::lock_guard<std::mutex> lock(mutex_);
     const std::uint64_t version = cancellationVersion_.fetch_add(1) + 1;
     const std::uint64_t generation = ++nextGeneration_;
     pending_ = Request{ generation, version, std::move(expectedIdentity),
+        std::move(validationScope),
         deadline.count() > 0
             ? std::chrono::steady_clock::now() + deadline
             : std::chrono::steady_clock::now() };
@@ -878,15 +1063,25 @@ ConsoleArtifactConsumerV2::ValidateCurrentForTest(
     const std::atomic_bool* cancellation,
     const std::uint64_t generation,
     const std::chrono::milliseconds deadline,
-    RouteValidatedHook routeValidatedHook)
+    RouteValidatedHook routeValidatedHook,
+    ConsoleArtifactV2ValidationScope validationScope)
 {
+    std::sort(validationScope.matchedRoutes.begin(),
+        validationScope.matchedRoutes.end(),
+        [](const ConsoleArtifactV2MatchedRoute& left,
+            const ConsoleArtifactV2MatchedRoute& right)
+        {
+            if (left.routeSlotIndex != right.routeSlotIndex)
+                return left.routeSlotIndex < right.routeSlotIndex;
+            return left.droneId < right.droneId;
+        });
     return ValidateCurrentImpl(configuredWorkspaceRoot, expectedIdentity,
         [cancellation]() { return cancellation && cancellation->load(); },
         generation,
         deadline.count() > 0
             ? std::chrono::steady_clock::now() + deadline
             : std::chrono::steady_clock::now(),
-        routeValidatedHook);
+        routeValidatedHook, validationScope, nullptr);
 }
 
 void ConsoleArtifactConsumerV2::WorkerMain()
@@ -894,6 +1089,7 @@ void ConsoleArtifactConsumerV2::WorkerMain()
     while (!stop_.load())
     {
         Request request;
+        std::shared_ptr<const AcceptedRouteArtifactV2> cacheCandidate;
         {
             std::unique_lock<std::mutex> lock(mutex_);
             wake_.wait(lock, [this]()
@@ -903,6 +1099,7 @@ void ConsoleArtifactConsumerV2::WorkerMain()
             if (stop_.load()) break;
             request = std::move(*pending_);
             pending_.reset();
+            cacheCandidate = accepted_;
         }
 
         ConsoleArtifactV2ValidationResult result = ValidateCurrentImpl(
@@ -911,7 +1108,8 @@ void ConsoleArtifactConsumerV2::WorkerMain()
             {
                 return stop_.load() || cancellationVersion_.load() != version;
             },
-            request.generation, request.deadline, {});
+            request.generation, request.deadline, {},
+            request.validationScope, cacheCandidate);
 
         std::lock_guard<std::mutex> lock(mutex_);
         if (!stop_.load()

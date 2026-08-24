@@ -512,6 +512,108 @@ namespace
         return result;
     }
 
+    void VerifySelectedRouteValidationAndIdentityCache()
+    {
+        auto fixture = CreateFixture("selected-1000", 1000, 4);
+        ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+        ConsoleArtifactV2ValidationScope scope;
+        scope.fullArtifactValidation = false;
+        scope.frozenAssignmentRevision = 17;
+        scope.frozenAssignmentDigest.fill(0x5a);
+        scope.matchedRoutes.push_back({ "Drone001", 0 });
+
+        consumer.RequestValidation(
+            fixture.expected, scope, std::chrono::seconds(30));
+        const auto first = WaitForResult(consumer, std::chrono::seconds(10));
+        Expect(first.success && first.snapshot
+            && !first.metrics.cacheHit
+            && !first.metrics.fullArtifactValidation
+            && first.metrics.manifestRouteCount == 1000
+            && first.metrics.selectedRouteCount == 1
+            && first.metrics.routeFilesRead == 1
+            && first.metrics.rowsParsed == 4
+            && first.snapshot->routes[0].validationConfirmed
+            && !first.snapshot->routes[1].validationConfirmed,
+            "selected validation did not bound 1000-route work to one target");
+
+        consumer.RequestValidation(
+            fixture.expected, scope, std::chrono::seconds(30));
+        const auto cached = WaitForResult(consumer, std::chrono::seconds(10));
+        Expect(cached.success && cached.metrics.cacheHit
+            && cached.metrics.selectedRouteCount == 1
+            && cached.metrics.routeFilesRead == 0
+            && cached.metrics.bytesRead == 0
+            && cached.metrics.rowsParsed == 0
+            && cached.metrics.physicalRouteOpenCount == 1,
+            "identical Artifact/Frozen/file identity did not hit the safe cache");
+
+        auto changedRevision = scope;
+        ++changedRevision.frozenAssignmentRevision;
+        consumer.RequestValidation(
+            fixture.expected, changedRevision, std::chrono::seconds(30));
+        const auto revisionMiss = WaitForResult(consumer, std::chrono::seconds(10));
+        Expect(revisionMiss.success && !revisionMiss.metrics.cacheHit
+            && revisionMiss.metrics.routeFilesRead == 1,
+            "Frozen revision change reused a stale validation");
+
+        auto changedDigest = changedRevision;
+        changedDigest.frozenAssignmentDigest[0] ^= 0xff;
+        consumer.RequestValidation(
+            fixture.expected, changedDigest, std::chrono::seconds(30));
+        const auto digestMiss = WaitForResult(consumer, std::chrono::seconds(10));
+        Expect(digestMiss.success && !digestMiss.metrics.cacheHit
+            && digestMiss.metrics.routeFilesRead == 1,
+            "Frozen digest change reused a stale validation");
+
+        auto changedSlot = changedDigest;
+        changedSlot.matchedRoutes[0].routeSlotIndex = 1;
+        consumer.RequestValidation(
+            fixture.expected, changedSlot, std::chrono::seconds(30));
+        const auto slotMiss = WaitForResult(consumer, std::chrono::seconds(10));
+        Expect(slotMiss.success && !slotMiss.metrics.cacheHit
+            && slotMiss.metrics.routeFilesRead == 1
+            && slotMiss.snapshot->routes[1].validationConfirmed
+            && !slotMiss.snapshot->routes[0].validationConfirmed,
+            "Drone RouteSlot binding change reused a stale validation");
+
+        ++fixture.manifest.CreatedAtUtc;
+        FinalizeMetadata(fixture);
+        consumer.RequestValidation(
+            fixture.expected, scope, std::chrono::seconds(30));
+        const auto artifactMiss = WaitForResult(consumer, std::chrono::seconds(10));
+        Expect(artifactMiss.success && !artifactMiss.metrics.cacheHit
+            && artifactMiss.metrics.routeFilesRead == 1,
+            "Artifact digest change reused a stale validation");
+
+        const std::string priorArtifactSetId = fixture.expected.artifactSetId;
+        fixture.manifest.GeneratorInputDigest =
+            HashText("selected-1000-generator-input-changed");
+        FinalizeMetadata(fixture);
+        Expect(fixture.expected.artifactSetId != priorArtifactSetId,
+            "ArtifactSetID invalidation fixture did not change identity");
+        consumer.RequestValidation(
+            fixture.expected, scope, std::chrono::seconds(30));
+        const auto artifactSetMiss =
+            WaitForResult(consumer, std::chrono::seconds(10));
+        Expect(artifactSetMiss.success && !artifactSetMiss.metrics.cacheHit
+            && artifactSetMiss.metrics.routeFilesRead == 1,
+            "ArtifactSetID change reused a stale validation");
+
+        const fs::path selectedPath = fixture.workspace->root / "Current" /
+            fs::u8path(fixture.manifest.Routes[0].RelativePath);
+        WriteBinary(selectedPath, ReadBinary(selectedPath) + "X");
+        consumer.RequestValidation(
+            fixture.expected, scope, std::chrono::seconds(30));
+        const auto fileChanged = WaitForResult(consumer, std::chrono::seconds(10));
+        Expect(!fileChanged.success && !fileChanged.metrics.cacheHit
+            && fileChanged.diagnostic.routeSlotIndex == 0
+            && (fileChanged.diagnostic.errorCode ==
+                    ConsoleArtifactV2ErrorCode::RouteSizeMismatch
+                || fileChanged.diagnostic.errorCode ==
+                    ConsoleArtifactV2ErrorCode::RouteDigestMismatch),
+            "modified selected Route reused a stale validation");
+    }
+
     void VerifyAtomicityCancellationDeadlineAndSwap()
     {
         auto fixture = CreateFixture("atomic", 3, 20);
@@ -619,6 +721,7 @@ int RunConsoleArtifactConsumerV2Tests()
         VerifyDomainAndPathRejection();
         VerifyReparseAndCurrentOnly();
         VerifyShard1200();
+        VerifySelectedRouteValidationAndIdentityCache();
         VerifyAtomicityCancellationDeadlineAndSwap();
         VerifyCreatedAtIdentitySemantics();
         std::cout << "Console Artifact Consumer v2 tests passed\n";

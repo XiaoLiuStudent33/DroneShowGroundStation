@@ -382,6 +382,7 @@ namespace dronegcs::mission_ftp
         }
 
         if (config_.driveClientTick) client_.Tick(now);
+        UpdateLiveLogicalProgress();
         status_ = client_.IsAwaitingWriteCommit()
             ? MissionTransportStatus::WaitingAck
             : MissionTransportStatus::Uploading;
@@ -514,6 +515,40 @@ namespace dronegcs::mission_ftp
         }
     }
 
+    void MAVFTPMissionTransport::UpdateLiveLogicalProgress()
+    {
+        if (!snapshot_ || currentSegmentIndex_ >=
+            snapshot_->GetSegmentDescriptors().size())
+        {
+            return;
+        }
+
+        const SegmentDescriptor& segment =
+            snapshot_->GetSegmentDescriptors()[currentSegmentIndex_];
+        const std::uint64_t acknowledgedEncodedBytes = (std::min)(
+            client_.GetAcknowledgedWriteBytes(), segment.encodedBytes);
+        const ByteLayoutInfo& layout = snapshot_->GetByteLayoutInfo();
+        const std::uint64_t acknowledgedItems = layout.itemBytes == 0 ||
+            acknowledgedEncodedBytes <= layout.headerBytes
+            ? 0
+            : (std::min<std::uint64_t>)(
+                segment.itemCount,
+                (acknowledgedEncodedBytes - layout.headerBytes) /
+                    layout.itemBytes);
+        const std::uint64_t acknowledgedWireItems =
+            static_cast<std::uint64_t>(segment.startIndex) + acknowledgedItems;
+        const std::uint64_t acknowledgedArtifactItems = acknowledgedWireItems > 0
+            ? acknowledgedWireItems - 1 : 0;
+        const std::uint64_t logicalBytes = (std::min)(
+            acknowledgedArtifactItems, metrics_.artifactRouteItems) *
+            layout.itemBytes;
+        if (logicalBytes > metrics_.logicalBytesCompleted)
+        {
+            metrics_.logicalBytesCompleted = logicalBytes;
+            progressChanged_ = true;
+        }
+    }
+
     void MAVFTPMissionTransport::Fail(
         std::string phase,
         std::string diagnostic,
@@ -546,6 +581,7 @@ namespace dronegcs::mission_ftp
         const std::chrono::steady_clock::time_point now)
     {
         if (IsTerminal()) return;
+        UpdateLiveLogicalProgress();
         const bool verificationWasActive =
             status_ == MissionTransportStatus::Verifying;
         if (verifier_) verifier_->Cancel(now);

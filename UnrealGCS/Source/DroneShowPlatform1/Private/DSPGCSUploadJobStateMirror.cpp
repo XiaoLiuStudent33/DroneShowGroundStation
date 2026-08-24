@@ -92,19 +92,34 @@ bool FDSPGCSUploadJobStateMirror::ApplySnapshot(
 	{
 		return false;
 	}
+	if (bHasSnapshot && Snapshot.jobRevision < CurrentSnapshot.jobRevision)
+	{
+		return false;
+	}
+	if (bHasSnapshot && Snapshot.routeDeltaSequence < LastDeltaSequence)
+	{
+		bRecoveryRequired = true;
+		return false;
+	}
+	const bool bPreserveCompleteRoutePage = bHasSnapshot &&
+		bRoutePageComplete && Snapshot.uploadJobId == CurrentSnapshot.uploadJobId &&
+		Snapshot.routeDeltaSequence == LastDeltaSequence;
 	if (BoundJobID.empty()) BoundJobID = Snapshot.uploadJobId;
 	CurrentSnapshot = Snapshot;
-	Routes.clear();
-	DeferredRouteDeltas.clear();
 	LastSnapshotResultCode = dspgcs::UploadJobErrorCode::None;
 	LastSnapshotSafeDiagnostic.clear();
 	LastDeltaSequence = Snapshot.routeDeltaSequence;
 	ExpectedRoutePageRevision = Snapshot.jobRevision;
-	NextRoutePageStart = 0;
 	bHasSnapshot = true;
 	bHasAuthoritativeError = false;
 	bRecoveryRequired = false;
-	bRoutePageComplete = Snapshot.matchedCount == 0;
+	if (!bPreserveCompleteRoutePage)
+	{
+		Routes.clear();
+		DeferredRouteDeltas.clear();
+		NextRoutePageStart = 0;
+		bRoutePageComplete = Snapshot.matchedCount == 0;
+	}
 	return true;
 }
 

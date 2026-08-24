@@ -28,6 +28,7 @@ struct RouteUploadManagerConfig
     std::uint32_t mavftpRequestRetryCount =
         AppConfigDefaults::MavftpRequestRetryCount;
     std::uint32_t mavftpWriteWindow = AppConfigDefaults::MavftpWriteWindow;
+    std::chrono::milliseconds liveAggregatePublishInterval{ 250 };
     /** Empty in production; permits deterministic offline Manager tests. */
     TestTransportFactory testTransportFactory;
 };
@@ -53,6 +54,12 @@ struct RouteUploadTargetMetrics
     std::uint64_t duplicateRequests = 0;
     std::uint64_t retryCount = 0;
     std::uint64_t prepareDurationMs = 0;
+    std::uint64_t preparationBytesRead = 0;
+    std::uint64_t routeFileOpenDurationMs = 0;
+    std::uint64_t routeReadDurationMs = 0;
+    std::uint64_t waypointParseCompileDurationMs = 0;
+    std::uint64_t hashFinalizeDurationMs = 0;
+    std::uint64_t acceptedToTargetStartMs = 0;
     std::uint64_t uploadDurationMs = 0;
     std::uint64_t verificationDurationMs = 0;
     std::uint64_t totalDurationMs = 0;
@@ -123,6 +130,10 @@ private:
         std::uint64_t lastLoggedMavftpSegment =
             std::numeric_limits<std::uint64_t>::max();
         bool loggedMavftpVerification = false;
+        bool progressPublishPending = false;
+        std::uint64_t lastPublishedSegmentsCommitted = 0;
+        MissionTransportStatus lastObservedTransportStatus =
+            MissionTransportStatus::Idle;
         std::uint64_t generation = 0;
         std::chrono::steady_clock::time_point admittedAt{};
         std::chrono::steady_clock::time_point uploadStartedAt{};
@@ -134,6 +145,9 @@ private:
         UploadJobExecutionView view;
         std::vector<RuntimeTarget> targets;
         std::chrono::steady_clock::time_point startedAt{};
+        std::chrono::steady_clock::time_point lastAggregatePublishedAt{};
+        dspgcs::UploadJobState lastObservedJobState =
+            dspgcs::UploadJobState::Validating;
         std::uint64_t nextGeneration = 0;
     };
 
@@ -153,10 +167,14 @@ private:
         bool retryable, std::chrono::steady_clock::time_point now);
     void ApplyTarget(RuntimeTarget& target,
         std::chrono::steady_clock::time_point now);
+    void PublishLiveAggregate(
+        std::chrono::steady_clock::time_point now, bool force);
     void FinalizeJobIfTerminal(dspgcs::UploadJobState state,
         std::chrono::steady_clock::time_point now);
     RuntimeTarget* FindRuntimeTarget(std::int32_t routeSlotIndex);
     std::uint64_t ElapsedMs(std::chrono::steady_clock::time_point now) const;
+    std::uint32_t ThroughputWindowMs(
+        std::chrono::steady_clock::time_point now) const;
     std::uint64_t LogicalThroughput(std::chrono::steady_clock::time_point now) const;
     void RefreshMetrics(std::chrono::steady_clock::time_point now);
 	void PersistTargetTerminal(const RuntimeTarget& target);

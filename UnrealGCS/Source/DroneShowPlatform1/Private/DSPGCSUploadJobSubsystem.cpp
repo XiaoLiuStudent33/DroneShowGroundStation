@@ -653,17 +653,18 @@ void UDSPGCSUploadJobSubsystem::ProcessIncoming()
 						UploadJobFromUtf8(Snapshot.safeDiagnostic).Left(512);
 					NextSnapshotPollSeconds = 0.0;
 				}
-				else if (Snapshot.jobState == dspgcs::UploadJobState::Validating)
-				{
-					NextSnapshotPollSeconds = FPlatformTime::Seconds() +
-						ValidationSnapshotPollSeconds;
-				}
-				else if (Snapshot.matchedCount > 0)
+				else if (Snapshot.matchedCount > 0 &&
+					!Mirror.IsRoutePageComplete())
 				{
 					FString Ignored;
 					SendSnapshotRequest(
 						dspgcs::UploadJobSnapshotRequestKind::RoutePage,
 						0, Snapshot.snapshotToken, Ignored);
+				}
+				else if (!IsTerminalJobState(Snapshot.jobState))
+				{
+					NextSnapshotPollSeconds = FPlatformTime::Seconds() +
+						LiveSnapshotPollSeconds;
 				}
 			}
 		}
@@ -688,6 +689,12 @@ void UDSPGCSUploadJobSubsystem::ProcessIncoming()
 						dspgcs::UploadJobSnapshotRequestKind::RoutePage,
 						Page.nextPageStart, Page.snapshotToken, Ignored);
 				}
+				else if (Mirror.GetSnapshot() &&
+					!IsTerminalJobState(Mirror.GetSnapshot()->jobState))
+				{
+					NextSnapshotPollSeconds = FPlatformTime::Seconds() +
+						LiveSnapshotPollSeconds;
+				}
 			}
 		}
 		else if (Frame.Envelope.messageType ==
@@ -705,6 +712,10 @@ void UDSPGCSUploadJobSubsystem::ProcessIncoming()
 			{
 				bAggregateRefreshRequired = true;
 				TerminalAggregateRefreshAttemptCount = 0;
+			}
+			else if (!bDuplicate)
+			{
+				NextSnapshotPollSeconds = 0.0;
 			}
 		}
 	}
@@ -771,12 +782,13 @@ bool UDSPGCSUploadJobSubsystem::TickClient(float DeltaSeconds)
 		RequestAuthoritativeSnapshot(Ignored);
 		NextSnapshotPollSeconds = Now + SnapshotRequestRetrySeconds;
 	}
-	if (Snapshot && Snapshot->jobState == dspgcs::UploadJobState::Validating &&
-		!bSnapshotRequestInFlight && Now >= NextSnapshotPollSeconds)
+	if (Snapshot && !IsTerminalJobState(Snapshot->jobState) &&
+		!bSnapshotRequestInFlight && !bAggregateRefreshRequired &&
+		Now >= NextSnapshotPollSeconds)
 	{
 		FString Ignored;
 		RequestAuthoritativeSnapshot(Ignored);
-		NextSnapshotPollSeconds = Now + ValidationSnapshotPollSeconds;
+		NextSnapshotPollSeconds = Now + LiveSnapshotPollSeconds;
 	}
 	return true;
 }

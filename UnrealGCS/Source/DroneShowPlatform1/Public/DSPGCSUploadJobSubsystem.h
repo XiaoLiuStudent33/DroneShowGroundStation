@@ -252,8 +252,8 @@ private:
 	static constexpr int32 MaxCommandAttempts = 3;
 	static constexpr int32 MaxSnapshotRequestAttempts = 3;
 	static constexpr double CommandRetrySeconds = 0.5;
-	static constexpr double SnapshotRequestRetrySeconds = 0.5;
-	static constexpr double ValidationSnapshotPollSeconds = 0.5;
-	static constexpr float ClientTickSeconds = 0.05f;
+    static constexpr double SnapshotRequestRetrySeconds = 0.5;
+    static constexpr double LiveSnapshotPollSeconds = 0.25;
+    static constexpr float ClientTickSeconds = 0.05f;
 	static constexpr std::uint32_t RoutePageRequestMaximum = 20000;
 };

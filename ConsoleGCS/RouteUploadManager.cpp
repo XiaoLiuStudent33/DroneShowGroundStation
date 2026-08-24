@@ -8,6 +8,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <utility>
@@ -188,6 +189,7 @@ std::uint64_t RouteUploadManager::ElapsedMs(
     const std::chrono::steady_clock::time_point now) const
 {
     if (!activeJob_) return 0;
+    if (now <= activeJob_->startedAt) return 0;
     return static_cast<std::uint64_t>(std::chrono::duration_cast<
         std::chrono::milliseconds>(now - activeJob_->startedAt).count());
 }
@@ -201,6 +203,13 @@ std::uint64_t RouteUploadManager::LogicalThroughput(
     for (const RuntimeTarget& target : activeJob_->targets)
         bytes += target.state.bytesCompleted;
     return bytes * 1000 / elapsed;
+}
+
+std::uint32_t RouteUploadManager::ThroughputWindowMs(
+    const std::chrono::steady_clock::time_point now) const
+{
+    return static_cast<std::uint32_t>((std::min<std::uint64_t>)(
+        ElapsedMs(now), std::numeric_limits<std::uint32_t>::max()));
 }
 
 std::size_t RouteUploadManager::GetActiveSlotCountForTest() const
@@ -234,7 +243,8 @@ bool RouteUploadManager::AttachJob(
         return false;
     RuntimeJob job;
     job.view = *view;
-    job.startedAt = now;
+    job.startedAt = view->createdAt ==
+        std::chrono::steady_clock::time_point{} ? now : view->createdAt;
     job.targets.reserve(view->targets.size());
     for (std::size_t index = 0; index < view->targets.size(); ++index)
     {
@@ -290,8 +300,45 @@ void RouteUploadManager::ApplyTarget(
 {
     target.state.updatedAtUtcMs = UtcNowMs();
     std::string error;
-    authority_.ApplyExecutorRouteUpdates(activeJob_->view.uploadJobId,
-        { target.state }, LogicalThroughput(now), 1000, ElapsedMs(now), error);
+    if (authority_.ApplyExecutorRouteUpdates(activeJob_->view.uploadJobId,
+        { target.state }, LogicalThroughput(now),
+        ThroughputWindowMs(now),
+        ElapsedMs(now), error))
+    {
+        target.progressPublishPending = false;
+        activeJob_->lastAggregatePublishedAt = now;
+    }
+}
+
+void RouteUploadManager::PublishLiveAggregate(
+    const std::chrono::steady_clock::time_point now,
+    const bool force)
+{
+    if (!activeJob_) return;
+    if (!force && activeJob_->lastAggregatePublishedAt !=
+            std::chrono::steady_clock::time_point{} &&
+        now - activeJob_->lastAggregatePublishedAt <
+            config_.liveAggregatePublishInterval)
+    {
+        return;
+    }
+
+    std::vector<dspgcs::UploadRouteStateDTO> updates;
+    for (RuntimeTarget& target : activeJob_->targets)
+    {
+        if (target.progressPublishPending) updates.push_back(target.state);
+    }
+    std::string error;
+    const std::uint32_t windowMs = ThroughputWindowMs(now);
+    const bool published = updates.empty()
+        ? authority_.RefreshExecutorAggregate(activeJob_->view.uploadJobId,
+            LogicalThroughput(now), windowMs, ElapsedMs(now), error)
+        : authority_.ApplyExecutorRouteUpdates(activeJob_->view.uploadJobId,
+            updates, LogicalThroughput(now), windowMs, ElapsedMs(now), error);
+    if (!published) return;
+    for (RuntimeTarget& target : activeJob_->targets)
+        target.progressPublishPending = false;
+    activeJob_->lastAggregatePublishedAt = now;
 }
 
 void RouteUploadManager::FailTarget(
@@ -375,12 +422,15 @@ bool RouteUploadManager::StartPrepared(
     target.state.retryable = false;
     target.state.safeFailureSummary.clear();
     target.uploadStartedAt = now;
+    target.metrics.acceptedToTargetStartMs = ElapsedMs(now);
     ApplyTarget(target, now);
     ConsoleUI::AddLog("[RouteUpload] Target start DroneID=" +
         target.metadata.droneId + " Endpoint=" + target.endpoint +
         " RouteSlot=" +
         std::to_string(target.metadata.routeSlotIndex) + " Items=" +
-        std::to_string(target.metadata.missionItemCount) + " Transport=MAVFTP");
+        std::to_string(target.metadata.missionItemCount) +
+        " Transport=MAVFTP AcceptedToTargetStartMs=" +
+        std::to_string(target.metrics.acceptedToTargetStartMs));
     if (!target.transport->Upload(now))
     {
         const std::string diagnostic = target.transport->GetSafeDiagnostic();
@@ -388,6 +438,7 @@ bool RouteUploadManager::StartPrepared(
             diagnostic.c_str(), true, now);
         return false;
     }
+    target.lastObservedTransportStatus = target.transport->GetStatus();
     return true;
 }
 
@@ -405,6 +456,14 @@ void RouteUploadManager::ProcessPreparation(
             target->state.state == dspgcs::UploadRouteState::Preparing)
         {
             target->metrics.prepareDurationMs = result.prepareDurationMs;
+            target->metrics.preparationBytesRead = result.bytesRead;
+            target->metrics.routeFileOpenDurationMs =
+                result.routeFileOpenDurationMs;
+            target->metrics.routeReadDurationMs = result.routeReadDurationMs;
+            target->metrics.waypointParseCompileDurationMs =
+                result.waypointParseCompileDurationMs;
+            target->metrics.hashFinalizeDurationMs =
+                result.hashFinalizeDurationMs;
             if (!result.Succeeded())
             {
                 const auto code = result.error == MissionPreparationError::RouteMissing
@@ -422,7 +481,21 @@ void RouteUploadManager::ProcessPreparation(
                 ConsoleUI::AddLog("[RouteUpload] Prepare complete DroneID=" +
                     target->metadata.droneId + " RouteSlot=" +
                     std::to_string(target->metadata.routeSlotIndex) + " Items=" +
-                    std::to_string(target->prepared.size()));
+                    std::to_string(target->prepared.size()) +
+                    " RouteFilesRead=1 BytesRead=" +
+                    std::to_string(result.bytesRead) +
+                    " ParsedMissionItems=" +
+                    std::to_string(result.missionItemsParsed) +
+                    " FileOpenMs=" +
+                    std::to_string(result.routeFileOpenDurationMs) +
+                    " ReadMs=" + std::to_string(result.routeReadDurationMs) +
+                    " ParseCompileMs=" +
+                    std::to_string(result.waypointParseCompileDurationMs) +
+                    " HashFinalizeMs=" +
+                    std::to_string(result.hashFinalizeDurationMs) +
+                    " DurationMs=" +
+                    std::to_string(result.prepareDurationMs) +
+                    " WaitOrRetry=no");
                 if (jobState == dspgcs::UploadJobState::Running &&
                     GetActiveSlotCountForTest() <= maxConcurrency)
                     StartPrepared(*target, now);
@@ -479,13 +552,33 @@ void RouteUploadManager::ProcessTransactions(
                     " Transport=MAVFTP Checks=Count/Home/First/Last");
             }
         }
+        const MissionTransportStatus observedStatus =
+            target.transport->GetStatus();
+        const bool phaseChanged = observedStatus !=
+            target.lastObservedTransportStatus;
+        target.lastObservedTransportStatus = observedStatus;
+        bool segmentCommitted = false;
+        if (mavftpTransport)
+        {
+            const std::uint64_t committed =
+                mavftpTransport->GetMavFtpMetrics().segmentsCommitted;
+            segmentCommitted = committed > target.lastPublishedSegmentsCommitted;
+            if (segmentCommitted)
+                target.lastPublishedSegmentsCommitted = committed;
+        }
         if (target.transport->ConsumeProgressChanged())
         {
-            target.state.bytesCompleted = std::min<std::uint64_t>(
+            const std::uint64_t nextBytes = std::min<std::uint64_t>(
                 target.state.totalBytes,
                 target.transport->GetMetrics().logicalBytesCompleted);
-            ApplyTarget(target, now);
+            if (nextBytes > target.state.bytesCompleted)
+            {
+                target.state.bytesCompleted = nextBytes;
+                target.progressPublishPending = true;
+            }
         }
+        if ((segmentCommitted || phaseChanged) && !target.transport->IsTerminal())
+            PublishLiveAggregate(now, true);
         if (!target.transport->IsTerminal()) continue;
 
         const MissionTransportMetrics tx = target.transport->GetMetrics();
@@ -583,7 +676,15 @@ void RouteUploadManager::ProcessCancellation(
     preparationWorker_.CancelActive();
     for (RuntimeTarget& target : activeJob_->targets)
     {
-        if (target.transport) target.transport->Cancel(now);
+        if (target.transport)
+        {
+            target.transport->Cancel(now);
+            target.state.bytesCompleted = std::max<std::uint64_t>(
+                target.state.bytesCompleted,
+                std::min<std::uint64_t>(target.state.totalBytes,
+                    target.transport->GetMetrics().logicalBytesCompleted));
+            ApplyTarget(target, now);
+        }
         if (target.session)
             target.session->SetMissionVerificationMessageSink(nullptr);
         target.transport.reset();
@@ -652,6 +753,13 @@ void RouteUploadManager::PersistTargetTerminal(const RuntimeTarget& target)
 		<< " LogicalBytes=" << target.state.bytesCompleted
 		<< " WireBytesSent=" << metrics.wireBytesSent
 		<< " PrepareDurationMs=" << metrics.prepareDurationMs
+		<< " PreparationBytesRead=" << metrics.preparationBytesRead
+		<< " RouteFileOpenMs=" << metrics.routeFileOpenDurationMs
+		<< " RouteReadMs=" << metrics.routeReadDurationMs
+		<< " WaypointParseCompileMs="
+		<< metrics.waypointParseCompileDurationMs
+		<< " HashFinalizeMs=" << metrics.hashFinalizeDurationMs
+		<< " AcceptedToTargetStartMs=" << metrics.acceptedToTargetStartMs
 		<< " UploadDurationMs=" << metrics.uploadDurationMs
 		<< " VerificationDurationMs=" << metrics.verificationDurationMs
 		<< " TotalDurationMs=" << metrics.totalDurationMs;
@@ -749,6 +857,7 @@ void RouteUploadManager::Tick(
         1, snapshot->effectiveMaxConcurrentUploads);
     if (snapshot->jobState == dspgcs::UploadJobState::Cancelling)
     {
+        PublishLiveAggregate(now, true);
         ProcessCancellation(now);
         return;
     }
@@ -793,11 +902,17 @@ void RouteUploadManager::Tick(
         }
     }
     if (!snapshot) return;
+    if (snapshot->jobState != activeJob_->lastObservedJobState)
+    {
+        activeJob_->lastObservedJobState = snapshot->jobState;
+        PublishLiveAggregate(now, true);
+    }
     ProcessTransactions(now);
     ProcessPreparation(now, snapshot->jobState, maxConcurrency);
     if (snapshot->jobState == dspgcs::UploadJobState::Running)
         AdmitPreparation(now, maxConcurrency);
     RefreshMetrics(now);
     jobMetrics_.effectiveMaxConcurrentUploads = maxConcurrency;
+    PublishLiveAggregate(now, false);
     FinalizeJobIfTerminal(snapshot->jobState, now);
 }

@@ -4,6 +4,7 @@
 #include "Wpl110Core.h"
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -77,15 +78,67 @@ struct AcceptedRouteArtifactV2StableSource
     std::int32_t routeSlotCount = 0;
 };
 
+struct RouteArtifactV2FileIdentity
+{
+    std::uint32_t volumeSerialNumber = 0;
+    std::uint32_t fileIndexHigh = 0;
+    std::uint32_t fileIndexLow = 0;
+    std::uint32_t fileSizeHigh = 0;
+    std::uint32_t fileSizeLow = 0;
+    std::uint32_t lastWriteTimeHigh = 0;
+    std::uint32_t lastWriteTimeLow = 0;
+
+    bool operator==(const RouteArtifactV2FileIdentity& other) const
+    {
+        return volumeSerialNumber == other.volumeSerialNumber
+            && fileIndexHigh == other.fileIndexHigh
+            && fileIndexLow == other.fileIndexLow
+            && fileSizeHigh == other.fileSizeHigh
+            && fileSizeLow == other.fileSizeLow
+            && lastWriteTimeHigh == other.lastWriteTimeHigh
+            && lastWriteTimeLow == other.lastWriteTimeLow;
+    }
+};
+
+struct ConsoleArtifactV2MatchedRoute
+{
+    std::string droneId;
+    std::int32_t routeSlotIndex = -1;
+
+    bool operator==(const ConsoleArtifactV2MatchedRoute& other) const
+    {
+        return droneId == other.droneId
+            && routeSlotIndex == other.routeSlotIndex;
+    }
+};
+
+struct ConsoleArtifactV2ValidationScope
+{
+    bool fullArtifactValidation = true;
+    std::uint64_t frozenAssignmentRevision = 0;
+    std::array<std::uint8_t, 32> frozenAssignmentDigest{};
+    std::vector<ConsoleArtifactV2MatchedRoute> matchedRoutes;
+
+    bool operator==(const ConsoleArtifactV2ValidationScope& other) const
+    {
+        return fullArtifactValidation == other.fullArtifactValidation
+            && frozenAssignmentRevision == other.frozenAssignmentRevision
+            && frozenAssignmentDigest == other.frozenAssignmentDigest
+            && matchedRoutes == other.matchedRoutes;
+    }
+};
+
 struct AcceptedRouteArtifactV2RouteRecord
 {
     std::int32_t routeSlotIndex = -1;
     std::string relativePath;
     std::int64_t fileByteSize = 0;
     dronegcs::route_artifact::Digest256 routeArtifactDigest;
+    bool validationConfirmed = false;
+    RouteArtifactV2FileIdentity validatedFileIdentity;
 };
 
-/** Immutable, metadata-only authority snapshot for a fully validated schema-v2 Current. */
+/** Immutable authority snapshot for a validated schema-v2 Current and scope. */
 struct AcceptedRouteArtifactV2
 {
     std::uint16_t artifactSchemaVersion =
@@ -112,16 +165,25 @@ struct AcceptedRouteArtifactV2
     RouteArtifactV2CurrentDirectoryIdentity currentDirectoryIdentity;
     std::int64_t validatedAtUtcMs = 0;
     std::uint64_t validationGeneration = 0;
+    ConsoleArtifactV2ValidationScope validationScope;
 };
 
 struct ConsoleArtifactV2ValidationMetrics
 {
+    bool cacheHit = false;
+    bool fullArtifactValidation = true;
+    std::uint64_t manifestRouteCount = 0;
+    std::uint64_t selectedRouteCount = 0;
     std::uint64_t routeFilesRead = 0;
     std::uint64_t physicalRouteOpenCount = 0;
     std::uint64_t rowsParsed = 0;
     std::uint64_t bytesRead = 0;
     std::uint32_t peakProcessHandles = 0;
     std::uint64_t peakWorkingSetBytes = 0;
+    std::uint64_t metadataDurationMs = 0;
+    std::uint64_t routeValidationDurationMs = 0;
+    std::uint64_t metadataRecheckDurationMs = 0;
+    std::uint64_t cacheIdentityCheckDurationMs = 0;
     double elapsedSeconds = 0.0;
 };
 
@@ -153,6 +215,10 @@ public:
     std::uint64_t RequestValidation(
         ExpectedRouteArtifactV2Identity expectedIdentity,
         std::chrono::milliseconds deadline = std::chrono::minutes(5));
+    std::uint64_t RequestValidation(
+        ExpectedRouteArtifactV2Identity expectedIdentity,
+        ConsoleArtifactV2ValidationScope validationScope,
+        std::chrono::milliseconds deadline = std::chrono::minutes(5));
     bool PollCompleted(ConsoleArtifactV2ValidationResult& result);
     void CancelValidation();
 
@@ -174,7 +240,8 @@ public:
         const std::atomic_bool* cancellation = nullptr,
         std::uint64_t generation = 1,
         std::chrono::milliseconds deadline = std::chrono::minutes(5),
-        RouteValidatedHook routeValidatedHook = {});
+        RouteValidatedHook routeValidatedHook = {},
+        ConsoleArtifactV2ValidationScope validationScope = {});
 
 private:
     struct Request
@@ -182,6 +249,7 @@ private:
         std::uint64_t generation = 0;
         std::uint64_t cancellationVersion = 0;
         ExpectedRouteArtifactV2Identity expectedIdentity;
+        ConsoleArtifactV2ValidationScope validationScope;
         std::chrono::steady_clock::time_point deadline;
     };
 

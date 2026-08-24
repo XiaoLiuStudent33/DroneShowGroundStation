@@ -158,6 +158,14 @@ namespace dronegcs::mavftp
             { return config_.requestTimeout; }
         std::chrono::milliseconds GetConfiguredTerminateTimeout() const
             { return config_.terminateTimeout; }
+        /**
+         * Live, ACK-authoritative WriteFile progress for the current operation.
+         * Retries and merely-sent blocks never advance these counters.
+         */
+        std::uint64_t GetAcknowledgedWriteBytes() const
+            { return static_cast<std::uint64_t>(transferred_); }
+        std::uint64_t GetAcknowledgedWriteBlocks() const
+            { return writeBlocksCompleted_; }
 
     private:
         enum class Phase : std::uint8_t
