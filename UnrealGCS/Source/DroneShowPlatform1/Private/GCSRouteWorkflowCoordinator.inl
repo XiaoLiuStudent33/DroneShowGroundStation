@@ -110,7 +110,7 @@ namespace GCSRouteWorkflowPrivate
 	}
 	FString JobState(const dspgcs::UploadJobState V)
 	{
-		switch (V) { case dspgcs::UploadJobState::Created:return TEXT("Created"); case dspgcs::UploadJobState::Validating:return TEXT("Validating"); case dspgcs::UploadJobState::Ready:return TEXT("Ready"); case dspgcs::UploadJobState::Running:return TEXT("Running"); case dspgcs::UploadJobState::Paused:return TEXT("Paused"); case dspgcs::UploadJobState::Cancelling:return TEXT("Cancelling"); case dspgcs::UploadJobState::Completed:return TEXT("Completed"); case dspgcs::UploadJobState::Failed:return TEXT("Failed"); case dspgcs::UploadJobState::Cancelled:return TEXT("Cancelled"); default:return TEXT("--"); }
+		switch (V) { case dspgcs::UploadJobState::Created:return TEXT("Created"); case dspgcs::UploadJobState::Validating:return TEXT("Validating"); case dspgcs::UploadJobState::Ready:return TEXT("Ready"); case dspgcs::UploadJobState::Running:return TEXT("Running"); case dspgcs::UploadJobState::Paused:return TEXT("Paused"); case dspgcs::UploadJobState::Cancelling:return TEXT("Cancelling"); case dspgcs::UploadJobState::Completed:return TEXT("Succeeded"); case dspgcs::UploadJobState::Failed:return TEXT("Failed"); case dspgcs::UploadJobState::Cancelled:return TEXT("Cancelled"); default:return TEXT("--"); }
 	}
 	FString Gate(const dspgcs::UploadArtifactGateState V)
 	{
@@ -987,7 +987,8 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	if (Job) ConsoleState += TEXT(" / Artifact: ") + Gate(Job->artifactGateState);
 	SetText(UploadWidgets,TEXT("TXT_ConsoleValidatedValue"),ConsoleState);
 	FString JobPresentation = Job
-		? TEXT("Protocol: ") + JobState(Job->jobState) : TEXT("Protocol: --");
+		? FormatUploadJobPresentation(static_cast<uint8>(Job->jobState))
+		: TEXT("State: --");
 	if (Job && Job->jobState == dspgcs::UploadJobState::Failed &&
 		!Job->firstFailure.safeSummary.empty())
 	{
@@ -1006,7 +1007,7 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 		JobPresentation += TEXT(" / ") + CommandStatus.LastSafeDiagnostic.Left(320);
 	}
 	SetText(UploadWidgets,TEXT("TXT_UploadJobStateValue"),JobPresentation);
-	const uint64 Total=Job?Job->totalBytes:0,Done=Job?Job->bytesCompleted:0; const double UR=ComputeProgressRatio(Done,Total); SetText(UploadWidgets,TEXT("TXT_UploadThroughputValue"),FormatThroughput(Job?Job->throughputBytesPerSecond:0)); SetText(UploadWidgets,TEXT("TXT_UploadBytesValue"),FString::Printf(TEXT("%s / %s"),*FormatByteCount(Done),*FormatByteCount(Total))); SetText(UploadWidgets,TEXT("TXT_UploadElapsedValue"),FormatElapsedMilliseconds(Job?Job->elapsedMs:0)); if(UProgressBar* Bar=Get<UProgressBar>(UploadWidgets,TEXT("PROGRESS_Upload"))) Bar->SetPercent(UR); SetText(UploadWidgets,TEXT("TXT_UploadPercent"),FormatPercent(UR)); SetText(UploadWidgets,TEXT("TXT_CurrentMaxConcurrencyValue"),Job?FString::Printf(TEXT("Current: %u"),Job->effectiveMaxConcurrentUploads):TEXT("Current: --"));
+	const uint64 Total=Job?Job->totalBytes:0,Done=Job?Job->bytesCompleted:0; const double UR=ComputeProgressRatio(Done,Total); SetText(UploadWidgets,TEXT("TXT_UploadThroughputValue"),FormatThroughput(Job?Job->throughputBytesPerSecond:0)); SetText(UploadWidgets,TEXT("TXT_UploadBytesValue"),FormatLogicalByteProgress(Done,Total)); SetText(UploadWidgets,TEXT("TXT_UploadElapsedValue"),FormatElapsedMilliseconds(Job?Job->elapsedMs:0)); if(UProgressBar* Bar=Get<UProgressBar>(UploadWidgets,TEXT("PROGRESS_Upload"))) Bar->SetPercent(UR); SetText(UploadWidgets,TEXT("TXT_UploadPercent"),FormatPercent(UR)); SetText(UploadWidgets,TEXT("TXT_CurrentMaxConcurrencyValue"),Job?FString::Printf(TEXT("Current: %u"),Job->effectiveMaxConcurrentUploads):TEXT("Current: --"));
 	RefreshArtifactIdentity();
 	SyncRouteListModel();
 	RefreshVisibleRouteRows();
@@ -1086,8 +1087,9 @@ void UGCSRouteWorkflowCoordinator::RefreshArtifactIdentity()
 	if (bUploadArtifactMismatch)
 	{
 		SetText(UploadWidgets, TEXT("TXT_UploadJobStateValue"),
-			Job ? TEXT("Protocol: ") + JobState(Job->jobState) + TEXT(" / Artifact mismatch")
-				: TEXT("Protocol: --"));
+			Job ? FormatUploadJobPresentation(static_cast<uint8>(Job->jobState)) +
+					TEXT(" / Artifact mismatch")
+				: TEXT("State: --"));
 	}
 }
 
@@ -1118,10 +1120,12 @@ void UGCSRouteWorkflowCoordinator::SyncRouteListModel()
 		&& Mirror->GetRouteStateCount() == static_cast<int32>(Job->matchedCount);
 	if (!bComplete)
 	{
+		const FString Presentation = FormatUploadJobPresentation(
+			static_cast<uint8>(Job->jobState));
 		SetText(UploadWidgets, TEXT("TXT_UploadJobStateValue"),
 			bUploadArtifactMismatch
-				? TEXT("Protocol: Loading Routes / Artifact mismatch")
-				: TEXT("Protocol: Loading Routes"));
+				? Presentation + TEXT(" / Routes: Loading / Artifact mismatch")
+				: Presentation + TEXT(" / Routes: Loading"));
 		return;
 	}
 	if (!RouteListItems.IsEmpty() || Job->matchedCount == 0) return;
@@ -1131,7 +1135,8 @@ void UGCSRouteWorkflowCoordinator::SyncRouteListModel()
 	if (SortedRouteSlots.Num() != static_cast<int32>(Job->matchedCount))
 	{
 		SetText(UploadWidgets, TEXT("TXT_UploadJobStateValue"),
-			TEXT("Protocol: Loading Routes"));
+			FormatUploadJobPresentation(static_cast<uint8>(Job->jobState)) +
+				TEXT(" / Routes: Loading"));
 		return;
 	}
 	ReplaceRouteListItems(JobID, SnapshotToken, SortedRouteSlots);
@@ -1298,8 +1303,10 @@ void UGCSRouteWorkflowCoordinator::StartRefreshTicker() { if(!RefreshTickerHandl
 void UGCSRouteWorkflowCoordinator::StopRefreshTicker() { if(RefreshTickerHandle.IsValid()) { FTSTicker::GetCoreTicker().RemoveTicker(RefreshTickerHandle); RefreshTickerHandle.Reset(); } }
 double UGCSRouteWorkflowCoordinator::ComputeProgressRatio(uint64 Completed,uint64 Total) { return Total==0?0.0:FMath::Clamp(static_cast<double>(Completed)/Total,0.0,1.0); }
 FString UGCSRouteWorkflowCoordinator::FormatByteCount(uint64 Bytes) { using namespace GCSRouteWorkflowPrivate; constexpr double KB=1024.0,MB=KB*1024.0,GB=MB*1024.0; if(Bytes<1024)return FString::Printf(TEXT("%llu B"),Bytes); if(Bytes<static_cast<uint64>(MB))return Compact(Bytes/KB)+TEXT(" KB"); if(Bytes<static_cast<uint64>(GB))return Compact(Bytes/MB)+TEXT(" MB"); return Compact(Bytes/GB)+TEXT(" GB"); }
-FString UGCSRouteWorkflowCoordinator::FormatThroughput(uint64 Value) { return FormatByteCount(Value)+TEXT("/s"); }
-FString UGCSRouteWorkflowCoordinator::FormatElapsedMilliseconds(uint64 Value) { const uint64 S=Value/1000; return FString::Printf(TEXT("%02llu:%02llu:%02llu"),S/3600,(S/60)%60,S%60); }
+FString UGCSRouteWorkflowCoordinator::FormatLogicalByteProgress(uint64 Completed,uint64 Total) { return FString::Printf(TEXT("%llu B / %llu B (logical payload)"),Completed,Total); }
+FString UGCSRouteWorkflowCoordinator::FormatThroughput(uint64 Value) { return FormatByteCount(Value)+TEXT("/s (avg logical payload)"); }
+FString UGCSRouteWorkflowCoordinator::FormatElapsedMilliseconds(uint64 Value) { const uint64 S=Value/1000; return FString::Printf(TEXT("%02llu:%02llu:%02llu.%03llu"),S/3600,(S/60)%60,S%60,Value%1000); }
+FString UGCSRouteWorkflowCoordinator::FormatUploadJobPresentation(uint8 JobStateValue) { using namespace GCSRouteWorkflowPrivate; return TEXT("State: ")+JobState(static_cast<dspgcs::UploadJobState>(JobStateValue)); }
 FString UGCSRouteWorkflowCoordinator::FormatPercent(double Value) { return FString::Printf(TEXT("%.0f%%"),FMath::Clamp(Value,0.0,1.0)*100.0); }
 int32 UGCSRouteWorkflowCoordinator::ComputeRetryCount(const uint32 AttemptCount)
 {

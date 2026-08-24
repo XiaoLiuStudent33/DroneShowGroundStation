@@ -226,7 +226,9 @@ private:
 	double NextSnapshotPollSeconds = 0.0;
 	int32 PendingAttemptCount = 0;
 	int32 PendingSnapshotAttemptCount = 0;
+	int32 TerminalAggregateRefreshAttemptCount = 0;
 	bool bSnapshotRequestInFlight = false;
+	bool bAggregateRefreshRequired = false;
 	bool bCommandInFlight = false;
 	bool bCommandTimedOut = false;
 	bool bHasCommandAck = false;

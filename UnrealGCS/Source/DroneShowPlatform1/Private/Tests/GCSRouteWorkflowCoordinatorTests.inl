@@ -216,8 +216,23 @@ bool FGCSRouteWorkflowFormattingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("bytes 0"),UGCSRouteWorkflowCoordinator::FormatByteCount(0),FString(TEXT("0 B")));
 	TestEqual(TEXT("bytes KB"),UGCSRouteWorkflowCoordinator::FormatByteCount(128*1024),FString(TEXT("128 KB")));
 	TestEqual(TEXT("bytes MB"),UGCSRouteWorkflowCoordinator::FormatByteCount(2516582),FString(TEXT("2.4 MB")));
-	TestEqual(TEXT("throughput"),UGCSRouteWorkflowCoordinator::FormatThroughput(125*1024),FString(TEXT("125 KB/s")));
-	TestEqual(TEXT("elapsed"),UGCSRouteWorkflowCoordinator::FormatElapsedMilliseconds(92000),FString(TEXT("00:01:32")));
+	TestEqual(TEXT("logical byte progress"),
+		UGCSRouteWorkflowCoordinator::FormatLogicalByteProgress(345800,345800),
+		FString(TEXT("345800 B / 345800 B (logical payload)")));
+	TestEqual(TEXT("throughput"),UGCSRouteWorkflowCoordinator::FormatThroughput(125*1024),FString(TEXT("125 KB/s (avg logical payload)")));
+	TestEqual(TEXT("elapsed"),UGCSRouteWorkflowCoordinator::FormatElapsedMilliseconds(92829),FString(TEXT("00:01:32.829")));
+	TestEqual(TEXT("succeeded aggregate presentation"),
+		UGCSRouteWorkflowCoordinator::FormatUploadJobPresentation(
+			static_cast<uint8>(dspgcs::UploadJobState::Completed)),
+		FString(TEXT("State: Succeeded")));
+	TestEqual(TEXT("failed aggregate presentation"),
+		UGCSRouteWorkflowCoordinator::FormatUploadJobPresentation(
+			static_cast<uint8>(dspgcs::UploadJobState::Failed)),
+		FString(TEXT("State: Failed")));
+	TestEqual(TEXT("cancelled presentation never remains Running"),
+		UGCSRouteWorkflowCoordinator::FormatUploadJobPresentation(
+			static_cast<uint8>(dspgcs::UploadJobState::Cancelled)),
+		FString(TEXT("State: Cancelled")));
 	TestEqual(TEXT("0 percent"),UGCSRouteWorkflowCoordinator::FormatPercent(0),FString(TEXT("0%")));
 	TestEqual(TEXT("50 percent"),UGCSRouteWorkflowCoordinator::FormatPercent(0.5),FString(TEXT("50%")));
 	TestEqual(TEXT("100 percent"),UGCSRouteWorkflowCoordinator::FormatPercent(1),FString(TEXT("100%")));

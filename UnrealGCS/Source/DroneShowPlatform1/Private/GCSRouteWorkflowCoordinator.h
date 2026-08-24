@@ -121,8 +121,10 @@ public:
 
 	static double ComputeProgressRatio(uint64 Completed, uint64 Total);
 	static FString FormatByteCount(uint64 Bytes);
+	static FString FormatLogicalByteProgress(uint64 Completed, uint64 Total);
 	static FString FormatThroughput(uint64 BytesPerSecond);
 	static FString FormatElapsedMilliseconds(uint64 ElapsedMilliseconds);
+	static FString FormatUploadJobPresentation(uint8 JobStateValue);
 	static FString FormatPercent(double Ratio);
 	static int32 ComputeRetryCount(uint32 AttemptCount);
 	static FString FormatRouteState(uint8 RouteStateValue);

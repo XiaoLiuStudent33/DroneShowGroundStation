@@ -333,6 +333,18 @@ bool FDSPGCSUploadJobClientHardeningTest::RunTest(const FString& Parameters)
 		Client->EnqueueIncoming(Envelope, Payload);
 		Client->ProcessIncoming();
 	};
+	auto DeliverDelta = [this](UDSPGCSUploadJobSubsystem* Client,
+		const dspgcs::UploadJobRouteStateDeltaDTO& DeltaValue)
+	{
+		std::vector<std::uint8_t> Payload;
+		std::string Error;
+		TestTrue(TEXT("Route Delta encodes"),
+			dspgcs::EncodeUploadJobRouteStateDelta(DeltaValue, Payload, Error));
+		dspgcs::MessageEnvelope Envelope;
+		Envelope.messageType = dspgcs::UploadJobMessageTypes::RouteStateDelta;
+		Client->EnqueueIncoming(Envelope, Payload);
+		Client->ProcessIncoming();
+	};
 
 	UGameInstance* RejectedGameInstance = NewObject<UGameInstance>(GEngine);
 	UDSPGCSUploadJobSubsystem* RejectedClient =
@@ -502,16 +514,63 @@ bool FDSPGCSUploadJobClientHardeningTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Automatic recovery completes without page reopen"),
 		ValidationClient->Mirror.IsRoutePageComplete() &&
 		!ValidationClient->Mirror.IsRecoveryRequired());
-	TestTrue(TEXT("Request Job B terminal snapshot"),
-		ValidationClient->RequestAuthoritativeSnapshot(Error));
+	dspgcs::UploadJobRouteStateDeltaDTO TerminalDelta;
+	TerminalDelta.uploadJobId = RecoveredSnapshot.uploadJobId;
+	TerminalDelta.jobRevision = RecoveredSnapshot.jobRevision + 1;
+	TerminalDelta.deltaSequence = RecoveredSnapshot.routeDeltaSequence + 1;
+	auto SucceededRoute0 = Route(0);
+	SucceededRoute0.state = dspgcs::UploadRouteState::Succeeded;
+	SucceededRoute0.bytesCompleted = SucceededRoute0.totalBytes;
+	auto SucceededRoute1 = Route(1);
+	SucceededRoute1.state = dspgcs::UploadRouteState::Succeeded;
+	SucceededRoute1.bytesCompleted = SucceededRoute1.totalBytes;
+	TerminalDelta.routes = { SucceededRoute0, SucceededRoute1 };
+	const int32 FramesBeforeTerminalRefresh = ValidationFrames.Num();
+	DeliverDelta(ValidationClient, TerminalDelta);
+	ValidationClient->TickClient(0.0f);
+	TestTrue(TEXT("Ordered terminal Delta automatically requests Aggregate"),
+		ValidationFrames.Num() == FramesBeforeTerminalRefresh + 1);
 	dspgcs::UploadJobSnapshotRequestDTO TerminalRequest;
+	DecodeSnapshotRequest(ValidationFrames.Last(), TerminalRequest);
+	TestTrue(TEXT("Terminal refresh request is Aggregate"),
+		TerminalRequest.requestKind ==
+			dspgcs::UploadJobSnapshotRequestKind::Aggregate);
+	auto StaleRunningSnapshot = JobBSnapshot;
+	StaleRunningSnapshot.clientRequestId = TerminalRequest.clientRequestId;
+	StaleRunningSnapshot.jobState = dspgcs::UploadJobState::Running;
+	DeliverSnapshot(ValidationClient, StaleRunningSnapshot);
+	TestTrue(TEXT("Older Running Snapshot cannot overwrite terminal Route revision"),
+		ValidationClient->Mirror.GetSnapshot() &&
+		ValidationClient->Mirror.GetSnapshot()->jobRevision == TerminalDelta.jobRevision);
+	const int32 FramesBeforeStaleReplacement = ValidationFrames.Num();
+	ValidationClient->TickClient(0.0f);
+	TestTrue(TEXT("Stale terminal Aggregate is replaced by a bounded fresh request"),
+		ValidationFrames.Num() == FramesBeforeStaleReplacement + 1);
 	DecodeSnapshotRequest(ValidationFrames.Last(), TerminalRequest);
 	auto CompletedSnapshot = JobBSnapshot;
 	CompletedSnapshot.clientRequestId = TerminalRequest.clientRequestId;
 	CompletedSnapshot.jobState = dspgcs::UploadJobState::Completed;
-	CompletedSnapshot.jobRevision++;
+	CompletedSnapshot.jobRevision = TerminalDelta.jobRevision;
 	CompletedSnapshot.snapshotToken = Id('a');
+	CompletedSnapshot.routeDeltaSequence = TerminalDelta.deltaSequence;
+	CompletedSnapshot.waitingCount = 0;
+	CompletedSnapshot.succeededCount = 2;
+	CompletedSnapshot.bytesCompleted = CompletedSnapshot.totalBytes;
+	CompletedSnapshot.throughputBytesPerSecond = 22652;
+	CompletedSnapshot.throughputWindowMs = 1000;
+	CompletedSnapshot.elapsedMs = 8829;
 	DeliverSnapshot(ValidationClient, CompletedSnapshot);
+	const FDSPGCSUploadJobMirrorStatus CompletedStatus = ValidationClient->GetMirrorStatus();
+	TestEqual(TEXT("Completed aggregate reaches terminal Job state"),
+		CompletedStatus.JobState,
+		static_cast<int32>(dspgcs::UploadJobState::Completed));
+	TestEqual(TEXT("Terminal logical payload bytes are complete"),
+		CompletedStatus.BytesCompleted, CompletedStatus.TotalBytes);
+	const dspgcs::UploadJobSnapshotDTO* RefreshedTerminal =
+		ValidationClient->Mirror.GetSnapshot();
+	TestTrue(TEXT("Terminal elapsed and aggregate throughput are authoritative"),
+		RefreshedTerminal && RefreshedTerminal->elapsedMs == 8829 &&
+		RefreshedTerminal->throughputBytesPerSecond == 22652);
 	TestTrue(TEXT("Completed Job explicitly prepares NoJob state"),
 		ValidationClient->PrepareForNewUploadJob(Error));
 	const FString CompletedJobID = JobID;

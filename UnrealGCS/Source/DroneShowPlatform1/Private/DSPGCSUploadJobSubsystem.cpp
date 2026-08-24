@@ -43,6 +43,40 @@ namespace
 		return (FDateTime::UtcNow() - Epoch).GetTicks() /
 			ETimespan::TicksPerMillisecond;
 	}
+
+	bool IsTerminalJobState(const dspgcs::UploadJobState State)
+	{
+		return State == dspgcs::UploadJobState::Completed ||
+			State == dspgcs::UploadJobState::Failed ||
+			State == dspgcs::UploadJobState::Cancelled;
+	}
+
+	bool AreAllMirroredRoutesTerminal(const FDSPGCSUploadJobStateMirror& Mirror)
+	{
+		const dspgcs::UploadJobSnapshotDTO* Snapshot = Mirror.GetSnapshot();
+		if (!Snapshot || Snapshot->matchedCount == 0 || !Mirror.IsRoutePageComplete() ||
+			Mirror.GetRouteStateCount() != static_cast<int32>(Snapshot->matchedCount))
+		{
+			return false;
+		}
+		TArray<int32> RouteSlots;
+		Mirror.CopySortedRouteSlots(RouteSlots);
+		for (const int32 RouteSlot : RouteSlots)
+		{
+			const dspgcs::UploadRouteStateDTO* Route = Mirror.FindRoute(RouteSlot);
+			if (!Route) return false;
+			if (Route->state == dspgcs::UploadRouteState::Succeeded ||
+				Route->state == dspgcs::UploadRouteState::Failed ||
+				Route->state == dspgcs::UploadRouteState::Cancelled)
+			{
+				continue;
+			}
+			return false;
+		}
+		return true;
+	}
+
+	constexpr int32 MaxTerminalAggregateRefreshAttempts = 3;
 }
 
 void UDSPGCSUploadJobSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -89,6 +123,8 @@ void UDSPGCSUploadJobSubsystem::Deinitialize()
 	Mirror.Reset();
 	PendingCommandFrame.clear();
 	ClearPendingSnapshotRequest();
+	bAggregateRefreshRequired = false;
+	TerminalAggregateRefreshAttemptCount = 0;
 	ActiveJobID.clear();
 	bCommandInFlight = false;
 	bCommandTimedOut = false;
@@ -290,6 +326,8 @@ bool UDSPGCSUploadJobSubsystem::StartUploadJob(
 	}
 	if (!SendCommand(Command, OutError)) return false;
 	ActiveJobID = Command.uploadJobId;
+	bAggregateRefreshRequired = false;
+	TerminalAggregateRefreshAttemptCount = 0;
 	Mirror.PrepareForNewJob(ActiveJobID);
 	OutUploadJobID = UploadJobFromUtf8(ActiveJobID);
 	return true;
@@ -314,6 +352,8 @@ bool UDSPGCSUploadJobSubsystem::PrepareForNewUploadJob(FString& OutError)
 		return false;
 	}
 	ClearPendingSnapshotRequest();
+	bAggregateRefreshRequired = false;
+	TerminalAggregateRefreshAttemptCount = 0;
 	PendingCommandFrame.clear();
 	PendingAttemptCount = 0;
 	ActiveJobID.clear();
@@ -578,6 +618,15 @@ void UDSPGCSUploadJobSubsystem::ProcessIncoming()
 			if (dspgcs::DecodeUploadJobSnapshot(Frame.Payload, Snapshot, Error) &&
 				Snapshot.clientRequestId == PendingSnapshotRequestID)
 			{
+				const dspgcs::UploadJobSnapshotDTO* Current = Mirror.GetSnapshot();
+				if (Snapshot.uploadJobId != ActiveJobID ||
+					(Snapshot.resultCode == dspgcs::UploadJobErrorCode::None &&
+						Current && Snapshot.uploadJobId == Current->uploadJobId &&
+						Snapshot.jobRevision < Current->jobRevision))
+				{
+					ClearPendingSnapshotRequest();
+					continue;
+				}
 				const bool bStaleRoutePage =
 					PendingSnapshotRequestKind ==
 						dspgcs::UploadJobSnapshotRequestKind::RoutePage &&
@@ -592,6 +641,11 @@ void UDSPGCSUploadJobSubsystem::ProcessIncoming()
 				}
 				if (!Mirror.ApplySnapshot(Snapshot)) continue;
 				ClearPendingSnapshotRequest();
+				if (IsTerminalJobState(Snapshot.jobState))
+				{
+					bAggregateRefreshRequired = false;
+					TerminalAggregateRefreshAttemptCount = 0;
+				}
 				if (Snapshot.resultCode != dspgcs::UploadJobErrorCode::None)
 				{
 					LastCommandResultCode = Snapshot.resultCode;
@@ -622,6 +676,11 @@ void UDSPGCSUploadJobSubsystem::ProcessIncoming()
 				Mirror.ApplyRoutePage(Page))
 			{
 				ClearPendingSnapshotRequest();
+				if (AreAllMirroredRoutesTerminal(Mirror) &&
+					!IsTerminalJobState(Mirror.GetSnapshot()->jobState))
+				{
+					bAggregateRefreshRequired = true;
+				}
 				if (Page.hasMore)
 				{
 					FString Ignored;
@@ -642,6 +701,11 @@ void UDSPGCSUploadJobSubsystem::ProcessIncoming()
 				FString Ignored;
 				RequestAuthoritativeSnapshot(Ignored);
 			}
+			else if (!bDuplicate && AreAllMirroredRoutesTerminal(Mirror))
+			{
+				bAggregateRefreshRequired = true;
+				TerminalAggregateRefreshAttemptCount = 0;
+			}
 		}
 	}
 }
@@ -651,6 +715,14 @@ bool UDSPGCSUploadJobSubsystem::TickClient(float DeltaSeconds)
 	(void)DeltaSeconds;
 	ProcessIncoming();
 	const double Now = FPlatformTime::Seconds();
+	if (bAggregateRefreshRequired && !bSnapshotRequestInFlight &&
+		!ActiveJobID.empty() && TerminalAggregateRefreshAttemptCount <
+			MaxTerminalAggregateRefreshAttempts)
+	{
+		FString Ignored;
+		if (RequestAuthoritativeSnapshot(Ignored))
+			++TerminalAggregateRefreshAttemptCount;
+	}
 	if (!PendingCommandFrame.empty() && Now >= RetryAtSeconds)
 	{
 		if (PendingAttemptCount >= MaxCommandAttempts)
