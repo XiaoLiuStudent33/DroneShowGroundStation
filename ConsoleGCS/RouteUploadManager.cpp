@@ -1,5 +1,7 @@
 #include "RouteUploadManager.h"
 
+#include "MAVFTPMissionTransport.h"
+
 #include "ConsoleUI.h"
 #include "MissionProtocolTransport.h"
 
@@ -101,13 +103,58 @@ namespace
 	}
 }
 
+std::unique_ptr<IMissionTransport> CreateConfiguredMissionTransport(
+    DroneSession& session,
+    const RouteUploadManagerConfig& config,
+    std::string& diagnostic)
+{
+    diagnostic.clear();
+    if (config.transportMode == MissionTransportMode::MissionProtocol)
+    {
+        return CreateMissionProtocolTransport(
+            session, session.GetMissionProtocolPeerIdentity());
+    }
+
+    dronegcs::mavftp::Client* const client = session.GetMavFtpClient();
+    if (!client)
+    {
+        diagnostic =
+            "MAVFTP transport is selected but the endpoint-bound Client is unavailable.";
+        return nullptr;
+    }
+    dronegcs::mission_ftp::MAVFTPMissionTransportConfig transportConfig;
+    transportConfig.compileConfig.segmentCapacity = config.mavftpSegmentItems;
+    transportConfig.compileConfig.verificationPolicy =
+        dronegcs::mission_ftp::VerificationPolicy::ProductionEndpoints;
+    transportConfig.driveClientTick = false;
+    transportConfig.verificationConfig.responseTimeout =
+        std::chrono::milliseconds(config.mavftpRequestTimeoutMs);
+    transportConfig.verificationConfig.maxRetries =
+        config.mavftpRequestRetryCount;
+    return std::make_unique<dronegcs::mission_ftp::MAVFTPMissionTransport>(
+        *client, session, session.GetMissionProtocolPeerIdentity(),
+        transportConfig);
+}
+
 RouteUploadManager::RouteUploadManager(
     ConsoleUploadJobAuthority& authority,
     DroneManager& droneManager,
     const bool routeUploadEnabled)
+    : RouteUploadManager(
+        authority,
+        droneManager,
+        RouteUploadManagerConfig{ routeUploadEnabled })
+{
+}
+
+RouteUploadManager::RouteUploadManager(
+    ConsoleUploadJobAuthority& authority,
+    DroneManager& droneManager,
+    RouteUploadManagerConfig config)
     : authority_(authority)
     , droneManager_(droneManager)
-    , routeUploadEnabled_(routeUploadEnabled)
+    , routeUploadEnabled_(config.routeUploadEnabled)
+    , config_(std::move(config))
 {
 }
 
@@ -308,8 +355,18 @@ bool RouteUploadManager::StartPrepared(
     identity.routeSlotIndex = target.metadata.routeSlotIndex;
     identity.generation = target.generation;
     target.session = session;
-    target.transport = CreateMissionProtocolTransport(
-        *session, session->GetMissionProtocolPeerIdentity());
+    target.endpoint = session->GetConfig().remoteIp + ":" +
+        std::to_string(session->GetConfig().remotePort);
+    std::string factoryDiagnostic;
+    target.transport = CreateConfiguredMissionTransport(
+        *session, config_, factoryDiagnostic);
+    if (!target.transport)
+    {
+        FailTarget(target,
+            dspgcs::RouteUploadErrorCode::TransportUnavailable,
+            factoryDiagnostic.c_str(), true, now);
+        return false;
+    }
     std::string prepareDiagnostic;
     if (!target.transport->Prepare(
         std::move(identity), std::move(target.prepared), prepareDiagnostic))
@@ -327,9 +384,11 @@ bool RouteUploadManager::StartPrepared(
     target.uploadStartedAt = now;
     ApplyTarget(target, now);
     ConsoleUI::AddLog("[RouteUpload] Target start DroneID=" +
-        target.metadata.droneId + " RouteSlot=" +
+        target.metadata.droneId + " Endpoint=" + target.endpoint +
+        " RouteSlot=" +
         std::to_string(target.metadata.routeSlotIndex) + " Items=" +
-        std::to_string(target.metadata.missionItemCount));
+        std::to_string(target.metadata.missionItemCount) + " Transport=" +
+        MissionTransportModeName(config_.transportMode));
     if (!target.transport->Upload(now))
     {
         const std::string diagnostic = target.transport->GetSafeDiagnostic();
@@ -397,6 +456,40 @@ void RouteUploadManager::ProcessTransactions(
     {
         if (!target.transport) continue;
         target.transport->Tick(now);
+        if (config_.transportMode == MissionTransportMode::MAVFTP)
+        {
+            const auto* mavftpTransport = dynamic_cast<
+                const dronegcs::mission_ftp::MAVFTPMissionTransport*>(
+                    target.transport.get());
+            if (mavftpTransport)
+            {
+                const auto& mavftp = mavftpTransport->GetMavFtpMetrics();
+                if (mavftp.segmentsPlanned > 0 &&
+                    target.lastLoggedMavftpSegment != mavftp.activeSegmentIndex)
+                {
+                    target.lastLoggedMavftpSegment = mavftp.activeSegmentIndex;
+                    ConsoleUI::AddLog("[RouteUpload] MAVFTP segment DroneID=" +
+                        target.metadata.droneId + " Endpoint=" + target.endpoint +
+                        " RouteSlot=" +
+                        std::to_string(target.metadata.routeSlotIndex) +
+                        " Transport=MAVFTP Segment=" +
+                        std::to_string(mavftp.activeSegmentIndex + 1) + "/" +
+                        std::to_string(mavftp.segmentsPlanned) + " Committed=" +
+                        std::to_string(mavftp.segmentsCommitted));
+                }
+                if (!target.loggedMavftpVerification &&
+                    target.transport->GetStatus() ==
+                        MissionTransportStatus::Verifying)
+                {
+                    target.loggedMavftpVerification = true;
+                    ConsoleUI::AddLog("[RouteUpload] Verification start DroneID=" +
+                        target.metadata.droneId + " Endpoint=" + target.endpoint +
+                        " RouteSlot=" +
+                        std::to_string(target.metadata.routeSlotIndex) +
+                        " Transport=MAVFTP Checks=Count/Home/First/Last");
+                }
+            }
+        }
         if (target.transport->ConsumeProgressChanged())
         {
             target.state.bytesCompleted = std::min<std::uint64_t>(
@@ -448,8 +541,11 @@ void RouteUploadManager::ProcessTransactions(
                     now - target.admittedAt).count());
             ApplyTarget(target, now);
             ConsoleUI::AddLog("[RouteUpload] Target verified DroneID=" +
-                target.metadata.droneId + " RouteSlot=" +
-                std::to_string(target.metadata.routeSlotIndex));
+                target.metadata.droneId + " Endpoint=" + target.endpoint +
+                " RouteSlot=" +
+                std::to_string(target.metadata.routeSlotIndex) + " Transport=" +
+                MissionTransportModeName(config_.transportMode) +
+                " Result=Succeeded");
 			PersistTargetTerminal(target);
         }
         else
@@ -554,6 +650,7 @@ void RouteUploadManager::PersistTargetTerminal(const RuntimeTarget& target)
 	line << "[RouteUpload] Target terminal"
 		<< " DroneID=" << SafeLogValue(target.metadata.droneId, 64)
 		<< " RouteSlot=" << target.metadata.routeSlotIndex
+		<< " Transport=" << MissionTransportModeName(config_.transportMode)
 		<< " TerminalPhase=" << SafeLogValue(metrics.terminalPhase, 32)
 		<< " ResultCode=" << RouteErrorName(metrics.resultCode)
 		<< " SafeDiagnostic=" << SafeLogValue(metrics.safeDiagnostic, 512)
@@ -584,6 +681,7 @@ void RouteUploadManager::PersistJobSummary(
 {
 	std::ostringstream line;
 	line << "[RouteUpload] Job terminal summary"
+		<< " Transport=" << MissionTransportModeName(config_.transportMode)
 		<< " Targets=" << jobMetrics_.targetCount
 		<< " Succeeded=" << jobMetrics_.succeeded
 		<< " Failed=" << jobMetrics_.failed

@@ -7,7 +7,22 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
+
+enum class MissionTransportMode : std::uint8_t
+{
+    MissionProtocol,
+    MAVFTP
+};
+
+const char* MissionTransportModeName(MissionTransportMode mode);
+bool ParseMissionTransportMode(
+    const std::string& value,
+    MissionTransportMode& mode);
+MissionTransportMode ResolveMissionTransportSelection(
+    MissionTransportMode configuredMode,
+    const std::optional<MissionTransportMode>& cliOverride);
 
 namespace AppConfigDefaults
 {
@@ -33,6 +48,8 @@ struct AppConfig
     bool realCommandEnabled = false;
     /** Independent destructive-data gate for standard Mission upload. */
     bool routeUploadEnabled = false;
+    /** Production Route Upload selector; missing configuration keeps rollback. */
+    MissionTransportMode missionTransport = MissionTransportMode::MissionProtocol;
     std::string mavlinkBindIP = AppConfigDefaults::MavlinkBindIP;
     int mavlinkBindPort = 0;
     bool dspgcsTelemetryEnabled = false;

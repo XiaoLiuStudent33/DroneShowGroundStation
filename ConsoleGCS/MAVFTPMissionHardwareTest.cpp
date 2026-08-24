@@ -138,16 +138,6 @@ bool ResolveMAVFTPQuickTestOptionsFromCurrent(
     return true;
 }
 
-const char* MissionTransportModeName(const MissionTransportMode mode)
-{
-    switch (mode)
-    {
-    case MissionTransportMode::MissionProtocol: return "MissionProtocol";
-    case MissionTransportMode::MAVFTP: return "MAVFTP";
-    }
-    return "Unknown";
-}
-
 bool ValidateMAVFTPMissionHardwareTestOptions(
     const MAVFTPMissionHardwareTestOptions& options,
     std::string& error)

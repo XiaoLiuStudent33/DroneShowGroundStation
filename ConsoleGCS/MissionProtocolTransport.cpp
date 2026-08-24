@@ -76,6 +76,7 @@ MissionTransportStatus MissionProtocolTransport::GetStatus() const
     case MissionUploadPhase::AwaitingAck:
         return MissionTransportStatus::WaitingAck;
     case MissionUploadPhase::VerifyingCount:
+    case MissionUploadPhase::VerifyingHome:
     case MissionUploadPhase::VerifyingFirst:
     case MissionUploadPhase::VerifyingLast:
         return MissionTransportStatus::Verifying;

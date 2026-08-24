@@ -66,6 +66,7 @@ enum class MissionUploadPhase : std::uint8_t
     AwaitingRequest,
     AwaitingAck,
     VerifyingCount,
+    VerifyingHome,
     VerifyingFirst,
     VerifyingLast,
     Succeeded,
@@ -118,6 +119,10 @@ public:
         MissionUploadTransactionConfig config = {});
 
     bool Start(std::chrono::steady_clock::time_point now);
+    /** Starts the shared production verifier without sending Mission upload data. */
+    bool BeginVerification(
+        std::chrono::steady_clock::time_point now,
+        bool observeReservedHome);
     bool HandleMissionMessage(
         const mavlink_message_t& message,
         const MissionProtocolPeerIdentity& peer,
@@ -180,5 +185,6 @@ private:
     std::string safeDiagnostic_;
     std::string verificationMismatchDiagnostic_;
     bool transportAccepted_ = false;
+    bool observeReservedHome_ = false;
     bool progressChanged_ = false;
 };

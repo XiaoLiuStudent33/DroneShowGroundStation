@@ -36,6 +36,7 @@
 #include <charconv>
 #include <chrono>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -163,6 +164,7 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
     bool configPathSet = false;
     MissionProfileProbeOptions probeOptions;
     MAVFTPMissionHardwareTestOptions hardwareTestOptions;
+    std::optional<MissionTransportMode> missionTransportOverride;
     bool quickOnlyOptionSeen = false;
     bool quickRouteSlotSeen = false;
     bool legacyHardwareEntrySeen = false;
@@ -192,15 +194,13 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
             std::string value;
             if (!ReadOptionValue("--mission-transport", index, argc, argv, value))
                 return -1;
-            if (value == "mission-protocol")
-                hardwareTestOptions.transportMode = MissionTransportMode::MissionProtocol;
-            else if (value == "mavftp")
-                hardwareTestOptions.transportMode = MissionTransportMode::MAVFTP;
-            else
+            MissionTransportMode parsedMode{};
+            if (!ParseMissionTransportMode(value, parsedMode))
             {
-                std::cerr << "--mission-transport accepts mission-protocol or mavftp.\n";
+                std::cerr << "--mission-transport accepts missionprotocol or mavftp.\n";
                 return -1;
             }
+            missionTransportOverride = parsedMode;
         }
         else if (argument == "--mavftp-test")
         {
@@ -341,6 +341,8 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
             return -1;
         }
     }
+    if (hardwareTestOptions.enabled && missionTransportOverride)
+        hardwareTestOptions.transportMode = *missionTransportOverride;
     if (probeOptions.allowWriteProbe && !probeOptions.enabled)
     {
         std::cerr << "--allow-mission-write-probe requires --mission-profile-probe <DroneID>.\n";
@@ -374,6 +376,8 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
                "and review the network settings before running.\n";
         return -1;
     }
+    appConfig.missionTransport = ResolveMissionTransportSelection(
+        appConfig.missionTransport, missionTransportOverride);
 
     std::string hardwareOptionsError;
     if (!ResolveMAVFTPMissionTransportOptions(
@@ -423,6 +427,9 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
     ConsoleUI::AddLog(
         std::string("ROUTE_UPLOAD_ENABLED=") +
         (appConfig.routeUploadEnabled ? "true" : "false"));
+    ConsoleUI::AddLog(
+        std::string("MISSION_TRANSPORT=") +
+        MissionTransportModeName(appConfig.missionTransport));
     ConsoleUI::AddLog(
         std::string("MODE: ") +
         (appConfig.realCommandEnabled
@@ -533,8 +540,16 @@ int ConsoleGCSApplication::RunProductionMavlink(
         appConfig.artifactWorkspaceRoot,
         &artifactConsumer,
         &frozenAssignmentStore);
+    RouteUploadManagerConfig routeUploadConfig;
+    routeUploadConfig.routeUploadEnabled = appConfig.routeUploadEnabled;
+    routeUploadConfig.transportMode = appConfig.missionTransport;
+    routeUploadConfig.mavftpSegmentItems = appConfig.mavftpSegmentItems;
+    routeUploadConfig.mavftpRequestTimeoutMs = appConfig.mavftpRequestTimeoutMs;
+    routeUploadConfig.mavftpTerminateTimeoutMs = appConfig.mavftpTerminateTimeoutMs;
+    routeUploadConfig.mavftpRequestRetryCount = appConfig.mavftpRequestRetryCount;
+    routeUploadConfig.mavftpWriteWindow = appConfig.mavftpWriteWindow;
     RouteUploadManager routeUploadManager(
-        uploadJobAuthority, droneManager, appConfig.routeUploadEnabled);
+        uploadJobAuthority, droneManager, routeUploadConfig);
     DSPGCSUploadJobReceiver uploadJobReceiver;
     commandReceiver.SetRealCommandEnabled(appConfig.realCommandEnabled);
     DroneSessionConfig discoveredSessionDefaults;
@@ -548,7 +563,9 @@ int ConsoleGCSApplication::RunProductionMavlink(
     discoveredSessionDefaults.realCommandEnabled =
         appConfig.realCommandEnabled;
     discoveredSessionDefaults.mavFtpServiceEnabled =
-        probeOptions.enabled || hardwareTestOptions.enabled;
+        probeOptions.enabled || hardwareTestOptions.enabled ||
+        (appConfig.routeUploadEnabled &&
+         appConfig.missionTransport == MissionTransportMode::MAVFTP);
     discoveredSessionDefaults.mavFtpRequestTimeoutMs =
         appConfig.mavftpRequestTimeoutMs;
     discoveredSessionDefaults.mavFtpTerminateTimeoutMs =

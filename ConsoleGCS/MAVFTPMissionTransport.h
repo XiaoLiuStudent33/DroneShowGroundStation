@@ -3,6 +3,7 @@
 #include "MavFtpClient.h"
 #include "MissionFtpCompiler.h"
 #include "MissionTransport.h"
+#include "MissionUploadTransaction.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -32,6 +33,9 @@ namespace dronegcs::mission_ftp
             65535U,
             VerificationPolicy::ProductionEndpoints };
         std::size_t writeBlockBytes = mavftp::MaximumDataBytes;
+        /** Hardware/unit harness compatibility; Production sets this false. */
+        bool driveClientTick = true;
+        MissionUploadTransactionConfig verificationConfig{};
     };
 
     struct MAVFTPMissionTransportMetrics
@@ -71,13 +75,20 @@ namespace dronegcs::mission_ftp
      * Per-Drone production Mission transport writer core. It owns only an
      * immutable compiled snapshot and borrows the endpoint-bound MAVFTP client.
      */
-    class MAVFTPMissionTransport final : public IMissionTransport
+    class MAVFTPMissionTransport final : public IMissionTransport,
+                                         public IMissionProtocolMessageSink
     {
     public:
         static constexpr const char* MissionPath = "@MISSION/mission.dat";
 
         MAVFTPMissionTransport(
             mavftp::Client& client,
+            MAVFTPMissionTransportConfig config = {},
+            const ISegmentRangeSource* segmentSource = nullptr);
+        MAVFTPMissionTransport(
+            mavftp::Client& client,
+            IMissionProtocolTransport& verificationTransport,
+            MissionProtocolPeerIdentity verificationPeer,
             MAVFTPMissionTransportConfig config = {},
             const ISegmentRangeSource* segmentSource = nullptr);
 
@@ -107,7 +118,12 @@ namespace dronegcs::mission_ftp
         const char* GetTerminalPhaseName() const override
             { return terminalPhase_.c_str(); }
         IMissionProtocolMessageSink* GetMissionProtocolMessageSink() override
-            { return nullptr; }
+            { return verificationTransport_ ? this : nullptr; }
+        bool HandleMissionMessage(
+            const mavlink_message_t& message,
+            const MissionProtocolPeerIdentity& peer,
+            std::chrono::steady_clock::time_point now) override;
+        bool DrivesClientTickForTest() const { return config_.driveClientTick; }
 
     private:
         static bool ReadChunk(
@@ -123,10 +139,13 @@ namespace dronegcs::mission_ftp
         void UpdateElapsed(std::chrono::steady_clock::time_point now);
 
         mavftp::Client& client_;
+        IMissionProtocolTransport* verificationTransport_ = nullptr;
+        MissionProtocolPeerIdentity verificationPeer_;
         MAVFTPMissionTransportConfig config_;
         const ISegmentRangeSource* segmentSource_ = nullptr;
         MissionTransportIdentity identity_;
         std::shared_ptr<const CompiledMissionSnapshot> snapshot_;
+        std::unique_ptr<MissionUploadTransaction> verifier_;
         std::size_t currentSegmentIndex_ = 0;
         MissionTransportStatus status_ = MissionTransportStatus::Idle;
         MissionTransportMetrics metrics_;

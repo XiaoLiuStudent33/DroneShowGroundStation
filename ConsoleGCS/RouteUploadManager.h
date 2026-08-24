@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AppConfig.h"
 #include "ConsoleUploadJobAuthority.h"
 #include "DroneManager.h"
 #include "MissionPreparationWorker.h"
@@ -8,10 +9,29 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
+
+struct RouteUploadManagerConfig
+{
+    bool routeUploadEnabled = false;
+    MissionTransportMode transportMode = MissionTransportMode::MissionProtocol;
+    std::uint32_t mavftpSegmentItems = AppConfigDefaults::MavftpSegmentItems;
+    int mavftpRequestTimeoutMs = AppConfigDefaults::MavftpRequestTimeoutMs;
+    int mavftpTerminateTimeoutMs = AppConfigDefaults::MavftpTerminateTimeoutMs;
+    std::uint32_t mavftpRequestRetryCount =
+        AppConfigDefaults::MavftpRequestRetryCount;
+    std::uint32_t mavftpWriteWindow = AppConfigDefaults::MavftpWriteWindow;
+};
+
+/** Single production factory; explicit selection never falls back. */
+std::unique_ptr<IMissionTransport> CreateConfiguredMissionTransport(
+    DroneSession& session,
+    const RouteUploadManagerConfig& config,
+    std::string& diagnostic);
 
 struct RouteUploadTargetMetrics
 {
@@ -61,6 +81,10 @@ public:
         ConsoleUploadJobAuthority& authority,
         DroneManager& droneManager,
         bool routeUploadEnabled);
+    RouteUploadManager(
+        ConsoleUploadJobAuthority& authority,
+        DroneManager& droneManager,
+        RouteUploadManagerConfig config);
     ~RouteUploadManager();
 
     RouteUploadManager(const RouteUploadManager&) = delete;
@@ -90,6 +114,10 @@ private:
         std::vector<dronegcs::route_mission::MissionItemIntV1> prepared;
         std::unique_ptr<IMissionTransport> transport;
         DroneSession* session = nullptr;
+        std::string endpoint;
+        std::uint64_t lastLoggedMavftpSegment =
+            std::numeric_limits<std::uint64_t>::max();
+        bool loggedMavftpVerification = false;
         std::uint64_t generation = 0;
         std::chrono::steady_clock::time_point admittedAt{};
         std::chrono::steady_clock::time_point uploadStartedAt{};
@@ -132,6 +160,7 @@ private:
     ConsoleUploadJobAuthority& authority_;
     DroneManager& droneManager_;
     bool routeUploadEnabled_ = false;
+    RouteUploadManagerConfig config_;
     bool shuttingDown_ = false;
     MissionPreparationWorker preparationWorker_;
     std::optional<RuntimeJob> activeJob_;

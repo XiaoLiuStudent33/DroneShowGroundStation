@@ -1,4 +1,5 @@
 #include "MAVFTPMissionTransport.h"
+#include "ArduPilotMissionWireAdapter.h"
 
 #include <algorithm>
 #include <array>
@@ -124,6 +125,51 @@ namespace
         bool sendSucceeds = true;
         std::vector<std::array<std::uint8_t, ftp::PayloadBytes>> sent;
     };
+
+    MissionProtocolPeerIdentity VerificationPeer()
+    {
+        return { TestPeer().droneId, TestPeer().remoteIp,
+            TestPeer().remotePort, TestPeer().systemId, TestPeer().componentId };
+    }
+
+    class FakeMissionWire final : public IMissionProtocolTransport
+    {
+    public:
+        bool SendMissionCount(std::uint16_t, std::size_t&) override
+            { return false; }
+        bool SendMissionItemInt(const mission::MissionItemIntV1&,
+            std::size_t&) override { return false; }
+        bool SendMissionRequestList(std::size_t& bytes) override
+            { ++requestLists; bytes = 16; return true; }
+        bool SendMissionRequestInt(std::uint16_t sequence,
+            std::size_t& bytes) override
+            { requested.push_back(sequence); bytes = 18; return true; }
+
+        std::size_t requestLists = 0;
+        std::vector<std::uint16_t> requested;
+    };
+
+    mavlink_message_t VerificationCount(const std::uint16_t count)
+    {
+        mavlink_message_t message{};
+        mavlink_msg_mission_count_pack(TestPeer().systemId,
+            TestPeer().componentId, &message, 255,
+            MAV_COMP_ID_MISSIONPLANNER, count, MAV_MISSION_TYPE_MISSION, 0);
+        return message;
+    }
+
+    mavlink_message_t VerificationItem(
+        const mission::MissionItemIntV1& item)
+    {
+        mavlink_message_t message{};
+        mavlink_msg_mission_item_int_pack(TestPeer().systemId,
+            TestPeer().componentId, &message, 255,
+            MAV_COMP_ID_MISSIONPLANNER, item.Sequence, item.Frame,
+            item.Command, item.Current, item.AutoContinue, item.Param1,
+            item.Param2, item.Param3, item.Param4, item.X, item.Y, item.Z,
+            MAV_MISSION_TYPE_MISSION);
+        return message;
+    }
 
     struct CompiledFixture
     {
@@ -275,6 +321,84 @@ namespace
             metrics.writeBytes == driven.segmentBytes.front().size() &&
             metrics.writeBlocks > 1,
             "writer success metrics are incomplete");
+    }
+
+    void TestProductionCutoverLifecycleAndTickOwnership()
+    {
+        FakeWire ftpWire;
+        ftp::ClientConfig clientConfig;
+        clientConfig.writeWindow = 16;
+        clientConfig.requestTimeout = std::chrono::milliseconds(750);
+        clientConfig.terminateTimeout = std::chrono::milliseconds(2500);
+        clientConfig.maximumRetries = 3;
+        ftp::Client client(ftpWire, TestPeer(), clientConfig);
+        FakeMissionWire verificationWire;
+        compiler::MAVFTPMissionTransportConfig config;
+        config.compileConfig.segmentCapacity = 4;
+        config.driveClientTick = false;
+        config.verificationConfig.responseTimeout =
+            std::chrono::milliseconds(750);
+        config.verificationConfig.maxRetries = 3;
+        const auto artifact = BuildArtifact(10);
+        compiler::MAVFTPMissionTransport transport(
+            client, verificationWire, VerificationPeer(), config);
+        std::string diagnostic;
+        Expect(transport.Prepare(TestIdentity(), artifact, diagnostic),
+            "production MAVFTP Transport Prepare failed: " + diagnostic);
+        const auto now = std::chrono::steady_clock::now();
+        Expect(transport.Upload(now) && !transport.DrivesClientTickForTest(),
+            "production MAVFTP Transport owns Client Tick or failed to start");
+
+        std::size_t cursor = 0;
+        std::size_t terminateCount = 0;
+        std::uint8_t session = 40;
+        for (std::size_t guard = 0;
+             guard < 10000 &&
+             transport.GetStatus() != MissionTransportStatus::Verifying;
+             ++guard)
+        {
+            Expect(cursor < ftpWire.sent.size(),
+                "production writer stopped before Verification");
+            const ftp::Payload request = ftpWire.Decode(cursor++);
+            ftpWire.Ack(client, request, session);
+            if (request.opcode == ftp::Opcode::TerminateSession)
+            {
+                ++terminateCount;
+                ++session;
+            }
+            transport.Tick(now);
+        }
+        Expect(transport.GetStatus() == MissionTransportStatus::Verifying &&
+            terminateCount == 3 && verificationWire.requestLists == 1,
+            "4+4+3 upload did not wait for three Terminate ACKs before Verification");
+
+        std::vector<mission::MissionItemIntV1> wireMission;
+        Expect(dronegcs::ardupilot_mission::BuildWireMission(
+                artifact, wireMission),
+            "production verification wire fixture failed");
+        IMissionProtocolMessageSink* const sink =
+            transport.GetMissionProtocolMessageSink();
+        Expect(sink != nullptr && sink->HandleMissionMessage(
+                VerificationCount(static_cast<std::uint16_t>(wireMission.size())),
+                VerificationPeer(), now) &&
+            verificationWire.requested == std::vector<std::uint16_t>{ 0 },
+            "production verification did not start with Count then Home");
+        Expect(sink->HandleMissionMessage(
+                VerificationItem(wireMission[0]), VerificationPeer(), now) &&
+            sink->HandleMissionMessage(
+                VerificationItem(wireMission[1]), VerificationPeer(), now) &&
+            sink->HandleMissionMessage(
+                VerificationItem(wireMission.back()), VerificationPeer(), now),
+            "production Count/Home/First/Last responses were rejected");
+        transport.Tick(now);
+        Expect(transport.Verify() &&
+            transport.GetStatus() == MissionTransportStatus::Succeeded &&
+            std::string(transport.GetTerminalPhaseName()) == "Verified" &&
+            client.GetConfiguredWriteWindow() == 16 &&
+            client.GetConfiguredRequestTimeout() == std::chrono::milliseconds(750) &&
+            client.GetConfiguredTerminateTimeout() == std::chrono::milliseconds(2500) &&
+            client.GetPeer().droneId == TestPeer().droneId,
+            "production MAVFTP verification or frozen Client configuration failed");
     }
 
     void TestWriteTimeoutRetriesSameBlock()
@@ -803,6 +927,7 @@ int RunMAVFTPMissionWriterTests()
     try
     {
         TestCreateWriteTerminateSuccess();
+        TestProductionCutoverLifecycleAndTickOwnership();
         TestWriteTimeoutRetriesSameBlock();
         TestOffsetMismatchFails();
         TestTerminateAckTimeoutFails();

@@ -5,6 +5,7 @@
 #include "MavlinkDatagramSender.h"
 #include "MavlinkDiscoveryService.h"
 #include "MavlinkReadOnlyIngress.h"
+#include "MAVFTPMissionTransport.h"
 #include "RouteUploadManager.h"
 #include "RouteArtifactContract.h"
 #include "Wpl110Core.h"
@@ -330,6 +331,47 @@ namespace
         Expect(second.GetStatus() == MissionTransportStatus::Cancelled &&
             transport.GetStatus() == MissionTransportStatus::Succeeded,
             "per-Drone Mission Transport instances shared mutable state");
+
+        // MAVFTP production reuses the same verifier after its final
+        // TerminateSession ACK, without replaying MissionProtocol upload.
+        FakeTransport verifierWire;
+        auto verifier = MakeTransaction(verifierWire);
+        Expect(verifier.BeginVerification(now, true) &&
+            verifierWire.counts.empty() && verifierWire.requestLists == 1,
+            "verification-only entry sent upload data or omitted Mission Count");
+        const auto verifierMission = BuildWireMissionForTest(BuildMission());
+        Expect(verifier.HandleMissionMessage(
+                Count(static_cast<std::uint16_t>(verifierMission.size())),
+                Peer(), now) &&
+            verifier.GetPhase() == MissionUploadPhase::VerifyingHome &&
+            verifierWire.requestedItems == std::vector<std::uint16_t>{ 0 },
+            "production verifier did not request Reserved Home after Count");
+        Expect(verifier.HandleMissionMessage(
+                Item(verifierMission[0]), Peer(), now) &&
+            verifier.GetPhase() == MissionUploadPhase::VerifyingFirst &&
+            verifierWire.requestedItems.back() == 1,
+            "production verifier did not observe Home before First Item");
+        MissionProtocolPeerIdentity wrongPeer = Peer();
+        wrongPeer.remotePort++;
+        Expect(!verifier.HandleMissionMessage(
+                Item(verifierMission[1]), wrongPeer, now) &&
+            verifier.GetPhase() == MissionUploadPhase::VerifyingFirst,
+            "production verifier accepted a wrong-endpoint response");
+        Expect(verifier.HandleMissionMessage(
+                Item(ArduPilotReadbackItem(verifierMission[1])), Peer(), now) &&
+            verifier.HandleMissionMessage(
+                Item(ArduPilotReadbackItem(verifierMission.back())), Peer(), now) &&
+            verifier.Succeeded(),
+            "production verifier did not require Count/Home/First/Last success");
+
+        FakeTransport mismatchWire;
+        auto mismatchVerifier = MakeTransaction(mismatchWire);
+        Expect(mismatchVerifier.BeginVerification(now, true) &&
+            mismatchVerifier.HandleMissionMessage(
+                Count(static_cast<std::uint16_t>(verifierMission.size() - 1)),
+                Peer(), now) && !mismatchVerifier.Succeeded() &&
+            mismatchVerifier.GetPhase() == MissionUploadPhase::Failed,
+            "Mission Count mismatch incorrectly passed production verification");
     }
 
     void AdvanceToVerifyingFirst(
@@ -1148,6 +1190,67 @@ namespace
         std::vector<Sent> sent;
     };
 
+    void VerifyProductionTransportFactoryAndOwnership()
+    {
+        FakeMissionEndpoint endpoint;
+        DroneSessionConfig sessionConfig;
+        sessionConfig.droneId = "FactoryDrone";
+        sessionConfig.remoteIp = "127.0.0.1";
+        sessionConfig.remotePort = 15100;
+        sessionConfig.sharedMavlinkEndpoint = &endpoint;
+        sessionConfig.receiveOnly = true;
+        sessionConfig.mavFtpServiceEnabled = true;
+        sessionConfig.missionUploadServiceEnabled = true;
+        sessionConfig.discoveredSystemId = 12;
+        sessionConfig.discoveredComponentId = MAV_COMP_ID_AUTOPILOT1;
+        sessionConfig.mavFtpWriteWindow = 16;
+        sessionConfig.mavFtpRequestTimeoutMs = 750;
+        sessionConfig.mavFtpTerminateTimeoutMs = 2500;
+        DroneSession session(sessionConfig);
+        Expect(session.Start(), "factory DroneSession failed to start");
+        auto* const ownedClient = session.GetMavFtpClient();
+        Expect(ownedClient != nullptr, "factory Session omitted MAVFTP Client");
+
+        RouteUploadManagerConfig mavftpConfig;
+        mavftpConfig.routeUploadEnabled = true;
+        mavftpConfig.transportMode = MissionTransportMode::MAVFTP;
+        mavftpConfig.mavftpSegmentItems = 4000;
+        mavftpConfig.mavftpWriteWindow = 16;
+        std::string diagnostic;
+        {
+            auto transport = CreateConfiguredMissionTransport(
+                session, mavftpConfig, diagnostic);
+            auto* const mavftp = dynamic_cast<
+                dronegcs::mission_ftp::MAVFTPMissionTransport*>(transport.get());
+            Expect(mavftp != nullptr && diagnostic.empty() &&
+                !mavftp->DrivesClientTickForTest() &&
+                session.GetMavFtpClient() == ownedClient &&
+                ownedClient->GetConfiguredWriteWindow() == 16,
+                "factory did not borrow the Session Client with one Tick owner");
+        }
+        Expect(session.GetMavFtpClient() == ownedClient,
+            "destroying a Job Transport destroyed the Session Client");
+
+        RouteUploadManagerConfig rollbackConfig;
+        rollbackConfig.routeUploadEnabled = true;
+        rollbackConfig.transportMode = MissionTransportMode::MissionProtocol;
+        auto rollback = CreateConfiguredMissionTransport(
+            session, rollbackConfig, diagnostic);
+        Expect(dynamic_cast<MissionProtocolTransport*>(rollback.get()) != nullptr,
+            "explicit MissionProtocol rollback did not create the old Transport");
+
+        DroneSessionConfig missingClientConfig = sessionConfig;
+        missingClientConfig.droneId = "NoFtpDrone";
+        missingClientConfig.remotePort = 15101;
+        missingClientConfig.mavFtpServiceEnabled = false;
+        DroneSession missingClient(missingClientConfig);
+        Expect(missingClient.Start(), "missing-Client Session failed to start");
+        auto noFallback = CreateConfiguredMissionTransport(
+            missingClient, mavftpConfig, diagnostic);
+        Expect(!noFallback && diagnostic.find("unavailable") != std::string::npos,
+            "explicit MAVFTP construction failure silently fell back");
+    }
+
     void FeedMessage(MavlinkReadOnlyIngress& ingress,
         const mavlink_message_t& message, const std::uint16_t port)
     {
@@ -1575,6 +1678,7 @@ namespace
 
     void RunManagerIntegrationTests()
     {
+        VerifyProductionTransportFactoryAndOwnership();
         RunManagerScenario(1);
         RunManagerScenario(2);
         RunManagerScenario(3);

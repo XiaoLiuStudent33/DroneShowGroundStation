@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AppConfig.h"
 #include "ConsoleArtifactConsumerV2.h"
 #include "DroneManager.h"
 #include "MAVFTPMissionTransport.h"
@@ -12,16 +13,6 @@
 #include <optional>
 #include <string>
 #include <vector>
-
-struct AppConfig;
-
-enum class MissionTransportMode : std::uint8_t
-{
-    MissionProtocol,
-    MAVFTP
-};
-
-const char* MissionTransportModeName(MissionTransportMode mode);
 
 struct MAVFTPMissionHardwareTestOptions
 {

@@ -134,6 +134,20 @@ namespace dronegcs::mission_ftp
     {
     }
 
+    MAVFTPMissionTransport::MAVFTPMissionTransport(
+        mavftp::Client& client,
+        IMissionProtocolTransport& verificationTransport,
+        MissionProtocolPeerIdentity verificationPeer,
+        MAVFTPMissionTransportConfig config,
+        const ISegmentRangeSource* const segmentSource)
+        : client_(client)
+        , verificationTransport_(&verificationTransport)
+        , verificationPeer_(std::move(verificationPeer))
+        , config_(std::move(config))
+        , segmentSource_(segmentSource ? segmentSource : &DefaultSegmentSource())
+    {
+    }
+
     bool MAVFTPMissionTransport::Prepare(
         MissionTransportIdentity identity,
         std::vector<route_mission::MissionItemIntV1> mission,
@@ -146,8 +160,21 @@ namespace dronegcs::mission_ftp
             outDiagnostic = compiled.validation.safeDiagnostic;
             return false;
         }
-        return PrepareCompiled(
-            std::move(identity), compiled.snapshot, outDiagnostic);
+        if (!PrepareCompiled(identity, compiled.snapshot, outDiagnostic))
+            return false;
+        if (verificationTransport_)
+        {
+            MissionUploadTransactionIdentity verificationIdentity;
+            verificationIdentity.uploadJobId = identity.uploadJobId;
+            verificationIdentity.droneId = identity.droneId;
+            verificationIdentity.routeSlotIndex = identity.routeSlotIndex;
+            verificationIdentity.peer = verificationPeer_;
+            verificationIdentity.transactionGeneration = identity.generation;
+            verifier_ = std::make_unique<MissionUploadTransaction>(
+                std::move(verificationIdentity), std::move(mission),
+                *verificationTransport_, config_.verificationConfig);
+        }
+        return true;
     }
 
     bool MAVFTPMissionTransport::PrepareCompiled(
@@ -230,9 +257,15 @@ namespace dronegcs::mission_ftp
     bool MAVFTPMissionTransport::Upload(
         const std::chrono::steady_clock::time_point now)
     {
-        if (status_ != MissionTransportStatus::Prepared || !snapshot_ ||
-            client_.IsBusy())
+        if (status_ != MissionTransportStatus::Prepared || !snapshot_)
         {
+            safeDiagnostic_ = "MAVFTP Mission Transport is not prepared.";
+            return false;
+        }
+        if (client_.IsBusy())
+        {
+            safeDiagnostic_ =
+                "MAVFTP Client is busy with another endpoint-bound operation.";
             return false;
         }
         uploadStartedAt_ = now;
@@ -307,13 +340,48 @@ namespace dronegcs::mission_ftp
     void MAVFTPMissionTransport::Tick(
         const std::chrono::steady_clock::time_point now)
     {
+        if (status_ == MissionTransportStatus::Verifying)
+        {
+            verifier_->Tick(now);
+            if (!verifier_->IsTerminal()) return;
+            const MissionUploadTransactionMetrics& verificationMetrics =
+                verifier_->GetMetrics();
+            metrics_.wireBytesSent += verificationMetrics.wireBytesSent;
+            metrics_.missionMessagesSent += verificationMetrics.missionMessagesSent;
+            metrics_.missionRequestsReceived +=
+                verificationMetrics.missionRequestsReceived;
+            metrics_.retryCount += verificationMetrics.retryCount;
+            metrics_.verificationDurationMs =
+                verificationMetrics.verificationDurationMs;
+            verificationMismatchDiagnostic_ =
+                verifier_->GetVerificationMismatchDiagnostic();
+            if (verifier_->Succeeded())
+            {
+                status_ = MissionTransportStatus::Succeeded;
+                terminalPhase_ = "Verified";
+                safeDiagnostic_.clear();
+                progressChanged_ = true;
+            }
+            else if (verifier_->GetPhase() == MissionUploadPhase::Cancelled)
+            {
+                status_ = MissionTransportStatus::Cancelled;
+                terminalPhase_ = "Cancelled";
+                safeDiagnostic_ = verifier_->GetSafeDiagnostic();
+            }
+            else
+            {
+                Fail(MissionUploadPhaseName(verifier_->GetTerminalSourcePhase()),
+                    verifier_->GetSafeDiagnostic(), now);
+            }
+            return;
+        }
         if (status_ != MissionTransportStatus::Uploading &&
             status_ != MissionTransportStatus::WaitingAck)
         {
             return;
         }
 
-        client_.Tick(now);
+        if (config_.driveClientTick) client_.Tick(now);
         status_ = client_.IsAwaitingWriteCommit()
             ? MissionTransportStatus::WaitingAck
             : MissionTransportStatus::Uploading;
@@ -364,10 +432,21 @@ namespace dronegcs::mission_ftp
             return;
         }
 
+        UpdateElapsed(now);
+        if (verifier_)
+        {
+            status_ = MissionTransportStatus::Verifying;
+            terminalPhase_ = "VerifyingCount";
+            progressChanged_ = true;
+            if (!verifier_->BeginVerification(now, true))
+            {
+                Fail("VerifyingCount", verifier_->GetSafeDiagnostic(), now);
+            }
+            return;
+        }
         status_ = MissionTransportStatus::Succeeded;
         terminalPhase_ = "CommitConfirmed";
         safeDiagnostic_.clear();
-        UpdateElapsed(now);
     }
 
     void MAVFTPMissionTransport::ApplyOperationMetrics(
@@ -440,11 +519,13 @@ namespace dronegcs::mission_ftp
         std::string diagnostic,
         const std::chrono::steady_clock::time_point now)
     {
+        const bool verificationWasActive =
+            status_ == MissionTransportStatus::Verifying;
         status_ = MissionTransportStatus::Failed;
         terminalPhase_ = std::move(phase);
         safeDiagnostic_ = std::move(diagnostic);
         progressChanged_ = true;
-        UpdateElapsed(now);
+        if (!verificationWasActive) UpdateElapsed(now);
     }
 
     void MAVFTPMissionTransport::UpdateElapsed(
@@ -465,6 +546,9 @@ namespace dronegcs::mission_ftp
         const std::chrono::steady_clock::time_point now)
     {
         if (IsTerminal()) return;
+        const bool verificationWasActive =
+            status_ == MissionTransportStatus::Verifying;
+        if (verifier_) verifier_->Cancel(now);
         if (client_.IsBusy()) client_.Cancel();
         if (const auto result = client_.ConsumeResult())
             ApplyOperationMetrics(*result);
@@ -472,7 +556,7 @@ namespace dronegcs::mission_ftp
         terminalPhase_ = "Cancelled";
         safeDiagnostic_ = "MAVFTP Mission upload cancelled.";
         progressChanged_ = true;
-        UpdateElapsed(now);
+        if (!verificationWasActive) UpdateElapsed(now);
     }
 
     bool MAVFTPMissionTransport::IsTerminal() const
@@ -492,5 +576,13 @@ namespace dronegcs::mission_ftp
     MissionTransportMetrics MAVFTPMissionTransport::GetMetrics() const
     {
         return metrics_;
+    }
+
+    bool MAVFTPMissionTransport::HandleMissionMessage(
+        const mavlink_message_t& message,
+        const MissionProtocolPeerIdentity& peer,
+        const std::chrono::steady_clock::time_point now)
+    {
+        return verifier_ && verifier_->HandleMissionMessage(message, peer, now);
     }
 }

@@ -248,6 +248,7 @@ const char* MissionUploadPhaseName(const MissionUploadPhase phase)
 	case MissionUploadPhase::AwaitingRequest: return "AwaitingRequest";
 	case MissionUploadPhase::AwaitingAck: return "AwaitingAck";
 	case MissionUploadPhase::VerifyingCount: return "VerifyingCount";
+	case MissionUploadPhase::VerifyingHome: return "VerifyingHome";
 	case MissionUploadPhase::VerifyingFirst: return "VerifyingFirst";
 	case MissionUploadPhase::VerifyingLast: return "VerifyingLast";
 	case MissionUploadPhase::Succeeded: return "Succeeded";
@@ -417,6 +418,26 @@ bool MissionUploadTransaction::Start(
     return SendCount(now);
 }
 
+bool MissionUploadTransaction::BeginVerification(
+    const std::chrono::steady_clock::time_point now,
+    const bool observeReservedHome)
+{
+    if (phase_ != MissionUploadPhase::Idle || !wireMissionValid_ ||
+        mission_.empty() ||
+        mission_.size() > dronegcs::ardupilot_mission::MaximumWireMissionItems ||
+        config_.responseTimeout.count() <= 0)
+    {
+        Fail("Prepared Mission is invalid for production verification.", now);
+        return false;
+    }
+    uploadStartedAt_ = now;
+    verificationStartedAt_ = now;
+    transportAccepted_ = true;
+    observeReservedHome_ = observeReservedHome;
+    ResetRetryBudget();
+    return SendVerificationList(now);
+}
+
 bool MissionUploadTransaction::MatchesTarget(
     const std::uint8_t targetSystem,
     const std::uint8_t targetComponent,
@@ -529,14 +550,24 @@ bool MissionUploadTransaction::HandleMissionMessage(
             return true;
         }
         ResetRetryBudget();
-        SendVerificationItem(
-            dronegcs::ardupilot_mission::FirstRouteWireSequence,
-            MissionUploadPhase::VerifyingFirst, now);
+        if (observeReservedHome_)
+        {
+            SendVerificationItem(
+                dronegcs::ardupilot_mission::ReservedHomeWireSequence,
+                MissionUploadPhase::VerifyingHome, now);
+        }
+        else
+        {
+            SendVerificationItem(
+                dronegcs::ardupilot_mission::FirstRouteWireSequence,
+                MissionUploadPhase::VerifyingFirst, now);
+        }
         return true;
     }
 
     if (message.msgid == MAVLINK_MSG_ID_MISSION_ITEM_INT &&
-        (phase_ == MissionUploadPhase::VerifyingFirst ||
+        (phase_ == MissionUploadPhase::VerifyingHome ||
+         phase_ == MissionUploadPhase::VerifyingFirst ||
          phase_ == MissionUploadPhase::VerifyingLast))
     {
         mavlink_mission_item_int_t item{};
@@ -545,9 +576,19 @@ bool MissionUploadTransaction::HandleMissionMessage(
             item.mission_type))
             return false;
 
-        // ArduPilot may expose its authoritative, dynamic Home as seq 0.
-        // It is not an Artifact route item and must not satisfy or fail either
-        // route verification request.
+        // Home is dynamic on ArduPilot. Production MAVFTP verification requires
+        // it to be observable, but deliberately does not compare its values.
+        if (phase_ == MissionUploadPhase::VerifyingHome)
+        {
+            if (item.seq !=
+                dronegcs::ardupilot_mission::ReservedHomeWireSequence)
+                return false;
+            ResetRetryBudget();
+            SendVerificationItem(
+                dronegcs::ardupilot_mission::FirstRouteWireSequence,
+                MissionUploadPhase::VerifyingFirst, now);
+            return true;
+        }
         if (item.seq == dronegcs::ardupilot_mission::ReservedHomeWireSequence)
             return true;
 
@@ -617,6 +658,11 @@ void MissionUploadTransaction::Tick(
         break;
     case MissionUploadPhase::VerifyingCount:
         SendVerificationList(now);
+        break;
+    case MissionUploadPhase::VerifyingHome:
+        SendVerificationItem(
+            dronegcs::ardupilot_mission::ReservedHomeWireSequence,
+            MissionUploadPhase::VerifyingHome, now);
         break;
     case MissionUploadPhase::VerifyingFirst:
         SendVerificationItem(
