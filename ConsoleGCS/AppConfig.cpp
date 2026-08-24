@@ -178,40 +178,6 @@ namespace
     }
 }
 
-const char* MissionTransportModeName(const MissionTransportMode mode)
-{
-    switch (mode)
-    {
-    case MissionTransportMode::MissionProtocol: return "MissionProtocol";
-    case MissionTransportMode::MAVFTP: return "MAVFTP";
-    }
-    return "Unknown";
-}
-
-bool ParseMissionTransportMode(
-    const std::string& value,
-    MissionTransportMode& mode)
-{
-    if (value == "missionprotocol" || value == "mission-protocol")
-    {
-        mode = MissionTransportMode::MissionProtocol;
-        return true;
-    }
-    if (value == "mavftp")
-    {
-        mode = MissionTransportMode::MAVFTP;
-        return true;
-    }
-    return false;
-}
-
-MissionTransportMode ResolveMissionTransportSelection(
-    const MissionTransportMode configuredMode,
-    const std::optional<MissionTransportMode>& cliOverride)
-{
-    return cliOverride ? *cliOverride : configuredMode;
-}
-
 bool AppConfig::Load(
     const std::string& path,
     AppConfig& config,
@@ -302,13 +268,10 @@ bool AppConfig::Load(
         return false;
     }
 
-    const auto missionTransport = values.find("route_upload.transport");
-    if (missionTransport != values.end() &&
-        !ParseMissionTransportMode(
-            missionTransport->second, config.missionTransport))
+    if (values.find("route_upload.transport") != values.end())
     {
-        error = "Invalid value for route_upload.transport: " +
-            missionTransport->second;
+        error = "Configuration key route_upload.transport was removed; "
+            "Production Route Upload is fixed to MAVFTP.";
         return false;
     }
 

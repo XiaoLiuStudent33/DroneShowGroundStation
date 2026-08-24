@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -17,17 +18,21 @@
 
 struct RouteUploadManagerConfig
 {
+    using TestTransportFactory = std::function<std::unique_ptr<IMissionTransport>(
+        DroneSession&, const RouteUploadManagerConfig&, std::string&)>;
+
     bool routeUploadEnabled = false;
-    MissionTransportMode transportMode = MissionTransportMode::MissionProtocol;
     std::uint32_t mavftpSegmentItems = AppConfigDefaults::MavftpSegmentItems;
     int mavftpRequestTimeoutMs = AppConfigDefaults::MavftpRequestTimeoutMs;
     int mavftpTerminateTimeoutMs = AppConfigDefaults::MavftpTerminateTimeoutMs;
     std::uint32_t mavftpRequestRetryCount =
         AppConfigDefaults::MavftpRequestRetryCount;
     std::uint32_t mavftpWriteWindow = AppConfigDefaults::MavftpWriteWindow;
+    /** Empty in production; permits deterministic offline Manager tests. */
+    TestTransportFactory testTransportFactory;
 };
 
-/** Single production factory; explicit selection never falls back. */
+/** Single production factory; MAVFTP construction failure never falls back. */
 std::unique_ptr<IMissionTransport> CreateConfiguredMissionTransport(
     DroneSession& session,
     const RouteUploadManagerConfig& config,

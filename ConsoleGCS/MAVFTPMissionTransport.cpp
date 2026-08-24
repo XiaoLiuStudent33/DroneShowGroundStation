@@ -136,8 +136,8 @@ namespace dronegcs::mission_ftp
 
     MAVFTPMissionTransport::MAVFTPMissionTransport(
         mavftp::Client& client,
-        IMissionProtocolTransport& verificationTransport,
-        MissionProtocolPeerIdentity verificationPeer,
+        IMissionVerificationTransport& verificationTransport,
+        MissionVerificationPeerIdentity verificationPeer,
         MAVFTPMissionTransportConfig config,
         const ISegmentRangeSource* const segmentSource)
         : client_(client)
@@ -580,7 +580,7 @@ namespace dronegcs::mission_ftp
 
     bool MAVFTPMissionTransport::HandleMissionMessage(
         const mavlink_message_t& message,
-        const MissionProtocolPeerIdentity& peer,
+        const MissionVerificationPeerIdentity& peer,
         const std::chrono::steady_clock::time_point now)
     {
         return verifier_ && verifier_->HandleMissionMessage(message, peer, now);

@@ -3,7 +3,7 @@
 Status: CURRENT
 Authority: 当前 Route domain、Upload Job、Mission Transport 与下一阶段边界
 Last Updated: 2026-08-24
-Baseline: `a494bd14dae00a5b4c24055a426ca1cee98e37f0`
+Baseline: `d2f933c6e4a180d3996452fee58827801dfd3cb1`
 
 历史证据见 [Legacy BGC2 Route Upload Audit](History/Audit_Legacy_BGC2_RouteUpload_CN.md) 与 [2026-08-14 DroneGCS Gap Audit](History/Audit_DroneGCS_RouteUpload_Gap_CN.md)。历史 Audit 不代表当前实现状态。
 
@@ -32,10 +32,9 @@ DSP-GCS Upload Job                 IMPLEMENTED
 Console Artifact Consumer          IMPLEMENTED
 Console RouteUploadManager         IMPLEMENTED
 QGC Parser / Mission Encoder       IMPLEMENTED
-MissionProtocol Production Upload  IMPLEMENTED
 MAVFTP Compiler / Writer / Harness IMPLEMENTED
-MAVFTP Production Cutover          NOT IMPLEMENTED
-Mission Ready                      FIRMWARE UNKNOWN / NOT PROVEN
+MAVFTP Production Upload           CURRENT PRODUCTION
+Count/Home/First/Last Verification PROVEN (9100/4000)
 ```
 
 UE 不直接发送 MAVLink。ConsoleGCS 始终是 Flight Controller network 与 upload execution Authority。
@@ -127,16 +126,17 @@ ConsoleUploadJobAuthority
 -> RouteUploadManager
 -> MissionPreparationWorker
 -> IMissionTransport
--> MissionProtocolTransport
--> DroneSession endpoint-bound sender
+-> MAVFTPMissionTransport
+-> DroneSession endpoint-bound MavFtpClient
+-> shared MAVLink sender/socket
 -> ArduPilot/APM
 ```
 
 `RouteUploadManager` 已实现 preparation bound、max active uploads、per-route lifecycle、cancel/retry、failure isolation、progress、metrics 与 terminal summary。
 
-当前 `RouteUploadManager::StartPrepared` 固定创建 `MissionProtocolTransport`。MAVFTP 不是生产默认 Transport。
+当前 `RouteUploadManager::StartPrepared` 的 production factory 只创建 `MAVFTPMissionTransport`，并借用 Session 已有 Client。构造或运行失败会明确失败，不会切换协议。
 
-MissionProtocol 真实硬件垂直链已完成，但最终 Production Mission Ready 仍未证明。
+9100 Artifact Items / 9101 Wire Mission Items、segment capacity 4000 的三段真实生产上传已通过 Count/Home/First/Last 验证，Job ElapsedMs=8829。
 
 ## 10. Mission Transport Abstraction — IMPLEMENTED
 
@@ -144,10 +144,9 @@ MissionProtocol 真实硬件垂直链已完成，但最终 Production Mission Re
 
 实现：
 
-- `MissionProtocolTransport`：CURRENT PRODUCTION。
-- `MAVFTPMissionTransport`：EXPERIMENTAL / HARDWARE HARNESS。
+- `MAVFTPMissionTransport`：CURRENT PRODUCTION，并由 Hardware Harness / Quick Test 复用。
 
-Transport abstraction 不持有 Route、Fleet 或 protocol selection Authority。
+Transport abstraction 不持有 Route、Fleet 或 production protocol selection Authority；保留它是为了生命周期统一与离线 Fake 注入。
 
 ## 11. MAVFTP Client / Ingress — IMPLEMENTED
 
@@ -191,7 +190,7 @@ Segments = 4000 + 4000 + 1101
 
 不得新增第二套互相竞争的 `MissionSegmentPlanner`，除非明确重构并移除原 planner authority。
 
-## 13. MAVFTPMissionTransport — IMPLEMENTED / EXPLICIT ONLY
+## 13. MAVFTPMissionTransport — CURRENT PRODUCTION
 
 每段执行：
 
@@ -208,44 +207,42 @@ Create/Open/Truncate @MISSION/mission.dat
 
 Hardware Harness 与 Quick Test 已实现；Quick Test 从 `Current/manifest.json` 读取 Artifact identity，再由 `ConsoleArtifactConsumerV2` 完成完整校验。
 
-当前 Quick Test 会使用默认 segment capacity `65535`，因此常规 1000～7000 items 验证均是单 segment。Legacy explicit harness 可传 segment 参数，但真实多段拼接尚未确认。
+代码与部署默认 profile 为 `segment_items=4000`、`request_timeout_ms=750`、`terminate_timeout_ms=2500`、`request_retry_count=3`、`write_window=16`。
 
-## 14. NEXT — Phase 2I-C.3.D
+## 14. Phase 2I-C.3.D — IMPLEMENTED
 
-尚未开始：
+已完成：
 
-1. 在 deployment config 中定义 `[mavftp]` segment/retry/timeout keys。
-2. 将 `segment_items` 明确定义为 Wire Mission Items。
-3. Quick Test 读取并传递配置化 segment capacity。
-4. 将 segment retry/timeout 接入现有 client/writer。
-5. 增加明确逐段日志、公开状态与 metrics。
-6. 经用户显式授权，在真实飞控验证多段 CLEAR + NO_CLEAR 拼接。
+1. deployment config 定义 `[mavftp]` 五项参数。
+2. `segment_items` 明确定义为包含 Reserved Home 的 Wire Mission Items。
+3. Quick Test、client/writer、逐段日志与 metrics 完成参数接线。
+4. 真实飞控完成 9100/4000 三段 CLEAR + NO_CLEAR 拼接和最终验证。
+5. Production cutover 完成，旧 Transport 选择器与实现已退休删除。
 
-本阶段不自动授权 MAVFTP production cutover。
+生产 Route Upload 固定 MAVFTP；配置与 CLI 不再暴露 Transport 选择。
 
 ## 15. Hardware Evidence Boundary
 
 用户提供的真实硬件观察：
 
 ```text
-1000–6000 items: USER-CONFIRMED PASS
-7000 items: USER-CONFIRMED NAK 2 / Write Failed
+ArtifactItems=9100 / WireMissionItems=9101
+SegmentCapacity=4000 / SegmentCount=3 / SegmentsCommitted=3
+Count/Home/First/Last=PASS / Target=Succeeded / ElapsedMs=8829
 ```
 
-仓库没有对应日志，飞控源码也未证明精确内部限制。不得写成固定“7000 item limit”。
+该 USER-CONFIRMED 证据只证明当前固件与当前生产 profile 的该用例，不定义通用飞控上限。
 
 ## 16. FIRMWARE UNKNOWN / NOT PROVEN
 
 - Mission execution timing。
 - custom RGB waypoint execution。
-- `@MISSION/mission.dat` apply semantics。
 - time-control 与 custom `MAV_CMD_USER` behavior。
-- remote integrity 和 Mission Ready verification。
+- Mission 执行态的远端完整性观测。
 
 最终 Operator 状态必须区分 Transfer Complete、Verification 与 Ready。
 
 ## 17. DEFERRED
 
-- MAVFTP production `RouteUploadManager` cutover，等待配置化多段、硬件证据和明确批准。
 - 10000-drone chunked/sharded Route Store。
 - Replacement Flight、backup drone、conflict predictor 与 safe rejoin trajectory。

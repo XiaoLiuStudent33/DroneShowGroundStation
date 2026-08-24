@@ -76,7 +76,7 @@ namespace dronegcs::mission_ftp
      * immutable compiled snapshot and borrows the endpoint-bound MAVFTP client.
      */
     class MAVFTPMissionTransport final : public IMissionTransport,
-                                         public IMissionProtocolMessageSink
+                                         public IMissionVerificationMessageSink
     {
     public:
         static constexpr const char* MissionPath = "@MISSION/mission.dat";
@@ -87,8 +87,8 @@ namespace dronegcs::mission_ftp
             const ISegmentRangeSource* segmentSource = nullptr);
         MAVFTPMissionTransport(
             mavftp::Client& client,
-            IMissionProtocolTransport& verificationTransport,
-            MissionProtocolPeerIdentity verificationPeer,
+            IMissionVerificationTransport& verificationTransport,
+            MissionVerificationPeerIdentity verificationPeer,
             MAVFTPMissionTransportConfig config = {},
             const ISegmentRangeSource* segmentSource = nullptr);
 
@@ -117,11 +117,11 @@ namespace dronegcs::mission_ftp
             { return verificationMismatchDiagnostic_; }
         const char* GetTerminalPhaseName() const override
             { return terminalPhase_.c_str(); }
-        IMissionProtocolMessageSink* GetMissionProtocolMessageSink() override
+        IMissionVerificationMessageSink* GetMissionVerificationMessageSink() override
             { return verificationTransport_ ? this : nullptr; }
         bool HandleMissionMessage(
             const mavlink_message_t& message,
-            const MissionProtocolPeerIdentity& peer,
+            const MissionVerificationPeerIdentity& peer,
             std::chrono::steady_clock::time_point now) override;
         bool DrivesClientTickForTest() const { return config_.driveClientTick; }
 
@@ -139,8 +139,8 @@ namespace dronegcs::mission_ftp
         void UpdateElapsed(std::chrono::steady_clock::time_point now);
 
         mavftp::Client& client_;
-        IMissionProtocolTransport* verificationTransport_ = nullptr;
-        MissionProtocolPeerIdentity verificationPeer_;
+        IMissionVerificationTransport* verificationTransport_ = nullptr;
+        MissionVerificationPeerIdentity verificationPeer_;
         MAVFTPMissionTransportConfig config_;
         const ISegmentRangeSource* segmentSource_ = nullptr;
         MissionTransportIdentity identity_;

@@ -1,10 +1,8 @@
 #include "MissionPreparationWorker.h"
-#include "MissionProtocolTransport.h"
 #include "MissionUploadTransaction.h"
 #include "ArduPilotMissionWireAdapter.h"
 #include "MavlinkDatagramSender.h"
 #include "MavlinkDiscoveryService.h"
-#include "MavlinkReadOnlyIngress.h"
 #include "MAVFTPMissionTransport.h"
 #include "RouteUploadManager.h"
 #include "RouteArtifactContract.h"
@@ -15,7 +13,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -62,7 +59,7 @@ namespace
         std::streambuf* original_ = nullptr;
     };
 
-    MissionProtocolPeerIdentity Peer()
+    MissionVerificationPeerIdentity Peer()
     {
         return { "Drone001", "127.0.0.1", 14550, 1,
             MAV_COMP_ID_AUTOPILOT1 };
@@ -101,42 +98,9 @@ namespace
         return result;
     }
 
-    bool SameMissionPayload(
-        const mission::MissionItemIntV1& left,
-        const mission::MissionItemIntV1& right)
-    {
-        return left.Frame == right.Frame && left.Command == right.Command &&
-            left.Current == right.Current &&
-            left.AutoContinue == right.AutoContinue &&
-            mission::Binary32ToBits(left.Param1) ==
-                mission::Binary32ToBits(right.Param1) &&
-            mission::Binary32ToBits(left.Param2) ==
-                mission::Binary32ToBits(right.Param2) &&
-            mission::Binary32ToBits(left.Param3) ==
-                mission::Binary32ToBits(right.Param3) &&
-            mission::Binary32ToBits(left.Param4) ==
-                mission::Binary32ToBits(right.Param4) &&
-            left.X == right.X && left.Y == right.Y &&
-            mission::Binary32ToBits(left.Z) ==
-                mission::Binary32ToBits(right.Z) &&
-            left.MissionType == right.MissionType;
-    }
-
-    class FakeTransport final : public IMissionProtocolTransport
+    class FakeTransport final : public IMissionVerificationTransport
     {
     public:
-        bool SendMissionCount(std::uint16_t count, std::size_t& bytes) override
-        {
-            counts.push_back(count); bytes = 20; return allowSend;
-        }
-        bool SendMissionItemInt(const mission::MissionItemIntV1& item,
-            std::size_t& bytes) override
-        {
-            items.push_back(item.Sequence);
-            sentMissionItems.push_back(item);
-            bytes = 50;
-            return allowSend;
-        }
         bool SendMissionRequestList(std::size_t& bytes) override
         {
             ++requestLists; bytes = 16; return allowSend;
@@ -148,11 +112,122 @@ namespace
         }
 
         bool allowSend = true;
-        std::vector<std::uint16_t> counts;
-        std::vector<std::uint16_t> items;
-        std::vector<mission::MissionItemIntV1> sentMissionItems;
         std::vector<std::uint16_t> requestedItems;
         std::size_t requestLists = 0;
+    };
+
+    class FakeManagerMissionTransport final : public IMissionTransport
+    {
+    public:
+        FakeManagerMissionTransport(bool& allowCompletion,
+            const bool firstMismatch, const bool lastMismatch)
+            : allowCompletion_(allowCompletion)
+            , firstMismatch_(firstMismatch)
+            , lastMismatch_(lastMismatch)
+        {
+        }
+
+        bool Prepare(MissionTransportIdentity,
+            std::vector<mission::MissionItemIntV1> missionItems,
+            std::string& diagnostic) override
+        {
+            diagnostic.clear();
+            artifactItems_ = missionItems.size();
+            status_ = MissionTransportStatus::Prepared;
+            progressChanged_ = true;
+            return true;
+        }
+
+        bool Upload(std::chrono::steady_clock::time_point) override
+        {
+            if (status_ != MissionTransportStatus::Prepared) return false;
+            status_ = MissionTransportStatus::Uploading;
+            progressChanged_ = true;
+            return true;
+        }
+
+        bool Verify() const override
+            { return status_ == MissionTransportStatus::Succeeded; }
+
+        void Tick(std::chrono::steady_clock::time_point) override
+        {
+            if (status_ != MissionTransportStatus::Uploading || !allowCompletion_)
+                return;
+            if (firstMismatch_ || lastMismatch_)
+            {
+                status_ = MissionTransportStatus::Failed;
+                safeDiagnostic_ = "Mission verification item mismatch.";
+                mismatchDiagnostic_ = firstMismatch_
+                    ? "FirstItemMismatch ReplyType=MISSION_ITEM_INT "
+                      "ArtifactRouteIndex=0 WireMissionSeq=1 FieldMask=Z "
+                      "ExpectedZ=1 ActualZ=2 DeltaZ=1 "
+                      "Expected{fixture} Actual{fixture}"
+                    : "LastItemMismatch ReplyType=MISSION_ITEM_INT "
+                      "ArtifactRouteIndex=2 WireMissionSeq=3 FieldMask=Z "
+                      "ExpectedZ=1 ActualZ=2 DeltaZ=1 "
+                      "Expected{fixture} Actual{fixture}";
+                terminalPhase_ = "Verification";
+            }
+            else
+            {
+                status_ = MissionTransportStatus::Succeeded;
+                terminalPhase_ = "Succeeded";
+            }
+            progressChanged_ = true;
+        }
+
+        void Cancel(std::chrono::steady_clock::time_point) override
+        {
+            status_ = MissionTransportStatus::Cancelled;
+            terminalPhase_ = "Cancelled";
+            progressChanged_ = true;
+        }
+
+        MissionTransportStatus GetStatus() const override { return status_; }
+        bool IsTerminal() const override
+        {
+            return status_ == MissionTransportStatus::Succeeded ||
+                status_ == MissionTransportStatus::Failed ||
+                status_ == MissionTransportStatus::Cancelled;
+        }
+        bool ConsumeProgressChanged() override
+        {
+            const bool changed = progressChanged_;
+            progressChanged_ = false;
+            return changed;
+        }
+        MissionTransportMetrics GetMetrics() const override
+        {
+            MissionTransportMetrics metrics;
+            metrics.logicalBytesCompleted =
+                status_ == MissionTransportStatus::Succeeded
+                ? artifactItems_ * mission::MissionItemRecordBytesV1 : 0;
+            metrics.artifactRouteItems = artifactItems_;
+            metrics.wireMissionItems = artifactItems_ + 1;
+            metrics.uniqueItemsServed = artifactItems_ + 1;
+            metrics.wireBytesSent = artifactItems_ * mission::MissionItemRecordBytesV1;
+            metrics.missionRequestsReceived = artifactItems_ + 1;
+            return metrics;
+        }
+        const std::string& GetSafeDiagnostic() const override
+            { return safeDiagnostic_; }
+        const std::string& GetVerificationMismatchDiagnostic() const override
+            { return mismatchDiagnostic_; }
+        const char* GetTerminalPhaseName() const override
+            { return terminalPhase_.c_str(); }
+        IMissionVerificationMessageSink* GetMissionVerificationMessageSink() override
+            { return nullptr; }
+
+    private:
+        bool& allowCompletion_;
+        bool firstMismatch_ = false;
+        bool lastMismatch_ = false;
+        std::size_t artifactItems_ = 0;
+        MissionTransportStatus status_ = MissionTransportStatus::Idle;
+        bool progressChanged_ = false;
+        std::string safeDiagnostic_;
+        std::string mismatchDiagnostic_;
+        std::string terminalPhase_ = "Idle";
     };
 
     MissionUploadTransaction MakeTransaction(
@@ -184,30 +259,6 @@ namespace
             std::move(identity), std::move(missionItems), transport, config);
     }
 
-    mavlink_message_t Request(const std::uint16_t sequence,
-        const bool legacy = false, const std::uint8_t missionType = 0)
-    {
-        mavlink_message_t message{};
-        if (legacy)
-            mavlink_msg_mission_request_pack(1, MAV_COMP_ID_AUTOPILOT1,
-                &message, 255, MAV_COMP_ID_MISSIONPLANNER, sequence,
-                missionType);
-        else
-            mavlink_msg_mission_request_int_pack(1, MAV_COMP_ID_AUTOPILOT1,
-                &message, 255, MAV_COMP_ID_MISSIONPLANNER, sequence,
-                missionType);
-        return message;
-    }
-
-    mavlink_message_t Ack(const std::uint8_t result)
-    {
-        mavlink_message_t message{};
-        mavlink_msg_mission_ack_pack(1, MAV_COMP_ID_AUTOPILOT1, &message,
-            255, MAV_COMP_ID_MISSIONPLANNER, result,
-            MAV_MISSION_TYPE_MISSION, 0);
-        return message;
-    }
-
     mavlink_message_t Count(const std::uint16_t count)
     {
         mavlink_message_t message{};
@@ -237,107 +288,16 @@ namespace
         return item;
     }
 
-    void CompleteUpload(MissionUploadTransaction& tx,
-        const std::vector<mission::MissionItemIntV1>& items,
-        const std::chrono::steady_clock::time_point now)
-    {
-        const auto wireMission = BuildWireMissionForTest(items);
-        for (std::uint16_t sequence = 0; sequence < wireMission.size(); ++sequence)
-        {
-            const mavlink_message_t request = Request(sequence);
-            Expect(tx.HandleMissionMessage(request, Peer(), now),
-                "request was not accepted");
-        }
-        const mavlink_message_t ack = Ack(MAV_MISSION_ACCEPTED);
-        Expect(tx.HandleMissionMessage(ack, Peer(), now),
-            "accepted ack was not consumed");
-        Expect(!tx.Succeeded(), "ACK alone incorrectly completed upload");
-        const mavlink_message_t count = Count(
-            static_cast<std::uint16_t>(wireMission.size()));
-        Expect(tx.HandleMissionMessage(count, Peer(), now),
-            "verification count was not consumed");
-        const mavlink_message_t first = Item(
-            ArduPilotReadbackItem(wireMission[1]));
-        Expect(tx.HandleMissionMessage(first, Peer(), now),
-            "first verification item was not consumed");
-        const mavlink_message_t last = Item(
-            ArduPilotReadbackItem(wireMission.back()));
-        Expect(tx.HandleMissionMessage(last, Peer(), now),
-            "last verification item was not consumed");
-    }
-
     void RunMissionTransportAbstractionTests()
     {
-        FakeTransport wireTransport;
-        MissionProtocolTransport transport(wireTransport, Peer());
-        MissionTransportIdentity identity;
-        identity.uploadJobId = std::string(32, 't');
-        identity.droneId = "Drone001";
-        identity.routeSlotIndex = 0;
-        identity.generation = 7;
-        const auto artifactMission = BuildMission();
-        std::string diagnostic;
-        Expect(transport.GetStatus() == MissionTransportStatus::Idle,
-            "new Mission Transport did not start Idle");
-        Expect(transport.Prepare(identity, artifactMission, diagnostic) &&
-            diagnostic.empty() &&
-            transport.GetStatus() == MissionTransportStatus::Prepared,
-            "MissionProtocol Transport Prepare failed");
-
         const auto now = std::chrono::steady_clock::time_point(
             std::chrono::milliseconds(1000));
-        Expect(transport.Upload(now) &&
-            transport.GetStatus() == MissionTransportStatus::Uploading,
-            "MissionProtocol Transport Upload failed");
-        IMissionProtocolMessageSink* const sink =
-            transport.GetMissionProtocolMessageSink();
-        Expect(sink != nullptr, "MissionProtocol Transport omitted its ingress sink");
-        const auto wireMission = BuildWireMissionForTest(artifactMission);
-        for (std::uint16_t sequence = 0; sequence < wireMission.size(); ++sequence)
-        {
-            Expect(sink->HandleMissionMessage(Request(sequence), Peer(), now),
-                "MissionProtocol Transport rejected a Mission request");
-        }
-        Expect(transport.GetStatus() == MissionTransportStatus::WaitingAck,
-            "MissionProtocol Transport did not expose WaitingAck");
-        Expect(sink->HandleMissionMessage(
-                Ack(MAV_MISSION_ACCEPTED), Peer(), now) &&
-            transport.GetStatus() == MissionTransportStatus::Verifying,
-            "MissionProtocol Transport did not enter Verification");
-        Expect(sink->HandleMissionMessage(
-                Count(static_cast<std::uint16_t>(wireMission.size())), Peer(), now) &&
-            sink->HandleMissionMessage(
-                Item(ArduPilotReadbackItem(wireMission[1])), Peer(), now) &&
-            sink->HandleMissionMessage(
-                Item(ArduPilotReadbackItem(wireMission.back())), Peer(), now),
-            "MissionProtocol Transport verification flow failed");
-        Expect(transport.IsTerminal() && transport.Verify() &&
-            transport.GetStatus() == MissionTransportStatus::Succeeded &&
-            transport.GetMetrics().artifactRouteItems == artifactMission.size() &&
-            transport.GetMetrics().wireMissionItems == wireMission.size(),
-            "MissionProtocol Transport changed transaction result or metrics");
-
-        FakeTransport secondWireTransport;
-        MissionProtocolPeerIdentity secondPeer = Peer();
-        secondPeer.droneId = "Drone002";
-        MissionProtocolTransport second(secondWireTransport, secondPeer);
-        MissionTransportIdentity secondIdentity = identity;
-        secondIdentity.droneId = "Drone002";
-        secondIdentity.routeSlotIndex = 1;
-        secondIdentity.generation = 8;
-        Expect(second.Prepare(secondIdentity, BuildMission(), diagnostic) &&
-            second.Upload(now), "second per-Drone Mission Transport failed to start");
-        second.Cancel(now);
-        Expect(second.GetStatus() == MissionTransportStatus::Cancelled &&
-            transport.GetStatus() == MissionTransportStatus::Succeeded,
-            "per-Drone Mission Transport instances shared mutable state");
-
         // MAVFTP production reuses the same verifier after its final
-        // TerminateSession ACK, without replaying MissionProtocol upload.
+        // TerminateSession ACK, without replaying the legacy upload flow.
         FakeTransport verifierWire;
         auto verifier = MakeTransaction(verifierWire);
         Expect(verifier.BeginVerification(now, true) &&
-            verifierWire.counts.empty() && verifierWire.requestLists == 1,
+            verifierWire.requestLists == 1,
             "verification-only entry sent upload data or omitted Mission Count");
         const auto verifierMission = BuildWireMissionForTest(BuildMission());
         Expect(verifier.HandleMissionMessage(
@@ -351,7 +311,7 @@ namespace
             verifier.GetPhase() == MissionUploadPhase::VerifyingFirst &&
             verifierWire.requestedItems.back() == 1,
             "production verifier did not observe Home before First Item");
-        MissionProtocolPeerIdentity wrongPeer = Peer();
+        MissionVerificationPeerIdentity wrongPeer = Peer();
         wrongPeer.remotePort++;
         Expect(!verifier.HandleMissionMessage(
                 Item(verifierMission[1]), wrongPeer, now) &&
@@ -382,14 +342,9 @@ namespace
         const std::chrono::steady_clock::time_point countAt)
     {
         const auto wireMission = BuildWireMissionForTest(items);
-        Expect(tx.Start(startedAt), "diagnostic transaction did not start");
-        for (std::uint16_t sequence = 0; sequence < wireMission.size(); ++sequence)
-        {
-            Expect(tx.HandleMissionMessage(Request(sequence), Peer(), startedAt),
-                "diagnostic upload request was not consumed");
-        }
-        Expect(tx.HandleMissionMessage(Ack(MAV_MISSION_ACCEPTED), Peer(), acceptedAt),
-            "diagnostic accepted ACK was not consumed");
+        (void)acceptedAt;
+        Expect(tx.BeginVerification(startedAt, false),
+            "diagnostic verification did not start");
         Expect(tx.HandleMissionMessage(
             Count(static_cast<std::uint16_t>(wireMission.size())), Peer(), countAt),
             "diagnostic Mission count was not consumed");
@@ -543,49 +498,7 @@ namespace
     {
         const auto now = std::chrono::steady_clock::now();
         const auto items = BuildMission();
-        const auto originalItems = items;
         const auto wireItems = BuildWireMissionForTest(items);
-        FakeTransport transport;
-        auto tx = MakeTransaction(transport);
-        Expect(tx.Start(now), "transaction did not start");
-        Expect(transport.counts == std::vector<std::uint16_t>{ 4 } &&
-            tx.GetMissionItemCount() == 3 && tx.GetWireMissionItemCount() == 4,
-            "MISSION_COUNT was not authoritative");
-
-        const mavlink_message_t legacy = Request(0, true);
-        Expect(tx.HandleMissionMessage(legacy, Peer(), now),
-            "legacy MISSION_REQUEST was not accepted");
-        const mavlink_message_t duplicate = Request(0);
-        Expect(tx.HandleMissionMessage(duplicate, Peer(), now),
-            "duplicate request was not idempotent");
-        Expect(tx.GetMetrics().logicalBytesCompleted == 0,
-            "reserved Home request advanced route logical progress");
-        Expect(tx.GetMetrics().duplicateRequests == 1,
-            "duplicate request metric was not recorded");
-        for (std::uint16_t sequence = 1; sequence < wireItems.size(); ++sequence)
-        {
-            const mavlink_message_t request = Request(sequence);
-            Expect(tx.HandleMissionMessage(request, Peer(), now),
-                "MISSION_REQUEST_INT was not accepted");
-        }
-        Expect(transport.sentMissionItems.size() == 5 &&
-            transport.sentMissionItems[0].Sequence == 0 &&
-            SameMissionPayload(transport.sentMissionItems[0], items[0]) &&
-            transport.sentMissionItems[2].Sequence == 1 &&
-            SameMissionPayload(transport.sentMissionItems[2], items[0]) &&
-            transport.sentMissionItems[3].Sequence == 2 &&
-            SameMissionPayload(transport.sentMissionItems[3], items[1]) &&
-            transport.sentMissionItems[4].Sequence == 3 &&
-            SameMissionPayload(transport.sentMissionItems[4], items[2]) &&
-            items[0].Sequence == originalItems[0].Sequence &&
-            items[2].Sequence == originalItems[2].Sequence,
-            "Home slot mapping changed or lost Artifact route payload");
-        Expect(tx.GetMetrics().logicalBytesCompleted ==
-                items.size() * mission::MissionItemRecordBytesV1 &&
-            tx.GetMetrics().artifactRouteItems == 3 &&
-            tx.GetMetrics().wireMissionItems == 4 &&
-            tx.GetMetrics().uniqueItemsServed == 4,
-            "Artifact/wire progress metrics were not separated");
         {
             std::vector<mission::MissionItemIntV1> maximumArtifact(
                 ardupilotMission::MaximumArtifactRouteItems, items.front());
@@ -602,13 +515,16 @@ namespace
                     maximumArtifact, boundaryWire) && boundaryWire.empty(),
                 "overflowing Artifact route count was not rejected");
         }
-        const mavlink_message_t accepted = Ack(MAV_MISSION_ACCEPTED);
-        Expect(tx.HandleMissionMessage(accepted, Peer(), now),
-            "MISSION_ACK accepted was not consumed");
-        Expect(tx.TransportAccepted() && !tx.Succeeded(),
-            "transport acceptance bypassed verification");
+
+        FakeTransport transport;
+        auto tx = MakeTransaction(transport);
+        Expect(tx.BeginVerification(now, true) && transport.requestLists == 1 &&
+            tx.GetMissionItemCount() == 3 && tx.GetWireMissionItemCount() == 4,
+            "verification did not start with the authoritative wire count");
         const mavlink_message_t count = Count(4);
-        tx.HandleMissionMessage(count, Peer(), now);
+        Expect(tx.HandleMissionMessage(count, Peer(), now) &&
+            tx.GetPhase() == MissionUploadPhase::VerifyingHome,
+            "verification count did not advance to Reserved Home");
         auto arbitraryHome = wireItems.front();
         arbitraryHome.Frame = 0;
         arbitraryHome.Param1 = 0.0f;
@@ -627,71 +543,46 @@ namespace
             ArduPilotReadbackItem(wireItems.back()));
         tx.HandleMissionMessage(last, Peer(), now);
         Expect(tx.Succeeded() && tx.GetVerificationMismatchDiagnostic().empty(),
-            "full accepted/count/first/last gate emitted mismatch diagnostics");
+            "Count/Home/First/Last gate emitted mismatch diagnostics");
 
         FakeTransport wrongTransport;
         auto wrong = MakeTransaction(wrongTransport);
-        wrong.Start(now);
-        MissionProtocolPeerIdentity wrongPeer = Peer();
+        Expect(wrong.BeginVerification(now, true),
+            "wrong-peer verification fixture did not start");
+        MissionVerificationPeerIdentity wrongPeer = Peer();
         wrongPeer.droneId = "Drone002";
-        const mavlink_message_t request0 = Request(0);
-        Expect(!wrong.HandleMissionMessage(request0, wrongPeer, now),
-            "wrong Drone advanced transaction");
+        Expect(!wrong.HandleMissionMessage(count, wrongPeer, now),
+            "wrong Drone advanced verification");
         wrongPeer = Peer();
         wrongPeer.remotePort = 14551;
-        Expect(!wrong.HandleMissionMessage(request0, wrongPeer, now),
-            "wrong endpoint advanced transaction");
-        mavlink_message_t wrongSystem = request0;
+        Expect(!wrong.HandleMissionMessage(count, wrongPeer, now),
+            "wrong endpoint advanced verification");
+        mavlink_message_t wrongSystem = count;
         wrongSystem.sysid = 2;
         Expect(!wrong.HandleMissionMessage(wrongSystem, Peer(), now),
-            "wrong SYSID advanced transaction");
-        mavlink_message_t wrongComponent = request0;
+            "wrong SYSID advanced verification");
+        mavlink_message_t wrongComponent = count;
         wrongComponent.compid = MAV_COMP_ID_CAMERA;
         Expect(!wrong.HandleMissionMessage(wrongComponent, Peer(), now),
-            "wrong component advanced transaction");
-        const mavlink_message_t wrongType = Request(0, false,
-            MAV_MISSION_TYPE_FENCE);
+            "wrong component advanced verification");
+        mavlink_message_t wrongType{};
+        mavlink_msg_mission_count_pack(1, MAV_COMP_ID_AUTOPILOT1,
+            &wrongType, 255, MAV_COMP_ID_MISSIONPLANNER, 4,
+            MAV_MISSION_TYPE_FENCE, 0);
         Expect(!wrong.HandleMissionMessage(wrongType, Peer(), now),
-            "wrong Mission type advanced transaction");
-        const mavlink_message_t outOfRange = Request(99);
-        Expect(wrong.HandleMissionMessage(outOfRange, Peer(), now) &&
-            wrong.GetPhase() == MissionUploadPhase::Failed,
-            "out-of-range request did not fail closed");
-
-        FakeTransport rejectTransport;
-        auto rejected = MakeTransaction(rejectTransport);
-        rejected.Start(now);
-        for (std::uint16_t sequence = 0; sequence < 4; ++sequence)
-        {
-            const mavlink_message_t request = Request(sequence);
-            rejected.HandleMissionMessage(request, Peer(), now);
-        }
-        const mavlink_message_t noSpace = Ack(MAV_MISSION_NO_SPACE);
-        rejected.HandleMissionMessage(noSpace, Peer(), now);
-        Expect(rejected.GetPhase() == MissionUploadPhase::Failed,
-            "NO_SPACE did not fail target");
-		Expect(rejected.GetTerminalSourcePhase() == MissionUploadPhase::AwaitingAck &&
-			rejected.GetMetrics().uniqueItemsServed == 4 &&
-			rejected.GetSafeDiagnostic().find("storage") != std::string::npos,
-			"AwaitingAck terminal phase/diagnostic was not retained");
+            "wrong Mission type advanced verification");
 
         FakeTransport disconnectTransport;
-        auto disconnected = MakeTransaction(disconnectTransport);
-        disconnected.Start(now);
         disconnectTransport.allowSend = false;
-        Expect(disconnected.HandleMissionMessage(request0, Peer(), now) &&
+        auto disconnected = MakeTransaction(disconnectTransport);
+        Expect(!disconnected.BeginVerification(now, true) &&
             disconnected.GetPhase() == MissionUploadPhase::Failed,
-            "transport disconnect did not fail the isolated target");
+            "verification transport send failure did not fail explicitly");
 
         FakeTransport mismatchTransport;
         auto mismatch = MakeTransaction(mismatchTransport);
-        mismatch.Start(now);
-        for (std::uint16_t sequence = 0; sequence < 4; ++sequence)
-        {
-            const mavlink_message_t request = Request(sequence);
-            mismatch.HandleMissionMessage(request, Peer(), now);
-        }
-        mismatch.HandleMissionMessage(accepted, Peer(), now);
+        Expect(mismatch.BeginVerification(now, true),
+            "count mismatch verification fixture did not start");
         const mavlink_message_t badCount = Count(3);
         mismatch.HandleMissionMessage(badCount, Peer(), now);
         Expect(mismatch.GetPhase() == MissionUploadPhase::Failed,
@@ -699,77 +590,30 @@ namespace
 		Expect(mismatch.GetTerminalSourcePhase() == MissionUploadPhase::VerifyingCount &&
 			mismatch.GetSafeDiagnostic().find("count") != std::string::npos,
 			"VerifyingCount terminal diagnostic was not retained");
-
-        FakeTransport firstMismatchTransport;
-        auto firstMismatch = MakeTransaction(firstMismatchTransport);
-        firstMismatch.Start(now);
-        for (std::uint16_t sequence = 0; sequence < 4; ++sequence)
-        {
-            const mavlink_message_t request = Request(sequence);
-            firstMismatch.HandleMissionMessage(request, Peer(), now);
-        }
-        firstMismatch.HandleMissionMessage(accepted, Peer(), now);
-        firstMismatch.HandleMissionMessage(count, Peer(), now);
-        auto badFirstItem = items.front();
-        badFirstItem.Sequence = 1;
-        ++badFirstItem.X;
-        const mavlink_message_t badFirst = Item(badFirstItem);
-        firstMismatch.HandleMissionMessage(badFirst, Peer(), now);
-        Expect(firstMismatch.GetPhase() == MissionUploadPhase::Failed,
-            "first item mismatch did not fail");
-		Expect(firstMismatch.GetTerminalSourcePhase() == MissionUploadPhase::VerifyingFirst &&
-			firstMismatch.GetSafeDiagnostic().find("First") != std::string::npos,
-			"VerifyingFirst terminal diagnostic was not retained");
-
-        FakeTransport lastMismatchTransport;
-        auto lastMismatch = MakeTransaction(lastMismatchTransport);
-        lastMismatch.Start(now);
-        for (std::uint16_t sequence = 0; sequence < 4; ++sequence)
-        {
-            const mavlink_message_t request = Request(sequence);
-            lastMismatch.HandleMissionMessage(request, Peer(), now);
-        }
-        lastMismatch.HandleMissionMessage(accepted, Peer(), now);
-        lastMismatch.HandleMissionMessage(count, Peer(), now);
-        lastMismatch.HandleMissionMessage(
-            Item(ArduPilotReadbackItem(wireItems[1])), Peer(), now);
-        auto badLastItem = ArduPilotReadbackItem(items.back());
-        badLastItem.Sequence = 3;
-        ++badLastItem.Command;
-        const mavlink_message_t badLast = Item(badLastItem);
-        lastMismatch.HandleMissionMessage(badLast, Peer(), now);
-        Expect(lastMismatch.GetPhase() == MissionUploadPhase::Failed,
-            "last item mismatch did not fail");
-		Expect(lastMismatch.GetTerminalSourcePhase() == MissionUploadPhase::VerifyingLast &&
-			lastMismatch.GetSafeDiagnostic().find("Last") != std::string::npos,
-			"VerifyingLast terminal diagnostic was not retained");
-
         MissionUploadTransactionConfig timeoutConfig;
         timeoutConfig.responseTimeout = std::chrono::milliseconds(1);
         timeoutConfig.maxRetries = 2;
         FakeTransport timeoutTransport;
         auto timeout = MakeTransaction(timeoutTransport, timeoutConfig);
-        timeout.Start(now);
-		for (std::uint16_t sequence = 0; sequence < 4; ++sequence)
-			timeout.HandleMissionMessage(Request(sequence), Peer(), now);
+        Expect(timeout.BeginVerification(now, true),
+            "timeout verification fixture did not start");
         timeout.Tick(now + std::chrono::milliseconds(2));
         timeout.Tick(now + std::chrono::milliseconds(4));
         timeout.Tick(now + std::chrono::milliseconds(6));
-        Expect(timeout.GetPhase() == MissionUploadPhase::Failed &&
+		Expect(timeout.GetPhase() == MissionUploadPhase::Failed &&
 			timeout.GetMetrics().retryCount == 2 &&
-			timeout.GetTerminalSourcePhase() == MissionUploadPhase::AwaitingAck &&
+			timeout.GetTerminalSourcePhase() == MissionUploadPhase::VerifyingCount &&
 			timeout.GetSafeDiagnostic().find("timed out") != std::string::npos,
             "timeout retry budget was not bounded");
 
         FakeTransport cancelTransport;
         auto cancelled = MakeTransaction(cancelTransport);
-        cancelled.Start(now);
+        Expect(cancelled.BeginVerification(now, true),
+            "cancel verification fixture did not start");
         cancelled.Cancel(now);
         Expect(cancelled.GetPhase() == MissionUploadPhase::Cancelled &&
-            !cancelled.HandleMissionMessage(accepted, Peer(), now) &&
-            !cancelled.HandleMissionMessage(request0, Peer(), now) &&
-            cancelTransport.items.empty(),
-            "late ACK or stale request advanced cancelled transaction");
+            !cancelled.HandleMissionMessage(count, Peer(), now),
+            "late response advanced cancelled verification");
     }
 
     void RunVerificationInstrumentationTests()
@@ -1064,9 +908,9 @@ namespace
                 std::string::npos,
             "RouteSlot0 golden Expected diagnostic drifted");
 
-        Expect(frameResult.metrics.uploadDurationMs == 100 &&
-            frameResult.metrics.verificationDurationMs == 250,
-            "ACK-authoritative deterministic verification timing drifted");
+        Expect(frameResult.metrics.uploadDurationMs == 0 &&
+            frameResult.metrics.verificationDurationMs == 350,
+            "post-commit deterministic verification timing drifted");
     }
 
     void RunPreparationTests()
@@ -1213,7 +1057,6 @@ namespace
 
         RouteUploadManagerConfig mavftpConfig;
         mavftpConfig.routeUploadEnabled = true;
-        mavftpConfig.transportMode = MissionTransportMode::MAVFTP;
         mavftpConfig.mavftpSegmentItems = 4000;
         mavftpConfig.mavftpWriteWindow = 16;
         std::string diagnostic;
@@ -1231,14 +1074,6 @@ namespace
         Expect(session.GetMavFtpClient() == ownedClient,
             "destroying a Job Transport destroyed the Session Client");
 
-        RouteUploadManagerConfig rollbackConfig;
-        rollbackConfig.routeUploadEnabled = true;
-        rollbackConfig.transportMode = MissionTransportMode::MissionProtocol;
-        auto rollback = CreateConfiguredMissionTransport(
-            session, rollbackConfig, diagnostic);
-        Expect(dynamic_cast<MissionProtocolTransport*>(rollback.get()) != nullptr,
-            "explicit MissionProtocol rollback did not create the old Transport");
-
         DroneSessionConfig missingClientConfig = sessionConfig;
         missingClientConfig.droneId = "NoFtpDrone";
         missingClientConfig.remotePort = 15101;
@@ -1248,117 +1083,7 @@ namespace
         auto noFallback = CreateConfiguredMissionTransport(
             missingClient, mavftpConfig, diagnostic);
         Expect(!noFallback && diagnostic.find("unavailable") != std::string::npos,
-            "explicit MAVFTP construction failure silently fell back");
-    }
-
-    void FeedMessage(MavlinkReadOnlyIngress& ingress,
-        const mavlink_message_t& message, const std::uint16_t port)
-    {
-        std::uint8_t bytes[MAVLINK_MAX_PACKET_LEN]{};
-        const std::uint16_t length = mavlink_msg_to_send_buffer(bytes, &message);
-        const MavlinkIngressStats stats = ingress.SubmitDatagram(
-            bytes, length, "127.0.0.1", port);
-        Expect(stats.missionMessagesApplied == 1,
-            "fake vehicle response did not traverse production ingress");
-    }
-
-    struct FakeVehicle
-    {
-        std::uint8_t systemId = 0;
-        std::uint16_t port = 0;
-        std::vector<mission::MissionItemIntV1> items;
-        bool corruptFirstVerification = false;
-        bool corruptLastVerification = false;
-    };
-
-    void PumpVehicles(FakeMissionEndpoint& endpoint,
-        MavlinkReadOnlyIngress& ingress,
-        const std::map<std::uint16_t, FakeVehicle>& vehicles)
-    {
-        for (;;)
-        {
-            std::vector<FakeMissionEndpoint::Sent> sent = endpoint.Take();
-            if (sent.empty()) return;
-            for (const auto& outbound : sent)
-            {
-                const auto vehicle = vehicles.find(outbound.port);
-                Expect(vehicle != vehicles.end(), "message targeted unknown fake Drone");
-                mavlink_message_t response{};
-                if (outbound.message.msgid == MAVLINK_MSG_ID_MISSION_COUNT)
-                {
-                    mavlink_mission_count_t count{};
-                    mavlink_msg_mission_count_decode(&outbound.message, &count);
-                    Expect(count.count == vehicle->second.items.size() + 1,
-                        "production MISSION_COUNT omitted reserved Home slot");
-                    mavlink_msg_mission_request_int_pack(vehicle->second.systemId,
-                        MAV_COMP_ID_AUTOPILOT1, &response, 255,
-                        MAV_COMP_ID_MISSIONPLANNER, 0, MAV_MISSION_TYPE_MISSION);
-                    FeedMessage(ingress, response, outbound.port);
-                }
-                else if (outbound.message.msgid == MAVLINK_MSG_ID_MISSION_ITEM_INT)
-                {
-                    mavlink_mission_item_int_t item{};
-                    mavlink_msg_mission_item_int_decode(&outbound.message, &item);
-                    if (item.seq + 1 < vehicle->second.items.size() + 1)
-                    {
-                        mavlink_msg_mission_request_int_pack(vehicle->second.systemId,
-                            MAV_COMP_ID_AUTOPILOT1, &response, 255,
-                            MAV_COMP_ID_MISSIONPLANNER,
-                            static_cast<std::uint16_t>(item.seq + 1),
-                            MAV_MISSION_TYPE_MISSION);
-                    }
-                    else
-                    {
-                        mavlink_msg_mission_ack_pack(vehicle->second.systemId,
-                            MAV_COMP_ID_AUTOPILOT1, &response, 255,
-                            MAV_COMP_ID_MISSIONPLANNER, MAV_MISSION_ACCEPTED,
-                            MAV_MISSION_TYPE_MISSION, 0);
-                    }
-                    FeedMessage(ingress, response, outbound.port);
-                }
-                else if (outbound.message.msgid == MAVLINK_MSG_ID_MISSION_REQUEST_LIST)
-                {
-                    mavlink_msg_mission_count_pack(vehicle->second.systemId,
-                        MAV_COMP_ID_AUTOPILOT1, &response, 255,
-                        MAV_COMP_ID_MISSIONPLANNER,
-                        static_cast<std::uint16_t>(vehicle->second.items.size() + 1),
-                        MAV_MISSION_TYPE_MISSION, 0);
-                    FeedMessage(ingress, response, outbound.port);
-                }
-                else if (outbound.message.msgid == MAVLINK_MSG_ID_MISSION_REQUEST_INT)
-                {
-                    mavlink_mission_request_int_t request{};
-                    mavlink_msg_mission_request_int_decode(&outbound.message, &request);
-                    Expect(request.seq >= 1 &&
-                        request.seq <= vehicle->second.items.size(),
-                        "verification requested an invalid sequence");
-                    auto item = vehicle->second.items[request.seq - 1];
-                    item.Sequence = request.seq;
-                    item = ArduPilotReadbackItem(item);
-                    if (vehicle->second.corruptFirstVerification &&
-                        request.seq == 1)
-                    {
-                        item.Frame = static_cast<std::uint8_t>(MAV_FRAME_GLOBAL);
-                    }
-                    if (vehicle->second.corruptLastVerification &&
-                        request.seq == vehicle->second.items.size())
-                    {
-                        ++item.Command;
-                    }
-                    mavlink_msg_mission_item_int_pack(vehicle->second.systemId,
-                        MAV_COMP_ID_AUTOPILOT1, &response, 255,
-                        MAV_COMP_ID_MISSIONPLANNER, item.Sequence, item.Frame,
-                        item.Command, item.Current, item.AutoContinue,
-                        item.Param1, item.Param2, item.Param3, item.Param4,
-                        item.X, item.Y, item.Z, MAV_MISSION_TYPE_MISSION);
-                    FeedMessage(ingress, response, outbound.port);
-                }
-                else
-                {
-                    throw std::runtime_error("production uploader sent a forbidden MAVLink message");
-                }
-            }
-        }
+            "MAVFTP construction failure did not fail explicitly");
     }
 
     dspgcs::UploadJobCommandAckDTO SendManagerCommand(
@@ -1442,7 +1167,6 @@ namespace
         defaults.sharedMavlinkEndpoint = &endpoint;
         defaults.heartbeatTimeoutMs = 30000;
         MavlinkDiscoveryService discovery(drones, defaults);
-        std::map<std::uint16_t, FakeVehicle> vehicles;
         for (std::size_t index = 0; index < TargetCount; ++index)
         {
             const std::uint8_t systemId = static_cast<std::uint8_t>(index + 1);
@@ -1455,17 +1179,25 @@ namespace
                 Expect(discovery.IngestMessage(heartbeat, "127.0.0.1", port) ==
                     MavlinkDiscoveryResult::Registered,
                     "fake Drone discovery failed");
-            vehicles.emplace(port, FakeVehicle{
-                systemId, port, BuildWplMission(3),
-                firstVerificationMismatch && index == 0,
-                lastVerificationMismatch && index == 0 });
         }
-        MavlinkReadOnlyIngress ingress(drones, discovery);
-        RouteUploadManager manager(authority, drones, true);
+        bool allowTransportCompletion = false;
+        RouteUploadManagerConfig managerConfig;
+        managerConfig.routeUploadEnabled = true;
+        managerConfig.testTransportFactory =
+            [&allowTransportCompletion, firstVerificationMismatch,
+                lastVerificationMismatch](DroneSession&,
+                    const RouteUploadManagerConfig&, std::string& diagnostic)
+            {
+                diagnostic.clear();
+                return std::make_unique<FakeManagerMissionTransport>(
+                    allowTransportCompletion, firstVerificationMismatch,
+                    lastVerificationMismatch);
+            };
+        RouteUploadManager manager(authority, drones, std::move(managerConfig));
         const auto deadline = std::chrono::steady_clock::now() +
             std::chrono::seconds(10);
-        while (endpoint.CountMessage(MAVLINK_MSG_ID_MISSION_COUNT) <
-                maxConcurrency && std::chrono::steady_clock::now() < deadline)
+        while (manager.GetPreparedMissionCountForTest() < maxConcurrency &&
+            std::chrono::steady_clock::now() < deadline)
         {
             manager.Tick(std::chrono::steady_clock::now());
             std::this_thread::yield();
@@ -1477,6 +1209,7 @@ namespace
             manager.GetSocketCountForTest() == 0 &&
             manager.GetTimerCountForTest() == 0,
             "scheduler resource bounds were violated");
+        allowTransportCompletion = true;
 
         if (shutdownWhileUploading)
         {
@@ -1521,7 +1254,6 @@ namespace
                 dspgcs::UploadJobCommandType::Pause);
             Expect(pause.status == dspgcs::UploadJobCommandAckStatus::Accepted,
                 "manager Pause was rejected");
-            PumpVehicles(endpoint, ingress, vehicles);
             manager.Tick(std::chrono::steady_clock::now());
             const auto* paused = authority.FindCurrentSnapshotForTest(jobId);
             Expect(paused && paused->jobState == dspgcs::UploadJobState::Paused &&
@@ -1540,7 +1272,6 @@ namespace
             Expect(lower.status == dspgcs::UploadJobCommandAckStatus::Accepted &&
                 manager.GetActiveSlotCountForTest() == 3,
                 "3-to-1 SetMax interrupted active transactions");
-            PumpVehicles(endpoint, ingress, vehicles);
             manager.Tick(std::chrono::steady_clock::now());
             while (manager.GetActiveSlotCountForTest() < 1 &&
                 std::chrono::steady_clock::now() < deadline)
@@ -1567,7 +1298,6 @@ namespace
 
         while (std::chrono::steady_clock::now() < deadline)
         {
-            PumpVehicles(endpoint, ingress, vehicles);
             manager.Tick(std::chrono::steady_clock::now());
             const auto* snapshot = authority.FindCurrentSnapshotForTest(jobId);
             if (snapshot && (snapshot->jobState ==
@@ -1627,7 +1357,6 @@ namespace
             while (std::chrono::steady_clock::now() < deadline)
             {
                 manager.Tick(std::chrono::steady_clock::now());
-                PumpVehicles(endpoint, ingress, vehicles);
                 manager.Tick(std::chrono::steady_clock::now());
                 snapshot = authority.FindCurrentSnapshotForTest(jobId);
                 if (snapshot && snapshot->jobState ==
@@ -1766,12 +1495,12 @@ int RunMissionUploadTests()
         RunManagerIntegrationTests();
 		std::cout << "Mission upload tests: scale" << std::endl;
         RunScaleTests();
-        std::cout << "Mission Protocol upload/preparation tests passed\n";
+        std::cout << "MAVFTP production upload/preparation tests passed\n";
         return 0;
     }
     catch (const std::exception& error)
     {
-        std::cerr << "Mission Protocol upload tests failed: " << error.what() << '\n';
+        std::cerr << "MAVFTP production upload tests failed: " << error.what() << '\n';
         return 1;
     }
 }

@@ -217,27 +217,6 @@ namespace
         return result;
     }
 
-    const char* AckDiagnostic(const std::uint8_t result)
-    {
-        switch (result)
-        {
-        case MAV_MISSION_ERROR: return "Vehicle reported a Mission protocol error.";
-        case MAV_MISSION_UNSUPPORTED_FRAME: return "Vehicle rejected the Mission frame.";
-        case MAV_MISSION_UNSUPPORTED: return "Vehicle does not support the Mission item.";
-        case MAV_MISSION_NO_SPACE: return "Vehicle has insufficient Mission storage.";
-        case MAV_MISSION_INVALID: return "Vehicle rejected invalid Mission data.";
-        case MAV_MISSION_INVALID_PARAM1:
-        case MAV_MISSION_INVALID_PARAM2:
-        case MAV_MISSION_INVALID_PARAM3:
-        case MAV_MISSION_INVALID_PARAM4:
-        case MAV_MISSION_INVALID_PARAM5_X:
-        case MAV_MISSION_INVALID_PARAM6_Y:
-        case MAV_MISSION_INVALID_PARAM7:
-            return "Vehicle rejected a Mission item parameter.";
-        case MAV_MISSION_DENIED: return "Vehicle denied the Mission upload.";
-        default: return "Vehicle rejected the Mission upload.";
-        }
-    }
 }
 
 const char* MissionUploadPhaseName(const MissionUploadPhase phase)
@@ -245,8 +224,6 @@ const char* MissionUploadPhaseName(const MissionUploadPhase phase)
 	switch (phase)
 	{
 	case MissionUploadPhase::Idle: return "Idle";
-	case MissionUploadPhase::AwaitingRequest: return "AwaitingRequest";
-	case MissionUploadPhase::AwaitingAck: return "AwaitingAck";
 	case MissionUploadPhase::VerifyingCount: return "VerifyingCount";
 	case MissionUploadPhase::VerifyingHome: return "VerifyingHome";
 	case MissionUploadPhase::VerifyingFirst: return "VerifyingFirst";
@@ -261,7 +238,7 @@ const char* MissionUploadPhaseName(const MissionUploadPhase phase)
 MissionUploadTransaction::MissionUploadTransaction(
     MissionUploadTransactionIdentity identity,
     std::vector<dronegcs::route_mission::MissionItemIntV1> mission,
-    IMissionProtocolTransport& transport,
+    IMissionVerificationTransport& transport,
     MissionUploadTransactionConfig config)
     : identity_(std::move(identity))
     , transport_(transport)
@@ -271,7 +248,6 @@ MissionUploadTransaction::MissionUploadTransaction(
     wireMissionValid_ = dronegcs::ardupilot_mission::BuildWireMission(
         mission, mission_);
     metrics_.wireMissionItems = mission_.size();
-    served_.assign(mission_.size(), false);
 }
 
 bool MissionUploadTransaction::IsTerminal() const
@@ -284,14 +260,7 @@ bool MissionUploadTransaction::IsTerminal() const
 void MissionUploadTransaction::FinalizeTiming(
     const std::chrono::steady_clock::time_point now)
 {
-    if (uploadStartedAt_ == std::chrono::steady_clock::time_point{}) return;
-    if (verificationStartedAt_ == std::chrono::steady_clock::time_point{})
-    {
-        metrics_.uploadDurationMs = ElapsedMilliseconds(uploadStartedAt_, now);
-        return;
-    }
-    metrics_.uploadDurationMs = ElapsedMilliseconds(
-        uploadStartedAt_, verificationStartedAt_);
+    if (verificationStartedAt_ == std::chrono::steady_clock::time_point{}) return;
     metrics_.verificationDurationMs = ElapsedMilliseconds(
         verificationStartedAt_, now);
 }
@@ -304,7 +273,7 @@ void MissionUploadTransaction::Fail(
 	terminalSourcePhase_ = phase_;
     FinalizeTiming(now);
     phase_ = MissionUploadPhase::Failed;
-    safeDiagnostic_ = diagnostic ? diagnostic : "Mission upload failed.";
+    safeDiagnostic_ = diagnostic ? diagnostic : "Mission verification failed.";
 }
 
 void MissionUploadTransaction::ResetDeadline(
@@ -334,52 +303,6 @@ bool MissionUploadTransaction::RecordSend(
     return true;
 }
 
-bool MissionUploadTransaction::SendCount(
-    const std::chrono::steady_clock::time_point now)
-{
-    std::size_t wireBytes = 0;
-    const bool sent = transport_.SendMissionCount(
-        static_cast<std::uint16_t>(mission_.size()), wireBytes);
-    return RecordSend(sent, wireBytes, now);
-}
-
-bool MissionUploadTransaction::SendItem(
-    const std::uint16_t sequence,
-    const std::chrono::steady_clock::time_point now,
-    const bool countDuplicateRequest)
-{
-    if (sequence >= mission_.size())
-    {
-        Fail("Vehicle requested a Mission sequence outside the prepared route.", now);
-        return false;
-    }
-    std::size_t wireBytes = 0;
-    const bool sent = transport_.SendMissionItemInt(mission_[sequence], wireBytes);
-    if (!RecordSend(sent, wireBytes, now))
-        return false;
-    lastRequestedSequence_ = sequence;
-    if (!served_[sequence])
-    {
-        served_[sequence] = true;
-        ++uniqueServed_;
-		metrics_.uniqueItemsServed = uniqueServed_;
-        if (sequence != dronegcs::ardupilot_mission::ReservedHomeWireSequence)
-        {
-            metrics_.logicalBytesCompleted +=
-                dronegcs::route_mission::MissionItemRecordBytesV1;
-            progressChanged_ = true;
-        }
-    }
-    else if (countDuplicateRequest)
-    {
-        ++metrics_.duplicateRequests;
-    }
-    phase_ = uniqueServed_ == mission_.size()
-        ? MissionUploadPhase::AwaitingAck
-        : MissionUploadPhase::AwaitingRequest;
-    return true;
-}
-
 bool MissionUploadTransaction::SendVerificationList(
     const std::chrono::steady_clock::time_point now)
 {
@@ -401,23 +324,6 @@ bool MissionUploadTransaction::SendVerificationItem(
     return RecordSend(sent, wireBytes, now);
 }
 
-bool MissionUploadTransaction::Start(
-    const std::chrono::steady_clock::time_point now)
-{
-    if (phase_ != MissionUploadPhase::Idle || !wireMissionValid_ ||
-        mission_.empty() ||
-        mission_.size() > dronegcs::ardupilot_mission::MaximumWireMissionItems ||
-        config_.responseTimeout.count() <= 0)
-    {
-        Fail("Prepared Mission is invalid for standard Mission upload.", now);
-        return false;
-    }
-    uploadStartedAt_ = now;
-    phase_ = MissionUploadPhase::AwaitingRequest;
-    ResetRetryBudget();
-    return SendCount(now);
-}
-
 bool MissionUploadTransaction::BeginVerification(
     const std::chrono::steady_clock::time_point now,
     const bool observeReservedHome)
@@ -430,9 +336,7 @@ bool MissionUploadTransaction::BeginVerification(
         Fail("Prepared Mission is invalid for production verification.", now);
         return false;
     }
-    uploadStartedAt_ = now;
     verificationStartedAt_ = now;
-    transportAccepted_ = true;
     observeReservedHome_ = observeReservedHome;
     ResetRetryBudget();
     return SendVerificationList(now);
@@ -466,75 +370,13 @@ bool MissionUploadTransaction::VerifyItem(
 
 bool MissionUploadTransaction::HandleMissionMessage(
     const mavlink_message_t& message,
-    const MissionProtocolPeerIdentity& peer,
+    const MissionVerificationPeerIdentity& peer,
     const std::chrono::steady_clock::time_point now)
 {
     if (IsTerminal() || phase_ == MissionUploadPhase::Idle ||
         !(peer == identity_.peer) || message.sysid != identity_.peer.systemId ||
         message.compid != identity_.peer.componentId)
         return false;
-
-    if ((message.msgid == MAVLINK_MSG_ID_MISSION_REQUEST_INT ||
-         message.msgid == MAVLINK_MSG_ID_MISSION_REQUEST) &&
-        (phase_ == MissionUploadPhase::AwaitingRequest ||
-         phase_ == MissionUploadPhase::AwaitingAck))
-    {
-        std::uint16_t sequence = 0;
-        std::uint8_t targetSystem = 0;
-        std::uint8_t targetComponent = 0;
-        std::uint8_t missionType = MAV_MISSION_TYPE_MISSION;
-        if (message.msgid == MAVLINK_MSG_ID_MISSION_REQUEST_INT)
-        {
-            mavlink_mission_request_int_t request{};
-            mavlink_msg_mission_request_int_decode(&message, &request);
-            sequence = request.seq;
-            targetSystem = request.target_system;
-            targetComponent = request.target_component;
-            missionType = request.mission_type;
-        }
-        else
-        {
-            mavlink_mission_request_t request{};
-            mavlink_msg_mission_request_decode(&message, &request);
-            sequence = request.seq;
-            targetSystem = request.target_system;
-            targetComponent = request.target_component;
-            missionType = request.mission_type;
-        }
-        if (!MatchesTarget(targetSystem, targetComponent, missionType))
-            return false;
-        ++metrics_.missionRequestsReceived;
-        if (sequence >= mission_.size())
-        {
-            Fail("Vehicle requested a Mission sequence outside the prepared route.", now);
-            return true;
-        }
-        ResetRetryBudget();
-        SendItem(sequence, now);
-        return true;
-    }
-
-    if (message.msgid == MAVLINK_MSG_ID_MISSION_ACK &&
-        phase_ == MissionUploadPhase::AwaitingAck)
-    {
-        mavlink_mission_ack_t ack{};
-        mavlink_msg_mission_ack_decode(&message, &ack);
-        if (!MatchesTarget(ack.target_system, ack.target_component,
-            ack.mission_type))
-            return false;
-        if (ack.type != MAV_MISSION_ACCEPTED)
-        {
-            Fail(AckDiagnostic(ack.type), now);
-            return true;
-        }
-        transportAccepted_ = true;
-        verificationStartedAt_ = now;
-        metrics_.uploadDurationMs = ElapsedMilliseconds(
-            uploadStartedAt_, verificationStartedAt_);
-        ResetRetryBudget();
-        SendVerificationList(now);
-        return true;
-    }
 
     if (message.msgid == MAVLINK_MSG_ID_MISSION_COUNT &&
         phase_ == MissionUploadPhase::VerifyingCount)
@@ -642,20 +484,13 @@ void MissionUploadTransaction::Tick(
         return;
     if (retriesInWait_ >= config_.maxRetries)
     {
-        Fail("Mission protocol response timed out after bounded retries.", now);
+        Fail("Mission verification response timed out after bounded retries.", now);
         return;
     }
     ++retriesInWait_;
     ++metrics_.retryCount;
     switch (phase_)
     {
-    case MissionUploadPhase::AwaitingRequest:
-        if (uniqueServed_ == 0) SendCount(now);
-        else SendItem(lastRequestedSequence_, now, false);
-        break;
-    case MissionUploadPhase::AwaitingAck:
-        SendItem(lastRequestedSequence_, now, false);
-        break;
     case MissionUploadPhase::VerifyingCount:
         SendVerificationList(now);
         break;
@@ -686,7 +521,7 @@ void MissionUploadTransaction::Cancel(
 		terminalSourcePhase_ = phase_;
 		FinalizeTiming(now);
 		phase_ = MissionUploadPhase::Cancelled;
-        safeDiagnostic_ = "Mission upload was cancelled.";
+        safeDiagnostic_ = "Mission verification was cancelled.";
     }
 }
 

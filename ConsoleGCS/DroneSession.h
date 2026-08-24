@@ -81,7 +81,7 @@ struct DroneSessionCommandSubmission
 // Owns the complete runtime state and existing MAVLink control stack for one
 // aircraft. This is a ConsoleGCS domain object, not a UE display DTO.
 class DroneSession : public dronegcs::mavftp::IRequestTransport,
-                     public IMissionProtocolTransport
+                     public IMissionVerificationTransport
 {
 public:
     explicit DroneSession(DroneSessionConfig config);
@@ -118,16 +118,12 @@ public:
     bool SendMavFtpPayload(
         const std::array<std::uint8_t, dronegcs::mavftp::PayloadBytes>& payload) override;
     bool SendMissionRequestList();
-    bool SendMissionCount(std::uint16_t count, std::size_t& wireBytes) override;
-    bool SendMissionItemInt(
-        const dronegcs::route_mission::MissionItemIntV1& item,
-        std::size_t& wireBytes) override;
     bool SendMissionRequestList(std::size_t& wireBytes) override;
     bool SendMissionRequestInt(
         std::uint16_t sequence,
         std::size_t& wireBytes) override;
-    void SetMissionProtocolMessageSink(IMissionProtocolMessageSink* sink);
-    MissionProtocolPeerIdentity GetMissionProtocolPeerIdentity() const;
+    void SetMissionVerificationMessageSink(IMissionVerificationMessageSink* sink);
+    MissionVerificationPeerIdentity GetMissionVerificationPeerIdentity() const;
     dronegcs::mavftp::Client* GetMavFtpClient();
     const dronegcs::mavftp::Client* GetMavFtpClient() const;
     std::optional<std::uint16_t> ConsumeMissionCount();
@@ -166,5 +162,5 @@ private:
     std::deque<CommandDispatchResult> completedCommandResults;
     std::unique_ptr<dronegcs::mavftp::Client> mavFtpClient;
     std::optional<std::uint16_t> receivedMissionCount;
-    IMissionProtocolMessageSink* missionProtocolSink = nullptr;
+    IMissionVerificationMessageSink* missionVerificationSink = nullptr;
 };

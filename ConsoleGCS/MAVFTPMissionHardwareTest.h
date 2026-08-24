@@ -18,21 +18,20 @@ struct MAVFTPMissionHardwareTestOptions
 {
     bool enabled = false;
     bool quickTest = false;
-    MissionTransportMode transportMode = MissionTransportMode::MissionProtocol;
     std::string droneId;
     std::string confirmedDroneId;
     std::string artifactSetId;
     dronegcs::route_artifact::Digest256 artifactSetDigest;
     std::int32_t routeSlotIndex = -1;
     std::uint32_t artifactItemLimit = 0;
-    std::uint32_t segmentItemCapacity = 65535U;
-    int requestTimeoutMs = 750;
-    int terminateTimeoutMs = 2500;
-    std::uint32_t requestRetryCount = 3;
-    std::uint32_t writeWindow = 1;
+    std::uint32_t segmentItemCapacity = AppConfigDefaults::MavftpSegmentItems;
+    int requestTimeoutMs = AppConfigDefaults::MavftpRequestTimeoutMs;
+    int terminateTimeoutMs = AppConfigDefaults::MavftpTerminateTimeoutMs;
+    std::uint32_t requestRetryCount = AppConfigDefaults::MavftpRequestRetryCount;
+    std::uint32_t writeWindow = AppConfigDefaults::MavftpWriteWindow;
 };
 
-/** Applies the single CLI > INI > code-default transport configuration merge. */
+/** Applies CLI > INI > code-default MAVFTP parameter precedence. */
 bool ResolveMAVFTPMissionTransportOptions(
     const AppConfig& appConfig,
     bool segmentItemsProvidedByCli,
@@ -86,7 +85,7 @@ struct MAVFTPMissionHardwareTestReport
  * Explicit, single-target hardware validation path. It never participates in
  * RouteUploadManager selection and is constructed only by the opt-in CLI mode.
  */
-class MAVFTPMissionHardwareTest final : public IMissionProtocolMessageSink
+class MAVFTPMissionHardwareTest final : public IMissionVerificationMessageSink
 {
 public:
     MAVFTPMissionHardwareTest(
@@ -104,7 +103,7 @@ public:
 
     bool HandleMissionMessage(
         const mavlink_message_t& message,
-        const MissionProtocolPeerIdentity& peer,
+        const MissionVerificationPeerIdentity& peer,
         std::chrono::steady_clock::time_point now) override;
 
 private:

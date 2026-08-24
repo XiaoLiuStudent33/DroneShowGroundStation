@@ -3,8 +3,6 @@
 #include "MAVFTPMissionTransport.h"
 
 #include "ConsoleUI.h"
-#include "MissionProtocolTransport.h"
-
 #include <algorithm>
 #include <chrono>
 #include <ctime>
@@ -109,12 +107,6 @@ std::unique_ptr<IMissionTransport> CreateConfiguredMissionTransport(
     std::string& diagnostic)
 {
     diagnostic.clear();
-    if (config.transportMode == MissionTransportMode::MissionProtocol)
-    {
-        return CreateMissionProtocolTransport(
-            session, session.GetMissionProtocolPeerIdentity());
-    }
-
     dronegcs::mavftp::Client* const client = session.GetMavFtpClient();
     if (!client)
     {
@@ -132,7 +124,7 @@ std::unique_ptr<IMissionTransport> CreateConfiguredMissionTransport(
     transportConfig.verificationConfig.maxRetries =
         config.mavftpRequestRetryCount;
     return std::make_unique<dronegcs::mission_ftp::MAVFTPMissionTransport>(
-        *client, session, session.GetMissionProtocolPeerIdentity(),
+        *client, session, session.GetMissionVerificationPeerIdentity(),
         transportConfig);
 }
 
@@ -177,7 +169,7 @@ void RouteUploadManager::Shutdown()
         {
             if (target.transport) target.transport->Cancel(now);
             if (target.session)
-                target.session->SetMissionProtocolMessageSink(nullptr);
+                target.session->SetMissionVerificationMessageSink(nullptr);
             target.transport.reset();
             target.session = nullptr;
             target.prepared.clear();
@@ -275,7 +267,7 @@ void RouteUploadManager::DetachJob()
     for (RuntimeTarget& target : activeJob_->targets)
     {
         if (target.session)
-            target.session->SetMissionProtocolMessageSink(nullptr);
+            target.session->SetMissionVerificationMessageSink(nullptr);
         target.transport.reset();
         target.prepared.clear();
     }
@@ -311,7 +303,7 @@ void RouteUploadManager::FailTarget(
 {
 	const dspgcs::UploadRouteState sourceState = target.state.state;
     if (target.session)
-        target.session->SetMissionProtocolMessageSink(nullptr);
+        target.session->SetMissionVerificationMessageSink(nullptr);
     target.session = nullptr;
     target.transport.reset();
     target.prepared.clear();
@@ -358,8 +350,9 @@ bool RouteUploadManager::StartPrepared(
     target.endpoint = session->GetConfig().remoteIp + ":" +
         std::to_string(session->GetConfig().remotePort);
     std::string factoryDiagnostic;
-    target.transport = CreateConfiguredMissionTransport(
-        *session, config_, factoryDiagnostic);
+    target.transport = config_.testTransportFactory
+        ? config_.testTransportFactory(*session, config_, factoryDiagnostic)
+        : CreateConfiguredMissionTransport(*session, config_, factoryDiagnostic);
     if (!target.transport)
     {
         FailTarget(target,
@@ -375,8 +368,8 @@ bool RouteUploadManager::StartPrepared(
             prepareDiagnostic.c_str(), true, now);
         return false;
     }
-    session->SetMissionProtocolMessageSink(
-        target.transport->GetMissionProtocolMessageSink());
+    session->SetMissionVerificationMessageSink(
+        target.transport->GetMissionVerificationMessageSink());
     target.state.state = dspgcs::UploadRouteState::Uploading;
     target.state.errorCode = dspgcs::RouteUploadErrorCode::None;
     target.state.retryable = false;
@@ -387,8 +380,7 @@ bool RouteUploadManager::StartPrepared(
         target.metadata.droneId + " Endpoint=" + target.endpoint +
         " RouteSlot=" +
         std::to_string(target.metadata.routeSlotIndex) + " Items=" +
-        std::to_string(target.metadata.missionItemCount) + " Transport=" +
-        MissionTransportModeName(config_.transportMode));
+        std::to_string(target.metadata.missionItemCount) + " Transport=MAVFTP");
     if (!target.transport->Upload(now))
     {
         const std::string diagnostic = target.transport->GetSafeDiagnostic();
@@ -456,38 +448,35 @@ void RouteUploadManager::ProcessTransactions(
     {
         if (!target.transport) continue;
         target.transport->Tick(now);
-        if (config_.transportMode == MissionTransportMode::MAVFTP)
+        const auto* mavftpTransport = dynamic_cast<
+            const dronegcs::mission_ftp::MAVFTPMissionTransport*>(
+                target.transport.get());
+        if (mavftpTransport)
         {
-            const auto* mavftpTransport = dynamic_cast<
-                const dronegcs::mission_ftp::MAVFTPMissionTransport*>(
-                    target.transport.get());
-            if (mavftpTransport)
+            const auto& mavftp = mavftpTransport->GetMavFtpMetrics();
+            if (mavftp.segmentsPlanned > 0 &&
+                target.lastLoggedMavftpSegment != mavftp.activeSegmentIndex)
             {
-                const auto& mavftp = mavftpTransport->GetMavFtpMetrics();
-                if (mavftp.segmentsPlanned > 0 &&
-                    target.lastLoggedMavftpSegment != mavftp.activeSegmentIndex)
-                {
-                    target.lastLoggedMavftpSegment = mavftp.activeSegmentIndex;
-                    ConsoleUI::AddLog("[RouteUpload] MAVFTP segment DroneID=" +
-                        target.metadata.droneId + " Endpoint=" + target.endpoint +
-                        " RouteSlot=" +
-                        std::to_string(target.metadata.routeSlotIndex) +
-                        " Transport=MAVFTP Segment=" +
-                        std::to_string(mavftp.activeSegmentIndex + 1) + "/" +
-                        std::to_string(mavftp.segmentsPlanned) + " Committed=" +
-                        std::to_string(mavftp.segmentsCommitted));
-                }
-                if (!target.loggedMavftpVerification &&
-                    target.transport->GetStatus() ==
-                        MissionTransportStatus::Verifying)
-                {
-                    target.loggedMavftpVerification = true;
-                    ConsoleUI::AddLog("[RouteUpload] Verification start DroneID=" +
-                        target.metadata.droneId + " Endpoint=" + target.endpoint +
-                        " RouteSlot=" +
-                        std::to_string(target.metadata.routeSlotIndex) +
-                        " Transport=MAVFTP Checks=Count/Home/First/Last");
-                }
+                target.lastLoggedMavftpSegment = mavftp.activeSegmentIndex;
+                ConsoleUI::AddLog("[RouteUpload] MAVFTP segment DroneID=" +
+                    target.metadata.droneId + " Endpoint=" + target.endpoint +
+                    " RouteSlot=" +
+                    std::to_string(target.metadata.routeSlotIndex) +
+                    " Transport=MAVFTP Segment=" +
+                    std::to_string(mavftp.activeSegmentIndex + 1) + "/" +
+                    std::to_string(mavftp.segmentsPlanned) + " Committed=" +
+                    std::to_string(mavftp.segmentsCommitted));
+            }
+            if (!target.loggedMavftpVerification &&
+                target.transport->GetStatus() ==
+                    MissionTransportStatus::Verifying)
+            {
+                target.loggedMavftpVerification = true;
+                ConsoleUI::AddLog("[RouteUpload] Verification start DroneID=" +
+                    target.metadata.droneId + " Endpoint=" + target.endpoint +
+                    " RouteSlot=" +
+                    std::to_string(target.metadata.routeSlotIndex) +
+                    " Transport=MAVFTP Checks=Count/Home/First/Last");
             }
         }
         if (target.transport->ConsumeProgressChanged())
@@ -524,7 +513,7 @@ void RouteUploadManager::ProcessTransactions(
                 SafeLogValue(target.metrics.verificationMismatchDiagnostic,
                     MissionVerificationMismatchDiagnosticMaxBytes));
         }
-        target.session->SetMissionProtocolMessageSink(nullptr);
+        target.session->SetMissionVerificationMessageSink(nullptr);
         target.session = nullptr;
         target.transport.reset();
         if (succeeded)
@@ -543,9 +532,8 @@ void RouteUploadManager::ProcessTransactions(
             ConsoleUI::AddLog("[RouteUpload] Target verified DroneID=" +
                 target.metadata.droneId + " Endpoint=" + target.endpoint +
                 " RouteSlot=" +
-                std::to_string(target.metadata.routeSlotIndex) + " Transport=" +
-                MissionTransportModeName(config_.transportMode) +
-                " Result=Succeeded");
+                std::to_string(target.metadata.routeSlotIndex) +
+                " Transport=MAVFTP Result=Succeeded");
 			PersistTargetTerminal(target);
         }
         else
@@ -597,7 +585,7 @@ void RouteUploadManager::ProcessCancellation(
     {
         if (target.transport) target.transport->Cancel(now);
         if (target.session)
-            target.session->SetMissionProtocolMessageSink(nullptr);
+            target.session->SetMissionVerificationMessageSink(nullptr);
         target.transport.reset();
         target.session = nullptr;
         target.prepared.clear();
@@ -650,7 +638,7 @@ void RouteUploadManager::PersistTargetTerminal(const RuntimeTarget& target)
 	line << "[RouteUpload] Target terminal"
 		<< " DroneID=" << SafeLogValue(target.metadata.droneId, 64)
 		<< " RouteSlot=" << target.metadata.routeSlotIndex
-		<< " Transport=" << MissionTransportModeName(config_.transportMode)
+		<< " Transport=MAVFTP"
 		<< " TerminalPhase=" << SafeLogValue(metrics.terminalPhase, 32)
 		<< " ResultCode=" << RouteErrorName(metrics.resultCode)
 		<< " SafeDiagnostic=" << SafeLogValue(metrics.safeDiagnostic, 512)
@@ -681,7 +669,7 @@ void RouteUploadManager::PersistJobSummary(
 {
 	std::ostringstream line;
 	line << "[RouteUpload] Job terminal summary"
-		<< " Transport=" << MissionTransportModeName(config_.transportMode)
+		<< " Transport=MAVFTP"
 		<< " Targets=" << jobMetrics_.targetCount
 		<< " Succeeded=" << jobMetrics_.succeeded
 		<< " Failed=" << jobMetrics_.failed

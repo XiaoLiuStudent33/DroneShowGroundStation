@@ -89,7 +89,6 @@
     <ClCompile Include="MissionFtpCompiler.cpp" />
     <ClCompile Include="MAVFTPMissionTransport.cpp" />
     <ClCompile Include="MAVFTPMissionHardwareTest.cpp" />
-    <ClCompile Include="MissionProtocolTransport.cpp" />
     <ClCompile Include="MissionUploadTransaction.cpp" />
     <ClCompile Include="RouteUploadManager.cpp" />
     <ClCompile Include="UdpClient.cpp" />
@@ -113,7 +112,6 @@
     <ClInclude Include="MissionFtpCompiler.h" />
     <ClInclude Include="MAVFTPMissionTransport.h" />
     <ClInclude Include="MAVFTPMissionHardwareTest.h" />
-    <ClInclude Include="MissionProtocolTransport.h" />
     <ClInclude Include="MissionTransport.h" />
     <ClInclude Include="MissionUploadTransaction.h" />
     <ClInclude Include="RouteUploadManager.h" />

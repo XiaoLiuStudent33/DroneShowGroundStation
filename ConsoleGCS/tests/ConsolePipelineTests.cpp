@@ -103,8 +103,6 @@ dspgcs_command_enabled=true
 dspgcs_transport_config=config/DSPGCSTransport.ini
 dspgcs_telemetry_interval_ms=500
  artifact_workspace_root=C:\DroneGCSArtifactWorkspace
- [route_upload]
- transport=mavftp
  [performance]
 mavlink_receive_buffer_bytes=8388608
 max_packets_per_drain=8192
@@ -130,8 +128,6 @@ write_window=10
             "MAVLink deployment values were not loaded");
         Expect(config.routeUploadEnabled && !config.realCommandEnabled,
             "Route upload gate was not independent from real command enablement");
-        Expect(config.missionTransport == MissionTransportMode::MAVFTP,
-            "Production Route Upload transport was not loaded");
         Expect(
             config.mavlinkReceiveBufferBytes == 8388608 &&
             config.maxPacketsPerDrain == 8192 &&
@@ -212,23 +208,15 @@ dspgcs_command_enabled=false
             fallbackConfig.mavftpRequestRetryCount ==
                 AppConfigDefaults::MavftpRequestRetryCount &&
             fallbackConfig.mavftpWriteWindow ==
-                AppConfigDefaults::MavftpWriteWindow &&
-            fallbackConfig.missionTransport ==
-                MissionTransportMode::MissionProtocol,
+                AppConfigDefaults::MavftpWriteWindow,
             "missing optional keys did not preserve code defaults");
         Expect(!fallbackConfig.routeUploadEnabled,
             "route_upload_enabled did not default fail-closed");
 
-        Expect(ResolveMissionTransportSelection(
-                MissionTransportMode::MissionProtocol,
-                MissionTransportMode::MAVFTP) == MissionTransportMode::MAVFTP &&
-            ResolveMissionTransportSelection(
-                MissionTransportMode::MAVFTP,
-                MissionTransportMode::MissionProtocol) ==
-                MissionTransportMode::MissionProtocol,
-            "CLI Route Upload transport did not override INI authority");
-
-        TemporaryConfigFile invalidTransport("invalid-transport", R"(
+        const auto expectRemovedTransport = [](const std::string& value)
+        {
+            TemporaryConfigFile removedTransport(
+                "removed-transport-" + value, std::string(R"(
 safe_test_mode=true
 mavlink_network_enabled=false
 real_command_enabled=false
@@ -236,14 +224,16 @@ heartbeat_timeout_ms=3000
 dspgcs_telemetry_enabled=false
 dspgcs_command_enabled=false
 [route_upload]
-transport=MAVFTP
-)" );
-        AppConfig invalidTransportConfig;
-        error.clear();
-        Expect(!AppConfig::Load(invalidTransport.GetPath(),
-                invalidTransportConfig, error) &&
-            error.find("route_upload.transport") != std::string::npos,
-            "invalid case-sensitive Route Upload transport was accepted");
+transport=)") + value + "\n");
+            AppConfig removedTransportConfig;
+            std::string removedError;
+            Expect(!AppConfig::Load(removedTransport.GetPath(),
+                    removedTransportConfig, removedError) &&
+                removedError.find("route_upload.transport was removed") !=
+                    std::string::npos,
+                "removed Route Upload transport key was accepted");
+        };
+        expectRemovedTransport("mavftp");
 
         const std::filesystem::path shippingConfig =
             std::filesystem::path(__FILE__).parent_path()
@@ -251,7 +241,6 @@ transport=MAVFTP
         AppConfig shipping;
         error.clear();
         Expect(AppConfig::Load(shippingConfig.string(), shipping, error) &&
-            shipping.missionTransport == MissionTransportMode::MAVFTP &&
             shipping.mavftpSegmentItems == 4000U &&
             shipping.mavftpWriteWindow == 16U &&
             shipping.mavftpRequestTimeoutMs == 750 &&

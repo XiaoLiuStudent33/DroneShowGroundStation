@@ -164,7 +164,6 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
     bool configPathSet = false;
     MissionProfileProbeOptions probeOptions;
     MAVFTPMissionHardwareTestOptions hardwareTestOptions;
-    std::optional<MissionTransportMode> missionTransportOverride;
     bool quickOnlyOptionSeen = false;
     bool quickRouteSlotSeen = false;
     bool legacyHardwareEntrySeen = false;
@@ -189,25 +188,11 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
         {
             probeOptions.allowWriteProbe = true;
         }
-        else if (argument == "--mission-transport")
-        {
-            std::string value;
-            if (!ReadOptionValue("--mission-transport", index, argc, argv, value))
-                return -1;
-            MissionTransportMode parsedMode{};
-            if (!ParseMissionTransportMode(value, parsedMode))
-            {
-                std::cerr << "--mission-transport accepts missionprotocol or mavftp.\n";
-                return -1;
-            }
-            missionTransportOverride = parsedMode;
-        }
         else if (argument == "--mavftp-test")
         {
             quickOnlyOptionSeen = true;
             hardwareTestOptions.enabled = true;
             hardwareTestOptions.quickTest = true;
-            hardwareTestOptions.transportMode = MissionTransportMode::MAVFTP;
             if (!ReadOptionValue("--mavftp-test", index, argc, argv,
                 hardwareTestOptions.droneId))
                 return -1;
@@ -341,8 +326,6 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
             return -1;
         }
     }
-    if (hardwareTestOptions.enabled && missionTransportOverride)
-        hardwareTestOptions.transportMode = *missionTransportOverride;
     if (probeOptions.allowWriteProbe && !probeOptions.enabled)
     {
         std::cerr << "--allow-mission-write-probe requires --mission-profile-probe <DroneID>.\n";
@@ -376,9 +359,6 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
                "and review the network settings before running.\n";
         return -1;
     }
-    appConfig.missionTransport = ResolveMissionTransportSelection(
-        appConfig.missionTransport, missionTransportOverride);
-
     std::string hardwareOptionsError;
     if (!ResolveMAVFTPMissionTransportOptions(
             appConfig,
@@ -428,8 +408,7 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
         std::string("ROUTE_UPLOAD_ENABLED=") +
         (appConfig.routeUploadEnabled ? "true" : "false"));
     ConsoleUI::AddLog(
-        std::string("MISSION_TRANSPORT=") +
-        MissionTransportModeName(appConfig.missionTransport));
+        "MISSION_TRANSPORT=MAVFTP (frozen production transport)");
     ConsoleUI::AddLog(
         std::string("MODE: ") +
         (appConfig.realCommandEnabled
@@ -542,7 +521,6 @@ int ConsoleGCSApplication::RunProductionMavlink(
         &frozenAssignmentStore);
     RouteUploadManagerConfig routeUploadConfig;
     routeUploadConfig.routeUploadEnabled = appConfig.routeUploadEnabled;
-    routeUploadConfig.transportMode = appConfig.missionTransport;
     routeUploadConfig.mavftpSegmentItems = appConfig.mavftpSegmentItems;
     routeUploadConfig.mavftpRequestTimeoutMs = appConfig.mavftpRequestTimeoutMs;
     routeUploadConfig.mavftpTerminateTimeoutMs = appConfig.mavftpTerminateTimeoutMs;
@@ -564,8 +542,7 @@ int ConsoleGCSApplication::RunProductionMavlink(
         appConfig.realCommandEnabled;
     discoveredSessionDefaults.mavFtpServiceEnabled =
         probeOptions.enabled || hardwareTestOptions.enabled ||
-        (appConfig.routeUploadEnabled &&
-         appConfig.missionTransport == MissionTransportMode::MAVFTP);
+        appConfig.routeUploadEnabled;
     discoveredSessionDefaults.mavFtpRequestTimeoutMs =
         appConfig.mavftpRequestTimeoutMs;
     discoveredSessionDefaults.mavFtpTerminateTimeoutMs =

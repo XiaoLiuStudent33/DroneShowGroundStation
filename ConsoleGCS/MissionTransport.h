@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-class IMissionProtocolMessageSink;
+class IMissionVerificationMessageSink;
 
 enum class MissionTransportStatus : std::uint8_t
 {
@@ -72,6 +72,6 @@ public:
     virtual const std::string& GetVerificationMismatchDiagnostic() const = 0;
     virtual const char* GetTerminalPhaseName() const = 0;
 
-    // Optional ingress hook for transports backed by MAVLink Mission Protocol.
-    virtual IMissionProtocolMessageSink* GetMissionProtocolMessageSink() = 0;
+    // Optional ingress hook for post-transfer Mission count/item verification.
+    virtual IMissionVerificationMessageSink* GetMissionVerificationMessageSink() = 0;
 };

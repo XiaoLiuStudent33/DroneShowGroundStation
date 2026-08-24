@@ -150,17 +150,17 @@ ConsoleUploadJobAuthority
 -> MissionPreparationWorker
 -> Console Artifact mission rows
 -> IMissionTransport
--> MissionProtocolTransport
--> DroneSession Mission Protocol ingress/outbound
+-> MAVFTPMissionTransport
+-> DroneSession endpoint-bound MavFtpClient
 -> shared endpoint-bound sender
 -> ArduPilot/APM
 ```
 
 `RouteUploadManager` 负责 bounded preparation、active upload concurrency、per-target state、cancel、retry、failure isolation、progress、metrics 和 terminal summary。
 
-当前 `RouteUploadManager::StartPrepared` 固定调用 `CreateMissionProtocolTransport(...)`。这是当前 Production default；MAVFTP 没有接管该路径。
+当前 `RouteUploadManager::StartPrepared` 通过单一 production factory 创建 `MAVFTPMissionTransport`。Client 缺失或 MAVFTP 运行失败会进入明确失败，不存在其他协议回退。
 
-`MissionProtocolTransport` 封装 Mission upload transaction、protocol request/ACK correlation 与 verification instrumentation。MissionProtocol 真实硬件垂直链已经完成。
+`MAVFTPMissionTransport` 封装分段 compile/write/commit，并在最后一个 Terminate ACK 后复用通用 Mission Count/Home/First/Last 验证组件。
 
 ## 10. Mission Transport abstraction
 
@@ -170,12 +170,11 @@ ConsoleUploadJobAuthority
 Prepare -> Upload -> Tick -> Verify / Cancel -> terminal status + metrics
 ```
 
-现有实现：
+当前实现：
 
-- `MissionProtocolTransport`：当前生产实现。
-- `MAVFTPMissionTransport`：显式 Hardware Harness / Quick Test 使用的 writer implementation。
+- `MAVFTPMissionTransport`：唯一生产实现，同时供显式 Hardware Harness / Quick Test 复用。
 
-抽象本身不选择生产协议，选择权当前仍在 `RouteUploadManager`。
+抽象本身不提供生产协议选择；`RouteUploadManager` 的 production factory 固定构造 MAVFTP，抽象仅保留测试注入 seam。
 
 ## 11. MAVFTP 实验与硬件验证链
 
@@ -239,16 +238,15 @@ Quick Test 当前从 `Current/manifest.json` 引导，但会使用默认 segment
 | Waypoint | `RouteWaypointGenerationSubsystem` | BatchGenerator、Generator、Validator |
 | Frozen Assignment DSP | `DSPGCSFrozenAssignmentSyncSubsystem` | Console Receiver、Assembler、Store |
 | Upload Job DSP/UI | `DSPGCSUploadJobSubsystem`、`GCSRouteWorkflowCoordinator` | Console Receiver、Authority、StateMirror |
-| Production upload | `RouteUploadManager` | `MissionPreparationWorker`、`MissionProtocolTransport` |
+| Production upload | `RouteUploadManager` | `MissionPreparationWorker`、`MAVFTPMissionTransport`、`MavFtpClient` |
 | MAVFTP test chain | `MAVFTPMissionHardwareTest` | `MavFtpClient`、`MissionFtpCompiler`、`MAVFTPMissionTransport` |
 | Test entry | `ConsolePipelineTests.cpp` | UE `Private/Tests/` |
 
 ## 15. 当前事实标签
 
 - Phase 2A～2G：IMPLEMENTED。
-- RouteUploadManager / UI-3C / MissionProtocol vertical slice：IMPLEMENTED。
+- RouteUploadManager / UI-3C / MAVFTP production vertical slice：IMPLEMENTED。
 - MissionTransport / MissionFtpCompiler / MAVFTP Writer / Hardware Harness / Quick Test：IMPLEMENTED。
-- Production Transport：MissionProtocol。
-- Phase 2I-C.3.D：NOT STARTED。
-- MAVFTP production cutover：NOT IMPLEMENTED / INTENTIONALLY DEFERRED。
+- Production Transport：MAVFTP only。
+- Phase 2I-C.3.D.1-D.3：IMPLEMENTED；D.4 冻结单 Transport 并删除旧选择路径。
 - Mission Ready、timing、RGB 与 mission.dat apply：FIRMWARE UNKNOWN / NOT PROVEN。

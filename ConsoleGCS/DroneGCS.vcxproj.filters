@@ -111,9 +111,6 @@
     <ClCompile Include="MAVFTPMissionHardwareTest.cpp">
       <Filter>Protocol</Filter>
     </ClCompile>
-    <ClCompile Include="MissionProtocolTransport.cpp">
-      <Filter>Protocol</Filter>
-    </ClCompile>
     <ClCompile Include="MissionUploadTransaction.cpp">
       <Filter>Protocol</Filter>
     </ClCompile>
@@ -210,9 +207,6 @@
       <Filter>Protocol</Filter>
     </ClInclude>
     <ClInclude Include="MAVFTPMissionHardwareTest.h">
-      <Filter>Protocol</Filter>
-    </ClInclude>
-    <ClInclude Include="MissionProtocolTransport.h">
       <Filter>Protocol</Filter>
     </ClInclude>
     <ClInclude Include="MissionTransport.h">

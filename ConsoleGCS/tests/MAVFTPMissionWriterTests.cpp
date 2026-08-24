@@ -126,19 +126,15 @@ namespace
         std::vector<std::array<std::uint8_t, ftp::PayloadBytes>> sent;
     };
 
-    MissionProtocolPeerIdentity VerificationPeer()
+    MissionVerificationPeerIdentity VerificationPeer()
     {
         return { TestPeer().droneId, TestPeer().remoteIp,
             TestPeer().remotePort, TestPeer().systemId, TestPeer().componentId };
     }
 
-    class FakeMissionWire final : public IMissionProtocolTransport
+    class FakeMissionWire final : public IMissionVerificationTransport
     {
     public:
-        bool SendMissionCount(std::uint16_t, std::size_t&) override
-            { return false; }
-        bool SendMissionItemInt(const mission::MissionItemIntV1&,
-            std::size_t&) override { return false; }
         bool SendMissionRequestList(std::size_t& bytes) override
             { ++requestLists; bytes = 16; return true; }
         bool SendMissionRequestInt(std::uint16_t sequence,
@@ -376,8 +372,8 @@ namespace
         Expect(dronegcs::ardupilot_mission::BuildWireMission(
                 artifact, wireMission),
             "production verification wire fixture failed");
-        IMissionProtocolMessageSink* const sink =
-            transport.GetMissionProtocolMessageSink();
+        IMissionVerificationMessageSink* const sink =
+            transport.GetMissionVerificationMessageSink();
         Expect(sink != nullptr && sink->HandleMissionMessage(
                 VerificationCount(static_cast<std::uint16_t>(wireMission.size())),
                 VerificationPeer(), now) &&

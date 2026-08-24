@@ -62,11 +62,11 @@ Automation RunTests DroneGCS.
 任何真实 Mission upload
 ```
 
-Quick Test 从 `UnrealGCS/Saved/RouteArtifacts/Current/manifest.json` 引导，再由 `ConsoleArtifactConsumerV2` 执行完整 Artifact 校验。当前 Quick Test 仍使用默认 MAVFTP segment capacity，尚未完成 2I-C.3.D 配置接线。
+Quick Test 从 `UnrealGCS/Saved/RouteArtifacts/Current/manifest.json` 引导，再由 `ConsoleArtifactConsumerV2` 执行完整 Artifact 校验。生产与显式 Hardware Harness 共享已冻结的 MAVFTP 五项参数合同；Harness 仍只能由显式安全入口启动。
 
 ## 5. 当前自动化证据
 
-2026-08-24 使用当前 checkout 中已有 Release 测试程序运行：
+2026-08-24 在当前 checkout 完成 Release x64 Solution Rebuild（0 errors）484 warnings，ExitCode 0），随后运行：
 
 ```text
 --mission-tests = PASS
@@ -76,7 +76,7 @@ Quick Test 从 `UnrealGCS/Saved/RouteArtifacts/Current/manifest.json` 引导，�
 Full ConsoleGCSTests = PASS
 ```
 
-证据限定：本轮未重新 Build、未运行 UE Automation、未运行真实飞控上传。
+证据限定：本轮未运行 UE Automation、未运行真实飞控上传。
 
 ## 6. 用户确认的硬件证据
 

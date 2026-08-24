@@ -20,7 +20,7 @@ extern "C"
 #include "ardupilotmega/mavlink.h"
 }
 
-struct MissionProtocolPeerIdentity
+struct MissionVerificationPeerIdentity
 {
     std::string droneId;
     std::string remoteIp;
@@ -28,7 +28,7 @@ struct MissionProtocolPeerIdentity
     std::uint8_t systemId = 0;
     std::uint8_t componentId = 0;
 
-    bool operator==(const MissionProtocolPeerIdentity& other) const
+    bool operator==(const MissionVerificationPeerIdentity& other) const
     {
         return droneId == other.droneId && remoteIp == other.remoteIp &&
             remotePort == other.remotePort && systemId == other.systemId &&
@@ -36,35 +36,29 @@ struct MissionProtocolPeerIdentity
     }
 };
 
-class IMissionProtocolTransport
+class IMissionVerificationTransport
 {
 public:
-    virtual ~IMissionProtocolTransport() = default;
-    virtual bool SendMissionCount(std::uint16_t count, std::size_t& wireBytes) = 0;
-    virtual bool SendMissionItemInt(
-        const dronegcs::route_mission::MissionItemIntV1& item,
-        std::size_t& wireBytes) = 0;
+    virtual ~IMissionVerificationTransport() = default;
     virtual bool SendMissionRequestList(std::size_t& wireBytes) = 0;
     virtual bool SendMissionRequestInt(
         std::uint16_t sequence,
         std::size_t& wireBytes) = 0;
 };
 
-class IMissionProtocolMessageSink
+class IMissionVerificationMessageSink
 {
 public:
-    virtual ~IMissionProtocolMessageSink() = default;
+    virtual ~IMissionVerificationMessageSink() = default;
     virtual bool HandleMissionMessage(
         const mavlink_message_t& message,
-        const MissionProtocolPeerIdentity& peer,
+        const MissionVerificationPeerIdentity& peer,
         std::chrono::steady_clock::time_point now) = 0;
 };
 
 enum class MissionUploadPhase : std::uint8_t
 {
     Idle,
-    AwaitingRequest,
-    AwaitingAck,
     VerifyingCount,
     VerifyingHome,
     VerifyingFirst,
@@ -81,7 +75,7 @@ struct MissionUploadTransactionIdentity
     std::string uploadJobId;
     std::string droneId;
     std::int32_t routeSlotIndex = -1;
-    MissionProtocolPeerIdentity peer;
+    MissionVerificationPeerIdentity peer;
     std::uint64_t transactionGeneration = 0;
 };
 
@@ -108,24 +102,23 @@ struct MissionUploadTransactionConfig
     std::uint32_t maxRetries = 3;
 };
 
-/** Tick-driven, endpoint-bound standard MAVLink Mission upload transaction. */
-class MissionUploadTransaction final : public IMissionProtocolMessageSink
+/** Tick-driven, endpoint-bound post-MAVFTP Mission verification transaction. */
+class MissionUploadTransaction final : public IMissionVerificationMessageSink
 {
 public:
     MissionUploadTransaction(
         MissionUploadTransactionIdentity identity,
         std::vector<dronegcs::route_mission::MissionItemIntV1> mission,
-        IMissionProtocolTransport& transport,
+        IMissionVerificationTransport& transport,
         MissionUploadTransactionConfig config = {});
 
-    bool Start(std::chrono::steady_clock::time_point now);
-    /** Starts the shared production verifier without sending Mission upload data. */
+    /** Starts verification without sending Mission upload data. */
     bool BeginVerification(
         std::chrono::steady_clock::time_point now,
         bool observeReservedHome);
     bool HandleMissionMessage(
         const mavlink_message_t& message,
-        const MissionProtocolPeerIdentity& peer,
+        const MissionVerificationPeerIdentity& peer,
         std::chrono::steady_clock::time_point now) override;
     void Tick(std::chrono::steady_clock::time_point now);
     void Cancel(std::chrono::steady_clock::time_point now);
@@ -134,7 +127,6 @@ public:
 	MissionUploadPhase GetTerminalSourcePhase() const { return terminalSourcePhase_; }
     bool IsTerminal() const;
     bool Succeeded() const { return phase_ == MissionUploadPhase::Succeeded; }
-    bool TransportAccepted() const { return transportAccepted_; }
     bool ConsumeProgressChanged();
     const std::string& GetSafeDiagnostic() const { return safeDiagnostic_; }
     const std::string& GetVerificationMismatchDiagnostic() const
@@ -146,10 +138,6 @@ public:
     std::size_t GetWireMissionItemCount() const { return mission_.size(); }
 
 private:
-    bool SendCount(std::chrono::steady_clock::time_point now);
-    bool SendItem(std::uint16_t sequence,
-        std::chrono::steady_clock::time_point now,
-        bool countDuplicateRequest = true);
     bool SendVerificationList(std::chrono::steady_clock::time_point now);
     bool SendVerificationItem(
         std::uint16_t sequence,
@@ -169,22 +157,18 @@ private:
 
     MissionUploadTransactionIdentity identity_;
     std::vector<dronegcs::route_mission::MissionItemIntV1> mission_;
-    IMissionProtocolTransport& transport_;
+    IMissionVerificationTransport& transport_;
     MissionUploadTransactionConfig config_;
     bool wireMissionValid_ = false;
     MissionUploadPhase phase_ = MissionUploadPhase::Idle;
 	MissionUploadPhase terminalSourcePhase_ = MissionUploadPhase::Idle;
-    std::vector<bool> served_;
-    std::size_t uniqueServed_ = 0;
     std::uint16_t lastRequestedSequence_ = 0;
     std::uint32_t retriesInWait_ = 0;
     std::chrono::steady_clock::time_point deadline_{};
-    std::chrono::steady_clock::time_point uploadStartedAt_{};
     std::chrono::steady_clock::time_point verificationStartedAt_{};
     MissionUploadTransactionMetrics metrics_;
     std::string safeDiagnostic_;
     std::string verificationMismatchDiagnostic_;
-    bool transportAccepted_ = false;
     bool observeReservedHome_ = false;
     bool progressChanged_ = false;
 };

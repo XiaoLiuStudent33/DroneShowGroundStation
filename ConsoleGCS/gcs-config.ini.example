@@ -27,6 +27,15 @@ max_packets_per_drain=4096
 snapshot_datagram_bytes=61440
 snapshot_items_per_chunk=512
 
+# Route Upload uses MAVFTP only. These five parameters are the frozen
+# production profile; there is no Transport selection key.
+[mavftp]
+segment_items=4000
+request_timeout_ms=750
+terminate_timeout_ms=2500
+request_retry_count=3
+write_window=16
+
 [max_flight]
 # Positive values in meters. Missing keys fall back to 5.0m.
 takeoff_altitude_limit=5.0

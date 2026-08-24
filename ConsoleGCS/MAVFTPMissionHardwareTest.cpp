@@ -72,7 +72,7 @@ bool ResolveMAVFTPQuickTestOptionsFromCurrent(
 {
     error.clear();
     if (!options.quickTest) return true;
-    if (!options.enabled || options.transportMode != MissionTransportMode::MAVFTP)
+    if (!options.enabled)
     {
         error = "MAVFTP quick test requires the explicit MAVFTP hardware-test mode.";
         return false;
@@ -144,17 +144,8 @@ bool ValidateMAVFTPMissionHardwareTestOptions(
 {
     error.clear();
     if (!options.enabled)
-    {
-        if (options.transportMode != MissionTransportMode::MissionProtocol)
-        {
-            error = "MAVFTP transport selection requires the explicit hardware-test entry point.";
-            return false;
-        }
         return true;
-    }
-    if (options.transportMode != MissionTransportMode::MAVFTP)
-        error = "MAVFTP hardware test requires --mission-transport mavftp.";
-    else if (options.droneId.empty())
+    if (options.droneId.empty())
         error = "MAVFTP hardware test requires one explicit DroneID.";
     else if (options.confirmedDroneId != options.droneId)
         error = "MAVFTP hardware confirmation must exactly match the target DroneID.";
@@ -255,7 +246,7 @@ MAVFTPMissionHardwareTest::MAVFTPMissionHardwareTest(
 
 MAVFTPMissionHardwareTest::~MAVFTPMissionHardwareTest() noexcept
 {
-    if (session_) session_->SetMissionProtocolMessageSink(nullptr);
+    if (session_) session_->SetMissionVerificationMessageSink(nullptr);
     preparationWorker_.Shutdown();
 }
 
@@ -582,7 +573,7 @@ void MAVFTPMissionHardwareTest::TickMissionCount(
             std::unique(sampleSequences_.begin(), sampleSequences_.end()),
             sampleSequences_.end());
         sampleIndex_ = 0;
-        session_->SetMissionProtocolMessageSink(this);
+        session_->SetMissionVerificationMessageSink(this);
         if (!BeginCurrentSample(now))
             Finish(false, "First Mission sample request could not be sent.");
         return;
@@ -652,11 +643,11 @@ void MAVFTPMissionHardwareTest::TickSample(
 
 bool MAVFTPMissionHardwareTest::HandleMissionMessage(
     const mavlink_message_t& message,
-    const MissionProtocolPeerIdentity& peer,
+    const MissionVerificationPeerIdentity& peer,
     const std::chrono::steady_clock::time_point)
 {
     if (state_ != State::WaitingSample || !session_ ||
-        !(peer == session_->GetMissionProtocolPeerIdentity()) ||
+        !(peer == session_->GetMissionVerificationPeerIdentity()) ||
         message.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
         return false;
     mavlink_mission_item_int_t item{};
@@ -764,7 +755,7 @@ void MAVFTPMissionHardwareTest::Finish(
     std::string diagnostic)
 {
     if (state_ == State::Complete) return;
-    if (session_) session_->SetMissionProtocolMessageSink(nullptr);
+    if (session_) session_->SetMissionVerificationMessageSink(nullptr);
     report_.completed = true;
     report_.succeeded = success;
     report_.safeDiagnostic = std::move(diagnostic);

@@ -131,7 +131,7 @@ void DroneSession::Stop()
     if (mavFtpClient) mavFtpClient->Shutdown();
     mavFtpClient.reset();
     receivedMissionCount.reset();
-    missionProtocolSink = nullptr;
+    missionVerificationSink = nullptr;
     udp.Close();
     started = false;
     requestSent = false;
@@ -613,10 +613,10 @@ bool DroneSession::ApplyDiscoveredMissionMessage(
             consumed = true;
         }
     }
-    if (missionProtocolSink && config.missionUploadServiceEnabled)
+    if (missionVerificationSink && config.missionUploadServiceEnabled)
     {
-        consumed = missionProtocolSink->HandleMissionMessage(
-            message, GetMissionProtocolPeerIdentity(),
+        consumed = missionVerificationSink->HandleMissionMessage(
+            message, GetMissionVerificationPeerIdentity(),
             std::chrono::steady_clock::now()) || consumed;
     }
     return consumed;
@@ -670,41 +670,6 @@ namespace
     }
 }
 
-bool DroneSession::SendMissionCount(
-    const std::uint16_t count,
-    std::size_t& wireBytes)
-{
-    wireBytes = 0;
-    if (!started || !config.missionUploadServiceEnabled ||
-        !dataManager.GetFlightData().online || count == 0)
-        return false;
-    mavlink_message_t message{};
-    mavlink_msg_mission_count_pack(
-        255, MAV_COMP_ID_MISSIONPLANNER, &message,
-        config.discoveredSystemId, config.discoveredComponentId,
-        count, MAV_MISSION_TYPE_MISSION, 0);
-    return SendMissionWire(udp, message, wireBytes);
-}
-
-bool DroneSession::SendMissionItemInt(
-    const dronegcs::route_mission::MissionItemIntV1& item,
-    std::size_t& wireBytes)
-{
-    wireBytes = 0;
-    if (!started || !config.missionUploadServiceEnabled ||
-        !dataManager.GetFlightData().online ||
-        item.MissionType != MAV_MISSION_TYPE_MISSION)
-        return false;
-    mavlink_message_t message{};
-    mavlink_msg_mission_item_int_pack(
-        255, MAV_COMP_ID_MISSIONPLANNER, &message,
-        config.discoveredSystemId, config.discoveredComponentId,
-        item.Sequence, item.Frame, item.Command, item.Current,
-        item.AutoContinue, item.Param1, item.Param2, item.Param3,
-        item.Param4, item.X, item.Y, item.Z, MAV_MISSION_TYPE_MISSION);
-    return SendMissionWire(udp, message, wireBytes);
-}
-
 bool DroneSession::SendMissionRequestList(std::size_t& wireBytes)
 {
     wireBytes = 0;
@@ -735,15 +700,15 @@ bool DroneSession::SendMissionRequestInt(
     return SendMissionWire(udp, message, wireBytes);
 }
 
-void DroneSession::SetMissionProtocolMessageSink(
-    IMissionProtocolMessageSink* const sink)
+void DroneSession::SetMissionVerificationMessageSink(
+    IMissionVerificationMessageSink* const sink)
 {
-    missionProtocolSink = sink;
+    missionVerificationSink = sink;
 }
 
-MissionProtocolPeerIdentity DroneSession::GetMissionProtocolPeerIdentity() const
+MissionVerificationPeerIdentity DroneSession::GetMissionVerificationPeerIdentity() const
 {
-    MissionProtocolPeerIdentity peer;
+    MissionVerificationPeerIdentity peer;
     peer.droneId = config.droneId;
     peer.remoteIp = config.remoteIp;
     peer.remotePort = static_cast<std::uint16_t>(config.remotePort);

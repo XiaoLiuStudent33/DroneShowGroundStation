@@ -25,17 +25,19 @@ ArduPilot / APM
 
 Route Upload 框架已实现，包括 Live + Route Overlay、RouteAssignment、Artifact Workspace、Waypoint 生成与验证、Frozen Assignment、DSP Upload Job、Console `RouteUploadManager` 和 Mission Transport 抽象。
 
-当前生产上传链仍使用：
+当前生产上传链已冻结为：
 
 ```text
 RouteUploadManager
--> MissionProtocolTransport
+-> MAVFTPMissionTransport
+-> DroneSession endpoint-bound MavFtpClient
+-> shared MAVLink sender/socket
 -> ArduPilot
 ```
 
-MAVFTP 已具备 `MavFtpClient`、FTP ACK/NAK ingress、`MissionFtpCompiler`、分段 writer、Hardware Harness 和 Quick Test，但尚未接管生产 `RouteUploadManager`。下一阶段是 `Phase 2I-C.3.D` 配置化多段 MAVFTP 上传。
+旧的标准 MAVLink Mission 上传 Transport 已退休并从生产源码、配置、CLI 与工程项删除。MAVFTP 失败会明确失败，不存在协议回退。
 
-`Production Mission Ready` 尚未证明；真实 Mission timing、RGB waypoint、`@MISSION/mission.dat` apply 和最终 ready verification 仍属于固件未知项。
+9100 Artifact Items / 9101 Wire Mission Items 的三段真实生产上传已通过 Count/Home/First/Last 验证，Job ElapsedMs=8829。真实 Mission execution timing 与 RGB waypoint 执行仍属于固件验证边界。
 
 ## 文档阅读顺序
 

@@ -24,7 +24,6 @@ namespace
     {
         MAVFTPMissionHardwareTestOptions options;
         options.enabled = true;
-        options.transportMode = MissionTransportMode::MAVFTP;
         options.droneId = "Drone001";
         options.confirmedDroneId = "Drone001";
         options.artifactSetId = "Artifact-Validation-Fixture";
@@ -36,16 +35,12 @@ namespace
         return options;
     }
 
-    void TestDefaultSelectionRemainsMissionProtocol()
+    void TestDisabledHarnessRemainsValid()
     {
         MAVFTPMissionHardwareTestOptions options;
         std::string error;
-        Expect(options.transportMode == MissionTransportMode::MissionProtocol &&
-            ValidateMAVFTPMissionHardwareTestOptions(options, error),
-            "default MissionProtocol selection is not valid");
-        options.transportMode = MissionTransportMode::MAVFTP;
-        Expect(!ValidateMAVFTPMissionHardwareTestOptions(options, error),
-            "MAVFTP selection was accepted without the explicit harness");
+        Expect(ValidateMAVFTPMissionHardwareTestOptions(options, error),
+            "disabled hardware harness options were rejected");
     }
 
     void TestExplicitSafetyContract()
@@ -175,7 +170,6 @@ namespace
         MAVFTPMissionHardwareTestOptions options;
         options.enabled = true;
         options.quickTest = true;
-        options.transportMode = MissionTransportMode::MAVFTP;
         options.droneId = "Drone001";
         options.confirmedDroneId = options.droneId;
         options.routeSlotIndex = 0;
@@ -333,7 +327,7 @@ int RunMAVFTPMissionHardwareTestTests()
 {
     try
     {
-        TestDefaultSelectionRemainsMissionProtocol();
+        TestDisabledHarnessRemainsValid();
         TestExplicitSafetyContract();
         TestRuntimeItemCountsAreNotFrozen();
         TestTransportConfigurationPrecedence();

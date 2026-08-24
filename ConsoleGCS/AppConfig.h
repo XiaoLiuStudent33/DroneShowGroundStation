@@ -7,22 +7,7 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <string>
-
-enum class MissionTransportMode : std::uint8_t
-{
-    MissionProtocol,
-    MAVFTP
-};
-
-const char* MissionTransportModeName(MissionTransportMode mode);
-bool ParseMissionTransportMode(
-    const std::string& value,
-    MissionTransportMode& mode);
-MissionTransportMode ResolveMissionTransportSelection(
-    MissionTransportMode configuredMode,
-    const std::optional<MissionTransportMode>& cliOverride);
 
 namespace AppConfigDefaults
 {
@@ -33,11 +18,11 @@ namespace AppConfigDefaults
     inline constexpr int MaxPacketsPerDrain = 4096;
     inline constexpr int SnapshotDatagramBytes = 60 * 1024;
     inline constexpr int SnapshotItemsPerChunk = 512;
-    inline constexpr std::uint32_t MavftpSegmentItems = 65535U;
+    inline constexpr std::uint32_t MavftpSegmentItems = 4000U;
     inline constexpr int MavftpRequestTimeoutMs = 750;
     inline constexpr int MavftpTerminateTimeoutMs = 2500;
     inline constexpr std::uint32_t MavftpRequestRetryCount = 3U;
-    inline constexpr std::uint32_t MavftpWriteWindow = 1U;
+    inline constexpr std::uint32_t MavftpWriteWindow = 16U;
 
 }
 
@@ -46,10 +31,8 @@ struct AppConfig
     bool safeTestMode = true;
     bool mavlinkNetworkEnabled = false;
     bool realCommandEnabled = false;
-    /** Independent destructive-data gate for standard Mission upload. */
+    /** Independent destructive-data gate for production Route upload. */
     bool routeUploadEnabled = false;
-    /** Production Route Upload selector; missing configuration keeps rollback. */
-    MissionTransportMode missionTransport = MissionTransportMode::MissionProtocol;
     std::string mavlinkBindIP = AppConfigDefaults::MavlinkBindIP;
     int mavlinkBindPort = 0;
     bool dspgcsTelemetryEnabled = false;

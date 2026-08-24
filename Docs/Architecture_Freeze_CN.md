@@ -121,8 +121,8 @@ FleetManager / RoutePreview
 - RouteAssignment、Freeze/Revision、Artifact Workspace、Manifest/READY、Waypoint Generator/Validator 已实现。
 - Frozen Assignment 与 Upload Job 已通过 DSP-GCS 版本化协议连接 UE 和 Console。
 - Console Artifact Consumer、Upload Job Authority、`RouteUploadManager`、Mission Preparation 与 `IMissionTransport` 已实现。
-- 当前 Production Transport 是 `MissionProtocolTransport`。
-- `MavFtpClient`、FTP ingress、`MissionFtpCompiler`、`MAVFTPMissionTransport`、Hardware Harness 与 Quick Test 已实现为显式测试/验证链。
+- 当前 Production Route Upload Transport 唯一固定为 `MAVFTPMissionTransport`。
+- `MavFtpClient`、FTP ingress、`MissionFtpCompiler`、`MAVFTPMissionTransport`、Hardware Harness 与 Quick Test 已实现并完成生产接线。
 
 ### 7.2 FROZEN DIRECTION / NEXT
 
@@ -144,9 +144,9 @@ UE Route Workflow
 
 - 长生命周期 Route Upload 不能塞入现有短命令 `CommandDispatcher`。
 - Route Upload 必须复用 shared UDP sender 和现有 Remote Endpoint authority。
-- 当前生产 `RouteUploadManager` 不得被误写成 MAVFTP；它仍固定选择 `MissionProtocolTransport`。
-- 下一阶段是 `Phase 2I-C.3.D` 配置化多段 MAVFTP。必须复用现有 `MissionFtpCompiler` segment plan，且 `segmentCapacity` 以包含 Reserved Home 的 Wire Mission Items 计数。
-- MAVFTP production cutover 必须在配置化多段、真实飞控验证和明确批准后另行进行。
+- 当前生产 `RouteUploadManager` 只创建 `MAVFTPMissionTransport`；构造或运行失败必须明确失败，不允许协议回退。
+- MAVFTP 必须复用现有 `MissionFtpCompiler` segment plan，且 `segmentCapacity` 以包含 Reserved Home 的 Wire Mission Items 计数。
+- 生产链复用 `DroneSession` 已有 endpoint-bound Client、Tick owner 与 shared UDP sender，不创建第二套 Client 或 Socket。
 
 ### 7.3 DEFERRED
 
@@ -161,7 +161,7 @@ UE Route Workflow
 - Preview SampleRate 不等于飞控 Mission execution rate。
 - Legacy RGB `param1/param2/param3` 不是标准 `MAV_CMD_NAV_WAYPOINT` 语义，属于定制固件兼容行为。
 - `All Write ACKed != Mission Ready`。
-- 真实 Mission timing、RGB 执行、`@MISSION/mission.dat` apply、time-control、custom MAV_CMD_USER 和 Mission-ready verification 当前均为 Firmware Unknown。
+- 9100/4000 三段生产上传的 Count/Home/First/Last verification 已通过；真实 Mission execution timing、RGB 执行、time-control 与 custom MAV_CMD_USER 仍为 Firmware Unknown。
 
 ## 9. 配置与网络
 

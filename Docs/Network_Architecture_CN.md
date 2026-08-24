@@ -40,7 +40,7 @@ DroneManager
 -> DroneSession
    |-> DataManager snapshot
    |-> CommandDispatcher
-   |-> Mission Protocol service
+   |-> Mission verification service
    |-> optional MavFtpClient service
    `-> endpoint-bound sender adapter
 ```
@@ -110,12 +110,12 @@ Upload Job 绑定 ArtifactSet 与 Frozen Assignment identity。Console 只在 al
 
 ```text
 RouteUploadManager
--> MissionProtocolTransport
--> DroneSession
+-> MAVFTPMissionTransport
+-> DroneSession endpoint-bound MavFtpClient
 -> shared sender
 ```
 
-显式 MAVFTP Hardware Harness：
+显式 MAVFTP Hardware Harness 复用相同网络边界：
 
 ```text
 MAVFTPMissionTransport
@@ -123,7 +123,7 @@ MAVFTPMissionTransport
 -> shared sender
 ```
 
-两条路径复用相同 Remote Endpoint 与 socket authority。MAVFTP 尚未接管生产 `RouteUploadManager`。
+两条路径复用相同 Remote Endpoint 与 socket authority。生产 `RouteUploadManager` 已冻结为 MAVFTP-only；失败时明确失败，不切换其他协议。
 
 ## 10. Scale 与 Scheduling
 
