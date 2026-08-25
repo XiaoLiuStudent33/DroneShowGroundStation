@@ -1326,6 +1326,42 @@ bool UGCSRouteWorkflowCoordinator::IsAutoStartInFlight() const
 	}
 }
 
+bool UGCSRouteWorkflowCoordinator::IsCommandSelectionMutationBlocked() const
+{
+	if (bCommandInFlight || IsAutoStartInFlight())
+	{
+		return true;
+	}
+	if (!GameInstanceRef.IsValid())
+	{
+		return false;
+	}
+
+	const UDSPGCSUploadJobSubsystem* Upload =
+		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	if (!Upload)
+	{
+		return false;
+	}
+	const FDSPGCSUploadJobCommandStatus Command = Upload->GetCommandStatus();
+	if (Command.bCommandInFlight)
+	{
+		return true;
+	}
+	if (const dspgcs::UploadJobSnapshotDTO* Snapshot =
+		Upload->GetStateMirror().GetSnapshot())
+	{
+		const bool bTerminal = Snapshot->jobState == dspgcs::UploadJobState::Completed
+			|| Snapshot->jobState == dspgcs::UploadJobState::Failed
+			|| Snapshot->jobState == dspgcs::UploadJobState::Cancelled;
+		if (bTerminal)
+		{
+			return false;
+		}
+	}
+	return Command.bHasActiveJobBinding || Command.bHasExecutableJob;
+}
+
 void UGCSRouteWorkflowCoordinator::HandlePauseUploadClicked()
 {
 	if (!IsInGameThread() || !GameInstanceRef.IsValid()) return;

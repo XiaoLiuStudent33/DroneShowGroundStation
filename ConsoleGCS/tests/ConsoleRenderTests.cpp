@@ -38,7 +38,7 @@ namespace
             return state_;
         }
 
-        bool WriteDashboard(const std::vector<std::string>& lines) override
+        bool WriteDashboard(const ConsoleDashboardFrame& lines) override
         {
             RecordWriter();
             Delay();
@@ -75,7 +75,7 @@ namespace
             delayMs_.store(static_cast<int>(delay.count()));
         }
 
-        std::vector<std::vector<std::string>> Frames() const
+        std::vector<ConsoleDashboardFrame> Frames() const
         {
             std::lock_guard<std::mutex> lock(mutex_);
             return frames_;
@@ -111,7 +111,7 @@ namespace
 
         mutable std::mutex mutex_;
         ConsoleTargetState state_;
-        std::vector<std::vector<std::string>> frames_;
+        std::vector<ConsoleDashboardFrame> frames_;
         std::vector<std::string> linear_;
         std::set<std::thread::id> writerThreads_;
         std::atomic<int> delayMs_{ 0 };
@@ -141,6 +141,17 @@ namespace
             });
     }
 
+    bool Contains(
+        const ConsoleDashboardFrame& lines,
+        const std::string& needle)
+    {
+        return std::any_of(lines.begin(), lines.end(),
+            [&needle](const ConsoleDashboardLine& line)
+            {
+                return line.text.find(needle) != std::string::npos;
+            });
+    }
+
     std::size_t CountContains(
         const std::vector<std::string>& lines,
         const std::string& needle)
@@ -149,6 +160,17 @@ namespace
             lines.begin(), lines.end(), [&needle](const std::string& line)
             {
                 return line.find(needle) != std::string::npos;
+            }));
+    }
+
+    std::size_t CountContains(
+        const ConsoleDashboardFrame& lines,
+        const std::string& needle)
+    {
+        return static_cast<std::size_t>(std::count_if(
+            lines.begin(), lines.end(), [&needle](const ConsoleDashboardLine& line)
+            {
+                return line.text.find(needle) != std::string::npos;
             }));
     }
 
@@ -225,8 +247,13 @@ namespace
         Expect(!frames.empty(), "Dashboard produced no frame");
         const auto& finalFrame = frames.back();
         Expect(finalFrame.size() == 30, "Dashboard height did not match viewport");
-        for (const std::string& line : finalFrame)
-            Expect(line.size() == 72, "Dashboard wrote beyond row boundary");
+        for (const ConsoleDashboardLine& line : finalFrame)
+        {
+            Expect(line.text.size() == 72,
+                "Dashboard wrote beyond row boundary");
+            Expect(line.attributes.size() == 72,
+                "Dashboard attributes exceeded the row boundary");
+        }
         Expect(Contains(finalFrame, "Total Drone : 1"),
             "Fleet total was not on its owned row");
         Expect(CountContains(finalFrame, "Drone001") == 1,
@@ -235,6 +262,61 @@ namespace
             "short row left stale characters from the old long row");
         Expect(Contains(finalFrame, "Job terminal summary"),
             "terminal summary was not readable in Runtime Log");
+    }
+
+    void VerifyDashboardStatusColors()
+    {
+        auto target = std::make_shared<FakeConsoleTarget>(
+            ConsoleOutputHandleKind::Console, 80, 30);
+        Start(target, ConsoleOutputMode::Dashboard);
+        ConsoleUI::UpdateFleet({
+            ConsoleDroneStatus{ "Drone001", true },
+            ConsoleDroneStatus{ "Drone002", false } });
+        Expect(ConsoleUI::WaitUntilIdle(2s), "colored Dashboard did not render");
+
+        auto frames = target->Frames();
+        Expect(!frames.empty(), "colored Dashboard produced no frame");
+        const ConsoleDashboardFrame& initial = frames.back();
+        Expect(initial[4].attributes[14] == ConsoleBrightBlueAttribute,
+            "Total count was not bright blue");
+        Expect(initial[5].attributes[14] == ConsoleBrightGreenAttribute,
+            "Online count was not bright green");
+        Expect(initial[6].attributes[14] == ConsoleBrightRedAttribute,
+            "Offline count was not bright red");
+        for (std::size_t index = 0; index < 8; ++index)
+        {
+            Expect(initial[10].attributes[index] == ConsoleDefaultAttribute &&
+                   initial[11].attributes[index] == ConsoleDefaultAttribute,
+                "DroneID inherited a status color");
+        }
+        for (std::size_t index = 10; index < 16; ++index)
+            Expect(initial[10].attributes[index] == ConsoleBrightGreenAttribute,
+                "ONLINE token was not entirely green");
+        for (std::size_t index = 10; index < 17; ++index)
+            Expect(initial[11].attributes[index] == ConsoleBrightRedAttribute,
+                "OFFLINE token was not entirely red");
+        Expect(initial[10].attributes[16] == ConsoleDefaultAttribute &&
+               initial[11].attributes[17] == ConsoleDefaultAttribute,
+            "status trailing whitespace retained a color");
+
+        ConsoleUI::UpdateFleet({
+            ConsoleDroneStatus{ "Drone001", false },
+            ConsoleDroneStatus{ "Drone002", true } });
+        Expect(ConsoleUI::WaitUntilIdle(2s), "status color transition did not render");
+        ConsoleUI::Shutdown();
+        frames = target->Frames();
+        const ConsoleDashboardFrame& transitioned = frames.back();
+        for (std::size_t index = 10; index < 17; ++index)
+            Expect(transitioned[10].attributes[index] ==
+                    ConsoleBrightRedAttribute,
+                "Online to Offline left the old green attribute");
+        for (std::size_t index = 10; index < 16; ++index)
+            Expect(transitioned[11].attributes[index] ==
+                    ConsoleBrightGreenAttribute,
+                "Offline to Online left the old red attribute");
+        Expect(transitioned[10].attributes[17] == ConsoleDefaultAttribute &&
+               transitioned[11].attributes[16] == ConsoleDefaultAttribute,
+            "status colors leaked into another cell or row");
     }
 
     void VerifyResize()
@@ -252,7 +334,8 @@ namespace
         std::this_thread::sleep_for(10ms);
         auto frames = target->Frames();
         Expect(!frames.empty() && frames.back().size() == 18 &&
-               frames.back().front().size() == 48,
+               frames.back().front().text.size() == 48 &&
+               frames.back().front().attributes.size() == 48,
             "renderer retained stale wide geometry");
 
         target->Resize(20, 8);
@@ -260,7 +343,9 @@ namespace
         Expect(ConsoleUI::WaitUntilIdle(2s), "compact resize failed");
         std::this_thread::sleep_for(10ms);
         frames = target->Frames();
-        Expect(frames.back().size() == 8 && frames.back().front().size() == 20,
+        Expect(frames.back().size() == 8 &&
+               frames.back().front().text.size() == 20 &&
+               frames.back().front().attributes.size() == 20,
             "small viewport did not use bounded compact frame");
         Expect(Contains(frames.back(), "COMPACT"),
             "small viewport did not identify compact dashboard");
@@ -270,7 +355,9 @@ namespace
         Expect(ConsoleUI::WaitUntilIdle(2s), "expanded resize failed");
         std::this_thread::sleep_for(10ms);
         frames = target->Frames();
-        Expect(frames.back().size() == 40 && frames.back().front().size() == 100,
+        Expect(frames.back().size() == 40 &&
+               frames.back().front().text.size() == 100 &&
+               frames.back().front().attributes.size() == 100,
             "renderer did not recover expanded geometry");
         ConsoleUI::Shutdown();
     }
@@ -403,6 +490,7 @@ int RunConsoleRenderTests()
         VerifyModeDetection();
         VerifyLinearIntegrity();
         VerifyDashboardLayoutAndReplacement();
+        VerifyDashboardStatusColors();
         VerifyResize();
         VerifySingleWriterAndProducerOrder();
         VerifyBoundedQueueAndCriticalRetention();

@@ -46,7 +46,7 @@ namespace
             }
 
             bool WriteDashboard(
-                const std::vector<std::string>& /*lines*/) override
+                const ConsoleDashboardFrame& /*lines*/) override
             {
                 return false;
             }

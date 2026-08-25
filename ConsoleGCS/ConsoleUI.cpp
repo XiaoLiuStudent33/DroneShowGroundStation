@@ -160,11 +160,12 @@ namespace
                     info.srWindow.Bottom - info.srWindow.Top + 1);
                 windowLeft_ = info.srWindow.Left;
                 windowTop_ = info.srWindow.Top;
+                defaultAttributes_ = info.wAttributes;
             }
             return state;
         }
 
-        bool WriteDashboard(const std::vector<std::string>& lines) override
+        bool WriteDashboard(const ConsoleDashboardFrame& lines) override
         {
             const ConsoleTargetState state = Inspect();
             if (!state.geometryValid || state.width <= 0 || state.height <= 0)
@@ -186,8 +187,10 @@ namespace
                 state.height, static_cast<short>(lines.size()));
             for (short row = 0; row < count; ++row)
             {
+                const ConsoleDashboardLine& source =
+                    lines[static_cast<std::size_t>(row)];
                 const std::string fitted = FitLine(
-                    lines[static_cast<std::size_t>(row)],
+                    source.text,
                     static_cast<std::size_t>(state.width));
                 const std::wstring wide = ToConsoleWideLine(
                     fitted, static_cast<std::size_t>(state.width));
@@ -199,6 +202,40 @@ namespace
                     written != static_cast<DWORD>(state.width))
                 {
                     return false;
+                }
+
+                const WORD foregroundMask = FOREGROUND_BLUE | FOREGROUND_GREEN |
+                    FOREGROUND_RED | FOREGROUND_INTENSITY;
+                std::vector<WORD> attributes(
+                    static_cast<std::size_t>(state.width), defaultAttributes_);
+                const std::size_t styledCount = (std::min)(
+                    attributes.size(), source.attributes.size());
+                for (std::size_t index = 0; index < styledCount; ++index)
+                {
+                    const std::uint16_t requested = source.attributes[index];
+                    if (requested != ConsoleDefaultAttribute)
+                    {
+                        attributes[index] = static_cast<WORD>(
+                            (defaultAttributes_ & ~foregroundMask) |
+                            (requested & foregroundMask));
+                    }
+                }
+                written = 0;
+                // Text remains valid if attribute output is unavailable. No
+                // producer or fallback writer is allowed to repair the frame.
+                const bool attributesWritten = WriteConsoleOutputAttribute(
+                    output_, attributes.data(), state.width, position, &written) != FALSE
+                    && written == static_cast<DWORD>(state.width);
+                if (!attributesWritten)
+                {
+                    // Best-effort fail-closed presentation: a partial styled
+                    // write is overwritten with the captured default attribute.
+                    // The same renderer thread remains the only console writer.
+                    std::fill(
+                        attributes.begin(), attributes.end(), defaultAttributes_);
+                    written = 0;
+                    WriteConsoleOutputAttribute(
+                        output_, attributes.data(), state.width, position, &written);
                 }
             }
             return true;
@@ -232,6 +269,8 @@ namespace
         short windowTop_ = 0;
         bool cursorHidden_ = false;
         CONSOLE_CURSOR_INFO originalCursor_{ 20, TRUE };
+        WORD defaultAttributes_ =
+            FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
     };
 
     class ConsolePresentationController
@@ -526,15 +565,39 @@ namespace
 
             const short width = state.width;
             const short height = state.height;
-            std::vector<std::string> frame(
-                static_cast<std::size_t>(height),
-                std::string(static_cast<std::size_t>(width), ' '));
+            ConsoleDashboardFrame frame(static_cast<std::size_t>(height));
+            for (ConsoleDashboardLine& line : frame)
+            {
+                line.text.assign(static_cast<std::size_t>(width), ' ');
+                line.attributes.assign(
+                    static_cast<std::size_t>(width), ConsoleDefaultAttribute);
+            }
             const auto put = [&frame, width, height](
                 const short row, const std::string& text)
             {
                 if (row < 0 || row >= height) return;
-                frame[static_cast<std::size_t>(row)] = FitLine(
+                ConsoleDashboardLine& line = frame[static_cast<std::size_t>(row)];
+                line.text = FitLine(
                     text, static_cast<std::size_t>(width));
+                std::fill(
+                    line.attributes.begin(), line.attributes.end(),
+                    ConsoleDefaultAttribute);
+            };
+            const auto style = [&frame, width, height](
+                const short row,
+                const std::size_t begin,
+                const std::size_t count,
+                const std::uint16_t attribute)
+            {
+                if (row < 0 || row >= height || begin >=
+                    static_cast<std::size_t>(width)) return;
+                ConsoleDashboardLine& line = frame[static_cast<std::size_t>(row)];
+                const std::size_t end = (std::min)(
+                    line.attributes.size(), begin + count);
+                std::fill(
+                    line.attributes.begin() + begin,
+                    line.attributes.begin() + end,
+                    attribute);
             };
 
             const std::size_t online = static_cast<std::size_t>(std::count_if(
@@ -549,6 +612,18 @@ namespace
                 put(1, "Total=" + std::to_string(fleet.size()) +
                     " Online=" + std::to_string(online) +
                     " Offline=" + std::to_string(fleet.size() - online));
+                const std::string totalValue = std::to_string(fleet.size());
+                const std::string onlineValue = std::to_string(online);
+                const std::string offlineValue =
+                    std::to_string(fleet.size() - online);
+                style(1, 6, totalValue.size(), ConsoleBrightBlueAttribute);
+                const std::size_t onlineBegin = 6 + totalValue.size() + 8;
+                style(1, onlineBegin, onlineValue.size(),
+                    ConsoleBrightGreenAttribute);
+                const std::size_t offlineBegin =
+                    onlineBegin + onlineValue.size() + 9;
+                style(1, offlineBegin, offlineValue.size(),
+                    ConsoleBrightRedAttribute);
                 const short logRows = (std::max)(short{ 0 },
                     static_cast<short>(height - 3));
                 const std::size_t first = history_.size() >
@@ -568,6 +643,12 @@ namespace
                 put(4, "Total Drone : " + std::to_string(fleet.size()));
                 put(5, "Online      : " + std::to_string(online));
                 put(6, "Offline     : " + std::to_string(fleet.size() - online));
+                style(4, 14, std::to_string(fleet.size()).size(),
+                    ConsoleBrightBlueAttribute);
+                style(5, 14, std::to_string(online).size(),
+                    ConsoleBrightGreenAttribute);
+                style(6, 14, std::to_string(fleet.size() - online).size(),
+                    ConsoleBrightRedAttribute);
                 put(8, "Drone List:");
                 put(9, std::string(static_cast<std::size_t>(width), '-'));
 
@@ -584,9 +665,15 @@ namespace
                     : (std::min)(fleet.size(), droneCapacity);
                 for (std::size_t index = 0; index < visible; ++index)
                 {
-                    put(static_cast<short>(droneStart + index),
-                        fleet[index].droneId + "  " +
-                        (fleet[index].online ? "ONLINE" : "OFFLINE"));
+                    const std::string status =
+                        fleet[index].online ? "ONLINE" : "OFFLINE";
+                    const short targetRow =
+                        static_cast<short>(droneStart + index);
+                    put(targetRow, fleet[index].droneId + "  " + status);
+                    style(targetRow, fleet[index].droneId.size() + 2,
+                        status.size(), fleet[index].online
+                            ? ConsoleBrightGreenAttribute
+                            : ConsoleBrightRedAttribute);
                 }
                 if (overflow && droneCapacity > 0)
                 {
@@ -645,7 +732,7 @@ namespace
         std::uint64_t fleetVersion_ = 0;
         std::uint64_t renderedFleetVersion_ = 0;
         std::thread::id rendererThreadId_;
-        std::vector<std::string> lastFrame_;
+        ConsoleDashboardFrame lastFrame_;
         short lastWidth_ = 0;
         short lastHeight_ = 0;
     };

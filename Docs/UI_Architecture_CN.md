@@ -16,6 +16,14 @@ Applies To: `WBP_GCS_*`、`UGCSUIBridgeSubsystem`、`FGCSUIWidgetPresenter`
 
 C++不得无理由覆盖Designer geometry。只有修复根Canvas/viewport坐标边界时可以设置必要Anchor/Alignment。
 
+### Fleet Select-All 与 Command Selection
+
+- `SelectedCommandDroneIDs` 是 Command Selection 的唯一 Authority；详情选择仍由 `FleetManagerSubsystem::CurrentSelectedDroneID` 独立维护。
+- `BTN_FleetSelectALL` 不遍历五行分页 Widget。`UGCSUIBridgeSubsystem` 一次扫描完整 Fleet，构造排序后的非空 Online DroneID 集合，并与当前 Command Selection 做精确集合比较。
+- 非精确相等显示 `X`，点击后原子替换为全体 Online；精确相等显示 `✓`，点击后原子清空。零 Online 时显示 `X` 且 Disabled。
+- Fleet 上下线后按钮从 Authority 重新派生；新上线目标不会被静默加入。活动 AutoStart/Upload Job 期间复用 Route Workflow mutation gate，禁止改变 Frozen targets。
+- 批量替换最多产生一次 `OnCommandSelectionChanged`、一次 Visualization 同步和一次 Fleet 刷新；重复 Bind 使用 Remove/Add，关闭/重开不创建第二套选择状态。
+
 ## 2. Startup 与 Main Widget
 
 ```text

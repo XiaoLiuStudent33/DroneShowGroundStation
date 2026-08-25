@@ -376,6 +376,12 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 {
 	UnregisterMarqueeInputProcessor();
 	EndTopDownLocateLock();
+	if (UButton* SelectAllButton = FindFleetButton(TEXT("BTN_FleetSelectALL")))
+	{
+		SelectAllButton->OnClicked.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleFleetSelectAllClicked);
+	}
 	if (RouteWorkflowCoordinator)
 	{
 		RouteWorkflowCoordinator->Shutdown();
@@ -736,7 +742,28 @@ void UGCSUIBridgeSubsystem::HandleFleetRowSelectionClicked(const int32 RowIndex)
 
 	const FString& DroneID = CurrentFleetPageDroneIDs[RowIndex];
 	SetCommandDroneSelected(DroneID, !SelectedCommandDroneIDs.Contains(DroneID));
-	RefreshFromFleet();
+}
+
+void UGCSUIBridgeSubsystem::HandleFleetSelectAllClicked()
+{
+	if (IsCommandSelectionMutationBlocked())
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[GCS_FLEET_SELECT_ALL] Rejected: active AutoStart/Upload Job."));
+		RefreshFleetSelectAll();
+		return;
+	}
+
+	const TArray<FString> EligibleDroneIDs = BuildEligibleOnlineCommandDroneIDs();
+	if (EligibleDroneIDs.IsEmpty())
+	{
+		RefreshFleetSelectAll();
+		return;
+	}
+	ReplaceCommandDroneSelection(
+		IsExactCommandSelection(EligibleDroneIDs)
+			? TArray<FString>{}
+			: EligibleDroneIDs);
 }
 
 void UGCSUIBridgeSubsystem::SetCommandDroneSelected(
@@ -744,6 +771,10 @@ void UGCSUIBridgeSubsystem::SetCommandDroneSelected(
 	const bool bSelected)
 {
 	if (DroneID.IsEmpty())
+	{
+		return;
+	}
+	if (IsCommandSelectionMutationBlocked())
 	{
 		return;
 	}
@@ -763,6 +794,8 @@ void UGCSUIBridgeSubsystem::SetCommandDroneSelected(
 		SelectedCommandDroneIDs.Remove(DroneID);
 	}
 	SyncCommandSelectionToVisualization();
+	OnCommandSelectionChanged.Broadcast();
+	RefreshFromFleet();
 
 	const UFleetManagerSubsystem* Fleet = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>()
@@ -785,16 +818,90 @@ TArray<FString> UGCSUIBridgeSubsystem::GetSelectedCommandDroneIDs() const
 void UGCSUIBridgeSubsystem::ReplaceCommandDroneSelection(
 	const TArray<FString>& DroneIDs)
 {
-	SelectedCommandDroneIDs.Reset();
+	if (IsCommandSelectionMutationBlocked())
+	{
+		return;
+	}
+
+	TSet<FString> Replacement;
 	for (const FString& DroneID : DroneIDs)
 	{
 		if (!DroneID.IsEmpty())
 		{
-			SelectedCommandDroneIDs.Add(DroneID);
+			Replacement.Add(DroneID);
 		}
 	}
+	if (Replacement.Num() == SelectedCommandDroneIDs.Num())
+	{
+		bool bEqual = true;
+		for (const FString& DroneID : Replacement)
+		{
+			if (!SelectedCommandDroneIDs.Contains(DroneID))
+			{
+				bEqual = false;
+				break;
+			}
+		}
+		if (bEqual)
+		{
+			return;
+		}
+	}
+
+	SelectedCommandDroneIDs = MoveTemp(Replacement);
 	SyncCommandSelectionToVisualization();
+	OnCommandSelectionChanged.Broadcast();
 	RefreshFromFleet();
+}
+
+TArray<FString> UGCSUIBridgeSubsystem::BuildEligibleOnlineCommandDroneIDs() const
+{
+	TArray<FString> Result;
+	const UGameInstance* GameInstance = GetGameInstance();
+	const UFleetManagerSubsystem* Fleet = GameInstance
+		? GameInstance->GetSubsystem<UFleetManagerSubsystem>()
+		: nullptr;
+	if (!Fleet)
+	{
+		return Result;
+	}
+
+	const TArray<FDroneData> FleetSnapshot =
+		Fleet->GetDronePage(0, Fleet->GetDroneCount());
+	Result.Reserve(FleetSnapshot.Num());
+	for (const FDroneData& Drone : FleetSnapshot)
+	{
+		if (Drone.bOnline && !Drone.DroneID.IsEmpty())
+		{
+			Result.Add(Drone.DroneID);
+		}
+	}
+	Result.Sort();
+	return Result;
+}
+
+bool UGCSUIBridgeSubsystem::IsExactCommandSelection(
+	const TArray<FString>& EligibleDroneIDs) const
+{
+	if (EligibleDroneIDs.IsEmpty()
+		|| EligibleDroneIDs.Num() != SelectedCommandDroneIDs.Num())
+	{
+		return false;
+	}
+	for (const FString& DroneID : EligibleDroneIDs)
+	{
+		if (!SelectedCommandDroneIDs.Contains(DroneID))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+bool UGCSUIBridgeSubsystem::IsCommandSelectionMutationBlocked() const
+{
+	return RouteWorkflowCoordinator
+		&& RouteWorkflowCoordinator->IsCommandSelectionMutationBlocked();
 }
 
 void UGCSUIBridgeSubsystem::RegisterMarqueeInputProcessor()
@@ -2177,6 +2284,7 @@ void UGCSUIBridgeSubsystem::RefreshFromFleet()
 		VisibleDrones,
 		TotalCount,
 		Fleet->GetCurrentSelectedDroneID());
+	RefreshFleetSelectAll();
 
 	FDroneData SelectedDrone;
 	if (Fleet->GetSelectedDrone(SelectedDrone))
@@ -2378,6 +2486,19 @@ UButton* UGCSUIBridgeSubsystem::FindFleetButton(const FName Name) const
 UButton* UGCSUIBridgeSubsystem::FindToolbarButton(const FName Name) const
 {
 	return FGCSUIWidgetPresenter::FindButton(LeftToolbarWidget.Get(), Name);
+}
+
+void UGCSUIBridgeSubsystem::RefreshFleetSelectAll()
+{
+	const TArray<FString> EligibleDroneIDs = BuildEligibleOnlineCommandDroneIDs();
+	SetFleetText(
+		TEXT("BTN_FleetSelectALL_Text"),
+		IsExactCommandSelection(EligibleDroneIDs) ? TEXT("✓") : TEXT("X"));
+	if (UButton* Button = FindFleetButton(TEXT("BTN_FleetSelectALL")))
+	{
+		Button->SetIsEnabled(
+			!EligibleDroneIDs.IsEmpty() && !IsCommandSelectionMutationBlocked());
+	}
 }
 
 UButton* UGCSUIBridgeSubsystem::FindRightPanelButton(const FName Name) const
@@ -2992,6 +3113,24 @@ void UGCSUIBridgeSubsystem::RefreshRoutePlaybackUI()
 void UGCSUIBridgeSubsystem::BindFleetPanelButtons()
 {
 	InitializeFleetRowViews();
+
+	if (UButton* Button = FindFleetButton(TEXT("BTN_FleetSelectALL")))
+	{
+		Button->OnClicked.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleFleetSelectAllClicked);
+		Button->OnClicked.AddDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleFleetSelectAllClicked);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("FleetPanel missing BTN_FleetSelectALL."));
+	}
+	if (!FindFleetText(TEXT("BTN_FleetSelectALL_Text")))
+	{
+		UE_LOG(LogTemp, Error, TEXT("FleetPanel missing BTN_FleetSelectALL_Text."));
+	}
 
 	if (UButton* Button = FindFleetButton(TEXT("BTN_FleetSelectRow1")))
 	{

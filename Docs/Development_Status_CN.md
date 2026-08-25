@@ -3,7 +3,7 @@
 Status: CURRENT
 Authority: 当前实现状态与开发顺序
 Last Updated: 2026-08-25
-Baseline: `master` / `ed96318db10908f8e7d75bb3a0087d2d0976fd4a`
+Baseline: `master` / `17b679265c77d1c2306e1b500574b121b29e525c`
 
 ## 1. DONE / IMPLEMENTED
 
@@ -31,8 +31,11 @@ Route Upload 阶段：
 | UI-3C 上传操作按钮与状态展示 | IMPLEMENTED |
 | Phase 2I-C.3.E.0 Selected Drone 自动分配与 Start 事务 | IMPLEMENTED |
 | Phase 2I-C.3.E.0.1 Console Render Integrity | IMPLEMENTED |
+| Phase 2I-C.3.E.0.2 Console Status Colors / Fleet Select-All | IMPLEMENTED |
 | MAVFTP 9100/4000 三段生产上传与最终验证 | DONE |
 | MissionTransport abstraction | DONE |
+
+E.0.2 冻结结果：Interactive Dashboard 在单 Renderer frame 中为 Total/Online/Offline 数字及 ONLINE/OFFLINE token 写 Win32 attributes；Linear 输出保持纯文本。Fleet Select-All 复用 `SelectedCommandDroneIDs`，作用于全 Fleet Online DroneID 精确集合，支持跨页、上下线重算、一次批量广播和 active AutoStart/Upload mutation gate；未改动 Route Assignment、MAVFTP、DSP DTO 或 UE Asset。
 | MissionFtpCompiler | DONE |
 | MAVFTP Writer Core | DONE |
 | MAVFTP Hardware Harness / Quick Test | DONE |

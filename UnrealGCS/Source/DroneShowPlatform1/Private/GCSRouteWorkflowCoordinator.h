@@ -197,6 +197,7 @@ public:
 	bool Initialize(UGameInstance* InGameInstance, UUserWidget* InRightPanelWidget);
 	void Shutdown();
 	bool ShowRouteWorkflow(FString& OutError);
+	bool IsCommandSelectionMutationBlocked() const;
 
 	static double ComputeProgressRatio(uint64 Completed, uint64 Total);
 	static FString FormatByteCount(uint64 Bytes);

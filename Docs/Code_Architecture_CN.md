@@ -3,7 +3,7 @@
 Status: CURRENT
 Authority: 当前 Production 运行链与 Developer Entry Map
 Last Updated: 2026-08-25
-Baseline: `ed96318db10908f8e7d75bb3a0087d2d0976fd4a`
+Baseline: `17b679265c77d1c2306e1b500574b121b29e525c`
 
 本文只记录当前源码中已经存在的实现。长期约束见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，进度见 [Development_Status_CN.md](Development_Status_CN.md)，Route Upload 语义见 [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md)。
 
@@ -19,6 +19,14 @@ Unreal Engine 5.5.4 Frontend
 ```
 
 ConsoleGCS 是 MAVLink、Remote Endpoint Session、真实命令和 Route Upload execution Authority。UE 是 operator workflow、Route domain 与 visualization Authority；UE 不直接发送 MAVLink。
+
+### Console Dashboard styled frame
+
+Interactive Dashboard 由单一 Renderer thread 提交 `ConsoleDashboardFrame`（每行字符加逐 Cell attribute）。Win32 target 使用 `WriteConsoleOutputCharacterW` 后由同一线程写入 `WriteConsoleOutputAttribute`：Total 数字为 `0x09`，Online/`ONLINE` 为 `0x0A`，Offline/`OFFLINE` 为 `0x0C`，其余 Cell 恢复启动时默认属性。Linear/Pipe/File/Tee 仍只输出纯文本，不含 ANSI 或颜色控制序列。
+
+### Fleet bulk command selection
+
+`UGCSUIBridgeSubsystem::BuildEligibleOnlineCommandDroneIDs` 以完整 Fleet Snapshot 为输入，只收集非空 Online DroneID；`ReplaceCommandDroneSelection` 在一个 Authority 操作内替换 `SelectedCommandDroneIDs`，去重且最多广播一次。`BTN_FleetSelectALL` 的 `X/✓` 和 Enabled 状态均实时派生，不保存独立 latch，也不模拟分页 Row click。`UGCSRouteWorkflowCoordinator::IsCommandSelectionMutationBlocked` 将 AutoStart 和非终态 Upload Job 纳入同一写保护门。
 
 ## 2. Fleet、Telemetry 与短命令
 

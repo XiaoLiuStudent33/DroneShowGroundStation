@@ -46,6 +46,8 @@ enum class EGCSMainPage : uint8
 	Logs
 };
 
+DECLARE_MULTICAST_DELEGATE(FGCSCommandSelectionChanged);
+
 UCLASS()
 class DRONESHOWPLATFORM1_API UGCSUIBridgeSubsystem final : public UGameInstanceSubsystem
 {
@@ -69,6 +71,19 @@ public:
 
 	/** Replaces the existing command target set without changing detail selection. */
 	void ReplaceCommandDroneSelection(const TArray<FString>& DroneIDs);
+
+	/** Native, once-per-authority-mutation notification used by bulk-selection consumers. */
+	FGCSCommandSelectionChanged OnCommandSelectionChanged;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	void ToggleFleetSelectAllForTest() { HandleFleetSelectAllClicked(); }
+	void RefreshFleetSelectAllForTest() { RefreshFleetSelectAll(); }
+	void RebindFleetPanelButtonsForTest() { BindFleetPanelButtons(); }
+	TArray<FString> GetEligibleOnlineCommandDroneIDsForTest() const
+	{
+		return BuildEligibleOnlineCommandDroneIDs();
+	}
+#endif
 
 	static EGCSDroneDisplayStatus ResolveDroneDisplayStatus(
 		EDSPGCSTelemetryLinkState ServerState,
@@ -204,6 +219,9 @@ private:
 	void HandleFleetRow5SelectionClicked();
 
 	UFUNCTION()
+	void HandleFleetSelectAllClicked();
+
+	UFUNCTION()
 	void HandleFleetPreviousPageClicked();
 
 	UFUNCTION()
@@ -261,6 +279,10 @@ private:
 		const TArray<FDroneData>& Drones,
 		int32 TotalCount,
 		const FString& CurrentSelectedDroneID);
+	void RefreshFleetSelectAll();
+	TArray<FString> BuildEligibleOnlineCommandDroneIDs() const;
+	bool IsExactCommandSelection(const TArray<FString>& EligibleDroneIDs) const;
+	bool IsCommandSelectionMutationBlocked() const;
 	FReply HandleFleetRowMouseButtonDown(
 		const FGeometry& Geometry,
 		const FPointerEvent& MouseEvent,

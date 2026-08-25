@@ -54,6 +54,29 @@ struct ConsoleTargetState
     short height = 0;
 };
 
+constexpr std::uint16_t ConsoleDefaultAttribute = 0xFFFFU;
+constexpr std::uint16_t ConsoleBrightBlueAttribute = 0x0009U;
+constexpr std::uint16_t ConsoleBrightGreenAttribute = 0x000AU;
+constexpr std::uint16_t ConsoleBrightRedAttribute = 0x000CU;
+
+struct ConsoleDashboardLine
+{
+    std::string text;
+    std::vector<std::uint16_t> attributes;
+
+    bool operator==(const ConsoleDashboardLine& other) const
+    {
+        return text == other.text && attributes == other.attributes;
+    }
+
+    bool operator!=(const ConsoleDashboardLine& other) const
+    {
+        return !(*this == other);
+    }
+};
+
+using ConsoleDashboardFrame = std::vector<ConsoleDashboardLine>;
+
 /**
  * Test seam and physical-output abstraction. Only the renderer thread calls
  * WriteDashboard/WriteLinear/Restore. Inspect is read-only.
@@ -64,7 +87,7 @@ public:
     virtual ~IConsoleRenderTarget() = default;
 
     virtual ConsoleTargetState Inspect() = 0;
-    virtual bool WriteDashboard(const std::vector<std::string>& lines) = 0;
+    virtual bool WriteDashboard(const ConsoleDashboardFrame& lines) = 0;
     virtual bool WriteLinear(const std::string& line) = 0;
     virtual void Restore() = 0;
 };

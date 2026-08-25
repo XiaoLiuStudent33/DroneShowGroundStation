@@ -2,7 +2,7 @@
 
 Status: CURRENT SUPPORTING
 Last Updated: 2026-08-25
-Baseline: `master` / `ed96318db10908f8e7d75bb3a0087d2d0976fd4a`
+Baseline: `master` / `17b679265c77d1c2306e1b500574b121b29e525c`
 
 本文件是快速接手入口。长期边界以 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md) 为准，当前调用链以 [Code_Architecture_CN.md](Code_Architecture_CN.md) 和 Production 源码为准，进度以 [Development_Status_CN.md](Development_Status_CN.md) 为准。
 
@@ -33,6 +33,13 @@ ArduPilot / APM
 - RouteSlot 不是 DroneID、SYSID 或 particle index。
 - E.0 临时自动规则是 canonical `NumericDroneID - 1`；只消费 `SelectedCommandDroneIDs`，`M_DroneIdLabel` 不是 Authority。
 - UE 不直接向飞控发送 MAVLink。
+
+## E.0.2 操作合同
+
+- Console Interactive Dashboard 的颜色属于 styled frame，由 Renderer thread 一次提交；Total=`0x09`、Online/ONLINE=`0x0A`、Offline/OFFLINE=`0x0C`。Linear/Pipe/File/Tee 不输出 ANSI。
+- Fleet 全选按钮只选择当前完整 Fleet 中的非空 Online DroneID；`X` 表示当前集合不是精确全选，`✓` 表示精确相等，再点清空。零 Online 时 Disabled。
+- 唯一选择 Authority 是 `UGCSUIBridgeSubsystem::SelectedCommandDroneIDs`；不使用当前页、Niagara ID 或 SYSID。新上线 Drone 不会自动加入，下一次显式点击才以当前 Online 集合替换。
+- AutoStart 或非终态 Upload Job 活动时选择 mutation 被禁用，Frozen Assignment 不受按钮影响。
 
 ## 3. 当前 Route Upload 状态
 

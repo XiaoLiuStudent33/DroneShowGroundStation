@@ -9,6 +9,7 @@
 #include "Components/TextBlock.h"
 #include "DSPGCSProductionCommandProviderSubsystem.h"
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
+#include "DSPGCSUploadJobSubsystem.h"
 #include "DroneData.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -208,10 +209,18 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 	UButton* Row2Indicator = FleetPanel && FleetPanel->WidgetTree
 		? Cast<UButton>(FleetPanel->WidgetTree->FindWidget(TEXT("BTN_FleetSelectRow2")))
 		: nullptr;
+	UButton* FleetSelectAllButton = FleetPanel && FleetPanel->WidgetTree
+		? Cast<UButton>(FleetPanel->WidgetTree->FindWidget(TEXT("BTN_FleetSelectALL")))
+		: nullptr;
+	UTextBlock* FleetSelectAllText = FleetPanel && FleetPanel->WidgetTree
+		? Cast<UTextBlock>(FleetPanel->WidgetTree->FindWidget(TEXT("BTN_FleetSelectALL_Text")))
+		: nullptr;
 	TestNotNull(TEXT("Drone001 row has independent SelectedOverlay"), Row1Border);
 	TestNotNull(TEXT("Drone002 row has independent SelectedOverlay"), Row2Border);
 	TestNotNull(TEXT("Drone001 command Checkbox remains independent"), Row1Indicator);
 	TestNotNull(TEXT("Drone002 command Checkbox remains independent"), Row2Indicator);
+	TestNotNull(TEXT("Fleet select-all button exists"), FleetSelectAllButton);
+	TestNotNull(TEXT("Fleet select-all text exists"), FleetSelectAllText);
 	if (MainWidget && Row1Border && Row2Border && Row1Indicator && Row2Indicator)
 	{
 		if (UDSPGCSProductionTelemetryProviderSubsystem* Telemetry =
@@ -226,6 +235,33 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 			EAutomationExpectedErrorFlags::Contains,
 			3);
 		Bridge->BindMainWidget(MainWidget);
+		if (FleetSelectAllButton && FleetSelectAllText)
+		{
+			int32 SelectionChangedCount = 0;
+			const FDelegateHandle SelectionChangedHandle =
+				Bridge->OnCommandSelectionChanged.AddLambda(
+					[&SelectionChangedCount]() { ++SelectionChangedCount; });
+			TestTrue(TEXT("Select-all enabled with online fleet"), FleetSelectAllButton->GetIsEnabled());
+			TestEqual(TEXT("Partial selection displays X"), FleetSelectAllText->GetText().ToString(), FString(TEXT("X")));
+			FleetSelectAllButton->OnClicked.Broadcast();
+			TestEqual(TEXT("Select-all selects all 100 online drones"), Bridge->GetSelectedCommandDroneIDs().Num(), 100);
+			TestEqual(TEXT("Bulk selection broadcasts once"), SelectionChangedCount, 1);
+			TestEqual(TEXT("Exact all-online selection displays check"), FleetSelectAllText->GetText().ToString(), FString(TEXT("✓")));
+			TestEqual(TEXT("Bulk selection preserves detail selection"), Fleet->GetCurrentSelectedDroneID(), FString(TEXT("Drone004")));
+
+			// Rebinding this control group must remain idempotent: one click clears
+			// rather than toggling twice.
+			Bridge->RebindFleetPanelButtonsForTest();
+			FleetSelectAllButton->OnClicked.Broadcast();
+			TestEqual(TEXT("Second toggle clears all command targets"), Bridge->GetSelectedCommandDroneIDs().Num(), 0);
+			TestEqual(TEXT("Rebound click broadcasts exactly once"), SelectionChangedCount, 2);
+			TestEqual(TEXT("Cleared selection displays X"), FleetSelectAllText->GetText().ToString(), FString(TEXT("X")));
+			FleetSelectAllButton->OnClicked.Broadcast();
+			TestEqual(TEXT("Cross-page authority reselects all 100"), Bridge->GetSelectedCommandDroneIDs().Num(), 100);
+			TestEqual(TEXT("Reselect broadcasts once"), SelectionChangedCount, 3);
+			Bridge->OnCommandSelectionChanged.Remove(SelectionChangedHandle);
+			Bridge->ReplaceCommandDroneSelection({ TEXT("Drone001"), TEXT("Drone006") });
+		}
 
 		Fleet->SelectDrone(TEXT("Drone001"));
 		TestEqual(TEXT("Drone001 overlay is visible"), Row1Border->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
@@ -280,6 +316,11 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Fleet retains 100 online drones"), Fleet->GetDroneCount(), 100);
 
 		FGCSTelemetryBatch OfflineBatch;
+		if (FleetSelectAllButton)
+		{
+			FleetSelectAllButton->OnClicked.Broadcast();
+			TestEqual(TEXT("Pre-offline exact selection includes all 100"), Bridge->GetSelectedCommandDroneIDs().Num(), 100);
+		}
 		OfflineBatch.FleetRevision = 1;
 		FDroneDataDelta OfflineDelta;
 		OfflineDelta.DroneID = TEXT("Drone002");
@@ -288,6 +329,16 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 		OfflineBatch.Deltas.Add(OfflineDelta);
 		TestTrue(TEXT("Drone002 offline delta applied"), Fleet->ApplyDeltaBatch(OfflineBatch));
 		TestEqual(TEXT("Offline drone remains in fleet"), Fleet->GetDroneCount(), 100);
+		if (FleetSelectAllButton && FleetSelectAllText)
+		{
+			TestEqual(TEXT("Offline selected drone invalidates exact-all state"), FleetSelectAllText->GetText().ToString(), FString(TEXT("X")));
+			TestEqual(TEXT("Fleet change does not silently alter frozen selection"), Bridge->GetSelectedCommandDroneIDs().Num(), 100);
+			FleetSelectAllButton->OnClicked.Broadcast();
+			const TArray<FString> OnlineOnlyTargets = Bridge->GetSelectedCommandDroneIDs();
+			TestEqual(TEXT("Select-all replaces with 99 online drones"), OnlineOnlyTargets.Num(), 99);
+			TestFalse(TEXT("Offline Drone002 excluded"), OnlineOnlyTargets.Contains(TEXT("Drone002")));
+			TestEqual(TEXT("Online-only exact set displays check"), FleetSelectAllText->GetText().ToString(), FString(TEXT("✓")));
+		}
 		if (StatusRows.IsValidIndex(1) && StatusRows[1])
 		{
 			TestEqual(
@@ -307,6 +358,13 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 		RecoveryDelta.Data.bOnline = true;
 		RecoveryBatch.Deltas.Add(RecoveryDelta);
 		TestTrue(TEXT("Drone002 recovery delta applied"), Fleet->ApplyDeltaBatch(RecoveryBatch));
+		if (FleetSelectAllButton && FleetSelectAllText)
+		{
+			TestEqual(TEXT("Newly online drone does not auto-select"), Bridge->GetSelectedCommandDroneIDs().Num(), 99);
+			TestEqual(TEXT("New online drone changes exact-all display to X"), FleetSelectAllText->GetText().ToString(), FString(TEXT("X")));
+			FleetSelectAllButton->OnClicked.Broadcast();
+			TestEqual(TEXT("Explicit click includes newly online drone"), Bridge->GetSelectedCommandDroneIDs().Num(), 100);
+		}
 		if (StatusRows.IsValidIndex(1) && StatusRows[1])
 		{
 			TestEqual(
@@ -315,8 +373,9 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 				FString(TEXT("Online")));
 			TestTrue(
 				TEXT("Recovered Drone002 row uses online green"),
-				StatusRows[1]->GetColorAndOpacity().GetSpecifiedColor().Equals(OnlineColor));
+					StatusRows[1]->GetColorAndOpacity().GetSpecifiedColor().Equals(OnlineColor));
 		}
+		Bridge->ReplaceCommandDroneSelection({ TEXT("Drone001"), TEXT("Drone006") });
 
 		UButton* NextPageButton = Cast<UButton>(
 			FleetPanel->WidgetTree->FindWidget(TEXT("BTN_FleetNextPage")));
@@ -366,6 +425,15 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 			SparseSnapshot.Drones.Add(Drone);
 		}
 		TestTrue(TEXT("Sparse fleet snapshot applied"), Fleet->ApplySnapshot(SparseSnapshot));
+		if (FleetSelectAllButton && FleetSelectAllText)
+		{
+			TestEqual(TEXT("Stale command IDs invalidate all-selected"), FleetSelectAllText->GetText().ToString(), FString(TEXT("X")));
+			FleetSelectAllButton->OnClicked.Broadcast();
+			const TArray<FString> SparseTargets = Bridge->GetSelectedCommandDroneIDs();
+			TestEqual(TEXT("Sparse fleet click replaces stale set"), SparseTargets.Num(), 2);
+			TestTrue(TEXT("Sparse selection contains Drone001"), SparseTargets.Contains(TEXT("Drone001")));
+			TestTrue(TEXT("Sparse selection contains Drone002"), SparseTargets.Contains(TEXT("Drone002")));
+		}
 		for (int32 RowIndex = 2; RowIndex < StatusRows.Num(); ++RowIndex)
 		{
 			if (StatusRows[RowIndex])
@@ -383,10 +451,122 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 			LogTemp,
 			Display,
 			TEXT("[FLEET_STATUS_TEST] total=100 firstPage=Online offlineRetained=Drone002 recovery=Online secondPage=Drone006 selectionUnchanged blankRowsCleared=3"));
+
+		FGCSFleetSnapshot OfflineOnlySnapshot;
+		OfflineOnlySnapshot.FleetRevision = 4;
+		FDroneData OfflineOnlyDrone;
+		OfflineOnlyDrone.DroneID = TEXT("Drone001");
+		OfflineOnlyDrone.bOnline = false;
+		OfflineOnlySnapshot.Drones.Add(OfflineOnlyDrone);
+		TestTrue(TEXT("Offline-only fleet snapshot applied"), Fleet->ApplySnapshot(OfflineOnlySnapshot));
+		if (FleetSelectAllButton && FleetSelectAllText)
+		{
+			const TArray<FString> BeforeDisabledClick = Bridge->GetSelectedCommandDroneIDs();
+			TestFalse(TEXT("Select-all disabled with zero online drones"), FleetSelectAllButton->GetIsEnabled());
+			TestEqual(TEXT("Zero online displays X"), FleetSelectAllText->GetText().ToString(), FString(TEXT("X")));
+			FleetSelectAllButton->OnClicked.Broadcast();
+			TestEqual(TEXT("Zero-online click leaves selection unchanged"), Bridge->GetSelectedCommandDroneIDs(), BeforeDisabledClick);
+		}
+
+		FGCSFleetSnapshot ActiveGateSnapshot;
+		ActiveGateSnapshot.FleetRevision = 5;
+		FDroneData ActiveDrone;
+		ActiveDrone.DroneID = TEXT("Drone001");
+		ActiveDrone.bOnline = true;
+		ActiveGateSnapshot.Drones.Add(ActiveDrone);
+		TestTrue(TEXT("Active-gate fleet snapshot applied"), Fleet->ApplySnapshot(ActiveGateSnapshot));
+		if (UDSPGCSUploadJobSubsystem* Upload =
+			GameInstance->GetSubsystem<UDSPGCSUploadJobSubsystem>())
+		{
+			Upload->BindUploadJobForTest("active-fleet-selection-job");
+			Bridge->RefreshFleetSelectAllForTest();
+			if (FleetSelectAllButton)
+			{
+				const TArray<FString> BeforeActiveClick = Bridge->GetSelectedCommandDroneIDs();
+				TestFalse(TEXT("Active upload binding disables select-all"), FleetSelectAllButton->GetIsEnabled());
+				FleetSelectAllButton->OnClicked.Broadcast();
+				TestEqual(TEXT("Active upload binding blocks selection mutation"), Bridge->GetSelectedCommandDroneIDs(), BeforeActiveClick);
+			}
+		}
 	}
 
 	GameInstance->Shutdown();
 	return true;
+}
+
+namespace
+{
+	bool RunFleetSelectAllScaleCase(
+		FAutomationTestBase& Test,
+		const int32 DroneCount,
+		const TCHAR* WorldName)
+	{
+		UGameInstance* GameInstance = NewObject<UGameInstance>(GEngine);
+		if (!Test.TestNotNull(TEXT("Scale GameInstance created"), GameInstance))
+		{
+			return false;
+		}
+		GameInstance->InitializeStandalone(WorldName);
+		UFleetManagerSubsystem* Fleet = GameInstance->GetSubsystem<UFleetManagerSubsystem>();
+		UGCSUIBridgeSubsystem* Bridge = GameInstance->GetSubsystem<UGCSUIBridgeSubsystem>();
+		if (!Test.TestNotNull(TEXT("Scale FleetManager initialized"), Fleet)
+			|| !Test.TestNotNull(TEXT("Scale UI bridge initialized"), Bridge))
+		{
+			GameInstance->Shutdown();
+			return false;
+		}
+
+		FGCSFleetSnapshot Snapshot;
+		Snapshot.FleetRevision = 1;
+		Snapshot.Drones.Reserve(DroneCount);
+		for (int32 Index = 1; Index <= DroneCount; ++Index)
+		{
+			FDroneData Drone;
+			Drone.DroneID = FString::Printf(TEXT("Drone%05d"), Index);
+			Drone.bOnline = true;
+			Snapshot.Drones.Add(MoveTemp(Drone));
+		}
+		Test.TestTrue(TEXT("Scale snapshot applied"), Fleet->ApplySnapshot(Snapshot));
+		int32 BroadcastCount = 0;
+		const FDelegateHandle Handle = Bridge->OnCommandSelectionChanged.AddLambda(
+			[&BroadcastCount]() { ++BroadcastCount; });
+		const double StartedAt = FPlatformTime::Seconds();
+		Bridge->ToggleFleetSelectAllForTest();
+		const double DurationMs = (FPlatformTime::Seconds() - StartedAt) * 1000.0;
+		Test.TestEqual(TEXT("One bulk replacement selects the whole fleet"),
+			Bridge->GetSelectedCommandDroneIDs().Num(), DroneCount);
+		Test.TestEqual(TEXT("Bulk replacement broadcasts once"), BroadcastCount, 1);
+		Test.TestEqual(TEXT("Eligible scan covers the whole fleet"),
+			Bridge->GetEligibleOnlineCommandDroneIDsForTest().Num(), DroneCount);
+		UE_LOG(LogTemp, Display,
+			TEXT("[FLEET_SELECT_ALL_SCALE] Drones=%d DurationMs=%.3f Broadcasts=%d WidgetsCreated=0"),
+			DroneCount, DurationMs, BroadcastCount);
+		Bridge->OnCommandSelectionChanged.Remove(Handle);
+		GameInstance->Shutdown();
+		return true;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGCSFleetSelectAllScale1000Test,
+	"DroneGCS.UI.FleetSelectAll.Scale1000",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FGCSFleetSelectAllScale1000Test::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	return RunFleetSelectAllScaleCase(*this, 1000, TEXT("GCSFleetSelectAllScale1000"));
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGCSFleetSelectAllScale20000Test,
+	"DroneGCS.UI.FleetSelectAll.Scale20000",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FGCSFleetSelectAllScale20000Test::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	return RunFleetSelectAllScaleCase(*this, 20000, TEXT("GCSFleetSelectAllScale20000"));
 }
 
 #endif
