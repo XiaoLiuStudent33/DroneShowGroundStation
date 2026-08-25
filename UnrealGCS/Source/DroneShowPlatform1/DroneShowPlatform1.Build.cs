@@ -87,7 +87,8 @@ public class DroneShowPlatform1 : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
-			"CesiumRuntime"
+			"CesiumRuntime",
+			"EngineSettings"
 		});
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
