@@ -2,7 +2,7 @@
 
 Status: CURRENT
 Authority: 当前 UMG 结构、C++ binding 和交互状态边界
-Last Updated: 2026-08-24
+Last Updated: 2026-08-25
 Applies To: `WBP_GCS_*`、`UGCSUIBridgeSubsystem`、`FGCSUIWidgetPresenter`
 
 ## 1. Purpose 与 Authority
@@ -74,6 +74,7 @@ Map/Settings/Logs是独立viewport page。点击当前已显示页面会关闭�
 
 - 点击Fleet row：更新`FleetManager::CurrentSelectedDroneID`，只影响详情。
 - 点击row selector或Marquee：更新`SelectedCommandDroneIDs`，只影响命令目标。
+- Route Upload 自动分配只消费 `SelectedCommandDroneIDs`；零选择不会回退为全部 Online drones。
 - 两套选择禁止合并。
 - 隐藏Panel不会清空任何选择、分页、Selected Count或Drone detail state。
 
@@ -163,9 +164,13 @@ Slider使用0..1归一化；用户scrub时暂停，结束后不自动恢复。�
 - Route browse、Preview load、Assignment/Artifact/Waypoint workflow 协调。
 - Upload aggregate/route state 读取与 `FDSPGCSUploadJobStateMirror` 展示。
 - Start、Pause、Resume、Cancel、Retry Failed、Apply Max Concurrency。
+- Start 自动执行 canonical DroneID 映射、Working Assignment、Freeze、Console Sync 与 exactly-once Job Start；正常 UI 不要求先运行 `BindExplicit`。
+- 映射预览来自 Manifest Route Record，显示 `DroneID -> Slot -> route basename`；不从 Niagara、`M_DroneIdLabel`、SYSID 或屏幕排序取 Authority。
+- E.0 多 Target Job 的实际并发固定为 `1`，UI 不允许用更大值静默启动。
 - Waiting、Preparing、Uploading、RetryWaiting、Succeeded、Failed、Cancelled 统计与总进度。
 - command gate、safe diagnostic 与 stale binding rejection 展示。
+- Workflow 关闭只隐藏 View；AutoStart 在隐藏期间继续接收/推进，重新打开不会重复 Freeze/Sync/Start。
 
 UI command 通过 `UDSPGCSUploadJobSubsystem` 发送 DSP-GCS Upload Job protocol，不直接调用 MAVLink 或 `RouteUploadManager`。
 
-ConsoleGCS 继续 headless，不创建第二套正式 Operator UI。MAVFTP segment/write/timeout 参数尚未进入生产 UI；它们属于 Phase 2I-C.3.D 之后才能冻结的 advanced configuration。
+ConsoleGCS 继续 headless，不创建第二套正式 Operator UI。E.1 真并发调度与 E.2 多机硬件验证尚未完成；Console 重启后的 DroneID 发现顺序风险留给 E.3。

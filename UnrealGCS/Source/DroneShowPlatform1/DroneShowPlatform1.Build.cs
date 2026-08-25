@@ -85,6 +85,17 @@ public class DroneShowPlatform1 : ModuleRules
 		}
 		PublicIncludePaths.Add(RouteMissionIncludePath);
 
+		string DroneIdentityIncludePath = Path.GetFullPath(
+			Path.Combine(ModuleDirectory, "..", "..", "..", "Shared", "DroneIdentity"));
+		if (!Directory.Exists(DroneIdentityIncludePath))
+		{
+			DroneIdentityIncludePath = Path.Combine(
+				Path.GetPathRoot(ModuleDirectory),
+				"DroneShowPlatformShared",
+				"DroneIdentity");
+		}
+		PublicIncludePaths.Add(DroneIdentityIncludePath);
+
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"CesiumRuntime",

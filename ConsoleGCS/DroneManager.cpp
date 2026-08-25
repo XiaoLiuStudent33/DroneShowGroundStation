@@ -6,22 +6,10 @@
  * 不得用 SYSID 合并无人机，也不得因 Heartbeat timeout 从集合中移除 Session。
  */
 #include "DroneManager.h"
+#include "DroneLogicalId.h"
 
 #include <algorithm>
-#include <iomanip>
-#include <sstream>
 #include <utility>
-
-namespace
-{
-    std::string MakeSequentialDroneId(const std::size_t number)
-    {
-        std::ostringstream stream;
-        stream << "Drone" << std::setw(3) << std::setfill('0')
-               << number;
-        return stream.str();
-    }
-}
 
 DroneManager::DroneManager(DroneIdResolver droneIdResolverValue)
     : droneIdResolver(std::move(droneIdResolverValue))
@@ -73,7 +61,8 @@ DroneRegistrationResult DroneManager::RegisterOrRefreshDrone(
         do
         {
             result.droneId =
-                MakeSequentialDroneId(nextDiscoveredDroneNumber++);
+                dronegcs::identity::FormatDroneLogicalId(
+                    static_cast<std::uint64_t>(nextDiscoveredDroneNumber++));
         }
         while (FindDrone(result.droneId) != nullptr);
     }

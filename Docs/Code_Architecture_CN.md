@@ -2,8 +2,8 @@
 
 Status: CURRENT
 Authority: 当前 Production 运行链与 Developer Entry Map
-Last Updated: 2026-08-24
-Baseline: `a494bd14dae00a5b4c24055a426ca1cee98e37f0`
+Last Updated: 2026-08-25
+Baseline: `ed96318db10908f8e7d75bb3a0087d2d0976fd4a`
 
 本文只记录当前源码中已经存在的实现。长期约束见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，进度见 [Development_Status_CN.md](Development_Status_CN.md)，Route Upload 语义见 [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md)。
 
@@ -84,6 +84,8 @@ Fleet snapshot + Route frame 0 + Show Origin
 
 `URouteAssignmentSubsystem` 是 working/frozen Assignment Authority，支持显式 binding、位置匹配、full/degraded freeze policy、one-to-one DroneID/RouteSlot validation、revision 与 source identity。`RouteSlotIndex` 始终是 0-based route identity，不等于 DroneID、SYSID 或 particle index。
 
+`Shared/DroneIdentity/DroneLogicalId.h` 是 Console/UE 共用的 canonical DroneID formatter/parser。E.0 临时规则由 canonical 正整数计算 `RouteSlotIndex = NumericDroneID - 1`；最少三位、超过 999 自然扩展，解析使用 checked integer 与 format round-trip。Console 默认发现编号也复用同一 formatter。
+
 ## 5. Artifact Workspace 与 Waypoint
 
 ```text
@@ -119,6 +121,10 @@ URouteAssignmentSubsystem frozen snapshot
 
 ```text
 GCSRouteWorkflowCoordinator / WBP_GCS_RouteUpload
+-> SelectedCommandDroneIDs snapshot
+-> BuildAndReplaceExplicitWorkingAssignment
+-> Freeze(AllowDegraded)
+-> UDSPGCSFrozenAssignmentSyncSubsystem exact accepted identity
 -> UDSPGCSUploadJobSubsystem
 -> DSPGCSUploadJobProtocol schema 2
 -> DSPGCSUploadJobReceiver
@@ -128,7 +134,9 @@ GCSRouteWorkflowCoordinator / WBP_GCS_RouteUpload
 -> UI state and progress
 ```
 
-已实现 Start、Pause、Resume、Cancel、RetryFailed 与 max concurrency 操作，以及 aggregate snapshot、route page 和 route delta。Upload Job 同时绑定 Artifact identity 与 Frozen Assignment identity；不能只凭任意路径或 UI 内存状态启动。
+Start 由 `UGCSRouteWorkflowCoordinator` 的 E.0 AutoStart 状态机拥有：`ValidatingMapping -> Freezing -> SyncingConsole -> StartingJob -> Completed/Failed/CancelledAsStale`。快照包含排序后的 Command Selection、Fleet session/revision、每台 endpoint、ArtifactSet/digests 以及 Manifest Route Record path/size/digest；Accepted 后重新捕获并逐项比较。`bJobStartAttempted` 在调用前设置，重复 Tick/ACK/重开 Widget 不会创建第二个 Job。
+
+已实现 Start、Pause、Resume、Cancel、RetryFailed 与 max concurrency 操作，以及 aggregate snapshot、route page 和 route delta。E.0 一个 Job 可包含多 Targets，但固定 `MaxConcurrentTargets=1`；E.1/E.2 尚未实现。Upload Job 同时绑定 Artifact identity 与 Frozen Assignment identity；不能只凭任意路径或 UI 内存状态启动。
 
 ## 8. Console Artifact Consumer 与 Upload Authority
 

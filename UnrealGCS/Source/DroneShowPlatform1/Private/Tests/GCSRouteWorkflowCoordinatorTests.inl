@@ -10,6 +10,8 @@
 #include "Components/WidgetSwitcher.h"
 #include "DSPGCSUploadJobProtocol.h"
 #include "DSPGCSUploadJobSubsystem.h"
+#include "DSPGCSFrozenAssignmentSyncSubsystem.h"
+#include "DroneLogicalId.h"
 #include "HAL/PlatformTime.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowOwnershipTest,"DroneGCS.UI.RouteWorkflow.OwnershipAndTeardown",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
@@ -578,17 +580,21 @@ bool FGCSRouteWorkflowUploadCommandGateTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("No Artifact disables all"),NoneEnabled(
 		UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
 	Inputs.bArtifactReady=true;
-	TestTrue(TEXT("No Frozen disables all"),NoneEnabled(
+	TestTrue(TEXT("No valid selected-drone mapping disables all"),NoneEnabled(
 		UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
-	Inputs.bFrozenConsoleAccepted=true;
+	Inputs.bAutoStartMappingValid=true;
 	auto Gate=UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs);
-	TestTrue(TEXT("Ready authorities and NoJob enable only Start"),
+	TestTrue(TEXT("Ready Artifact and selected-drone mapping enable only Start"),
 		Gate.bStartEnabled&&!Gate.bPauseEnabled&&!Gate.bResumeEnabled&&
 		!Gate.bCancelEnabled&&!Gate.bRetryFailedEnabled&&!Gate.bApplyMaxEnabled);
 	Inputs.bCommandInFlight=true;
 	TestTrue(TEXT("Command in-flight disables all"),NoneEnabled(
 		UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
 	Inputs.bCommandInFlight=false;
+	Inputs.bAutoStartInFlight=true;
+	TestTrue(TEXT("AutoStart in-flight disables all"),NoneEnabled(
+		UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
+	Inputs.bAutoStartInFlight=false;
 	Inputs.bHasActiveJobBinding=true;
 	Inputs.bHasExecutableJob=true;
 	Inputs.JobState=static_cast<uint8>(dspgcs::UploadJobState::Validating);
@@ -999,7 +1005,280 @@ bool FGCSRouteWorkflowCommandDispatchTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("Origin inputs disabled during generation"),Latitude&&!Latitude->GetIsEnabled()&&Longitude&&!Longitude->GetIsEnabled()&&Altitude&&!Altitude->GetIsEnabled());
 
-	C->Shutdown(); GI->Shutdown(); return true;
+C->Shutdown(); GI->Shutdown(); return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowCanonicalDroneIdTest,
+	"DroneGCS.UI.RouteWorkflow.AutoStart.CanonicalDroneId",
+	EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowCanonicalDroneIdTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	for (const TPair<FString,uint64>& Value : {
+		TPair<FString,uint64>(TEXT("Drone001"),1),
+		TPair<FString,uint64>(TEXT("Drone010"),10),
+		TPair<FString,uint64>(TEXT("Drone999"),999),
+		TPair<FString,uint64>(TEXT("Drone1000"),1000),
+		TPair<FString,uint64>(TEXT("Drone20000"),20000)})
+	{
+		FTCHARToUTF8 Encoded(*Value.Key);
+		uint64 Parsed=0;
+		TestTrue(*FString::Printf(TEXT("Canonical parse %s"),*Value.Key),
+			dronegcs::identity::TryParseDroneLogicalId(
+				std::string_view(Encoded.Get(),Encoded.Length()),Parsed));
+		TestEqual(*FString::Printf(TEXT("Numeric %s"),*Value.Key),Parsed,Value.Value);
+		TestEqual(*FString::Printf(TEXT("Round-trip %s"),*Value.Key),
+			FString(UTF8_TO_TCHAR(dronegcs::identity::FormatDroneLogicalId(Parsed).c_str())),
+			Value.Key);
+	}
+	const TArray<FString> InvalidValues={FString(),TEXT("Drone1"),TEXT("Drone01"),
+		TEXT("Drone000"),TEXT("Drone0"),TEXT("Drone0001"),TEXT("DroneABC"),
+		TEXT("drone001"),TEXT("DRONE001"),TEXT(" Drone001"),TEXT("Drone001 "),
+		TEXT("Drone-1"),TEXT("Drone001x"),TEXT("Drone18446744073709551616")};
+	for (const FString& Invalid : InvalidValues)
+	{
+		FTCHARToUTF8 Encoded(*Invalid);
+		uint64 Parsed=123;
+		TestFalse(*FString::Printf(TEXT("Reject %s"),*Invalid),
+			dronegcs::identity::TryParseDroneLogicalId(
+				std::string_view(Encoded.Get(),Encoded.Length()),Parsed));
+		TestEqual(TEXT("Rejected parse clears output"),Parsed,static_cast<uint64>(0));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowAutoStartExactlyOnceTest,
+	"DroneGCS.UI.RouteWorkflow.AutoStart.ExactlyOnce",
+	EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowAutoStartExactlyOnceTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UGCSRouteWorkflowCoordinator* C=NewObject<UGCSRouteWorkflowCoordinator>();
+	FGCSRouteAutoStartSnapshot Base;
+	Base.SelectedDroneIDs={TEXT("Drone001"),TEXT("Drone002"),TEXT("Drone010")};
+	Base.FleetSessionID=TEXT("fleet-a"); Base.FleetRevision=7;
+	Base.ArtifactSetID=TEXT("artifact-a"); Base.ArtifactSetDigest=FString::ChrN(64,TEXT('a'));
+	Base.SourceDatasetDigest=FString::ChrN(64,TEXT('b')); Base.RouteSlotCount=1000;
+	for(const TPair<FString,int32>& Mapping : {
+		TPair<FString,int32>(TEXT("Drone001"),0),TPair<FString,int32>(TEXT("Drone002"),1),
+		TPair<FString,int32>(TEXT("Drone010"),9)})
+	{
+		FGCSRouteAutoStartTargetSnapshot Target; Target.DroneID=Mapping.Key;
+		Target.EndpointIdentity=TEXT("127.0.0.1:")+FString::FromInt(14550+Mapping.Value);
+		Target.NumericDroneID=Mapping.Value+1; Target.RouteSlotIndex=Mapping.Value;
+		Target.RouteRelativePath=FString::Printf(TEXT("routes/%d.waypoints"),Mapping.Value);
+		Target.RouteFileByteSize=100; Target.RouteDigest=FString::ChrN(64,TEXT('c'));
+		Base.Targets.Add(Target);
+	}
+	int32 BuildCalls=0,FreezeCalls=0,SyncCalls=0,StartCalls=0;
+	FGCSRouteAutoStartSyncObservation Observation;
+	Observation.State=static_cast<uint8>(EDSPGCSFrozenAssignmentSyncState::SyncingToConsole);
+	FGCSRouteAutoStartTestHooks Hooks;
+	Hooks.CaptureSnapshot=[Base](FGCSRouteAutoStartSnapshot& Out,FString&){Out=Base;return true;};
+	Hooks.BuildAssignment=[&BuildCalls](FGCSRouteAutoStartSnapshot&,FString&){++BuildCalls;return true;};
+	Hooks.FreezeAssignment=[&FreezeCalls](FGCSRouteAutoStartSnapshot& S,FString&){++FreezeCalls;S.AssignmentAuthoritySessionID=TEXT("authority-a");S.AssignmentRevision=8;return true;};
+	Hooks.StartSync=[&SyncCalls,&Observation](FGCSRouteAutoStartSnapshot& S,FString&){++SyncCalls;S.SyncTransactionID=TEXT("sync-a");S.AssignmentDigest=FString::ChrN(64,TEXT('d'));Observation.TransactionID=S.SyncTransactionID;Observation.FleetSessionID=S.FleetSessionID;Observation.AssignmentAuthoritySessionID=S.AssignmentAuthoritySessionID;Observation.AssignmentRevision=S.AssignmentRevision;Observation.AssignmentDigest=S.AssignmentDigest;return true;};
+	Hooks.ObserveSync=[&Observation](){return Observation;};
+	Hooks.ValidateSnapshot=[](const FGCSRouteAutoStartSnapshot&,FString&){return true;};
+	Hooks.StartJob=[&StartCalls](int32 Maximum,FString& OutID,FString&){++StartCalls;OutID=TEXT("job-a");return Maximum==1;};
+	C->SetAutoStartTestHooks(MoveTemp(Hooks));
+	FString Error;
+	TestTrue(TEXT("Begin automatic transaction"),C->StartAutoStartForTest(Error));
+	TestEqual(TEXT("One Working Assignment"),BuildCalls,1);
+	TestEqual(TEXT("One Freeze"),FreezeCalls,1);
+	TestEqual(TEXT("One Sync"),SyncCalls,1);
+	TestEqual(TEXT("No Job before Accepted"),StartCalls,0);
+	TestFalse(TEXT("Repeated click rejected"),C->StartAutoStartForTest(Error));
+	Observation.State=static_cast<uint8>(EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted);
+	C->TickRefreshForTest(); C->TickRefreshForTest(); C->TickRefreshForTest();
+	TestEqual(TEXT("Start exactly once"),StartCalls,1);
+	TestEqual(TEXT("Completed state"),C->GetAutoStartStateForTest(),EGCSRouteAutoStartState::Completed);
+	TestTrue(TEXT("Start dispatched flag"),C->GetAutoStartSnapshotForTest().bJobStartDispatched);
+	TestEqual(TEXT("Three selected targets preserved"),C->GetAutoStartSnapshotForTest().Targets.Num(),3);
+	Observation.TransactionID=TEXT("late-job-a-sync");
+	C->TickRefreshForTest();
+	TestEqual(TEXT("Late cross-transaction Accepted cannot restart"),StartCalls,1);
+	C->Shutdown(); return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowAutoStartSingleTargetTest,
+	"DroneGCS.UI.RouteWorkflow.AutoStart.SingleTarget",
+	EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowAutoStartSingleTargetTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UGCSRouteWorkflowCoordinator* C=NewObject<UGCSRouteWorkflowCoordinator>();
+	FGCSRouteAutoStartSnapshot Base; Base.SelectedDroneIDs={TEXT("Drone001")};
+	Base.FleetSessionID=TEXT("fleet-single"); Base.FleetRevision=3;
+	Base.ArtifactSetID=TEXT("artifact-single"); Base.ArtifactSetDigest=FString::ChrN(64,TEXT('a'));
+	Base.SourceDatasetDigest=FString::ChrN(64,TEXT('b')); Base.RouteSlotCount=1000;
+	FGCSRouteAutoStartTargetSnapshot Target; Target.DroneID=TEXT("Drone001");
+	Target.EndpointIdentity=TEXT("127.0.0.1:14550"); Target.NumericDroneID=1;
+	Target.RouteSlotIndex=0; Target.RouteRelativePath=TEXT("manifest/routes/slot-zero.waypoints");
+	Target.RouteFileByteSize=100; Target.RouteDigest=FString::ChrN(64,TEXT('c'));
+	Base.Targets.Add(Target);
+	int32 BuildCalls=0,FreezeCalls=0,SyncCalls=0,StartCalls=0;
+	FGCSRouteAutoStartSyncObservation Observation;
+	Observation.State=static_cast<uint8>(EDSPGCSFrozenAssignmentSyncState::SyncingToConsole);
+	FGCSRouteAutoStartTestHooks Hooks;
+	Hooks.CaptureSnapshot=[Base](FGCSRouteAutoStartSnapshot& Out,FString&){Out=Base;return true;};
+	Hooks.BuildAssignment=[&BuildCalls](FGCSRouteAutoStartSnapshot&,FString&){++BuildCalls;return true;};
+	Hooks.FreezeAssignment=[&FreezeCalls](FGCSRouteAutoStartSnapshot& S,FString&){++FreezeCalls;S.AssignmentAuthoritySessionID=TEXT("authority-single");S.AssignmentRevision=4;return true;};
+	Hooks.StartSync=[&SyncCalls,&Observation](FGCSRouteAutoStartSnapshot& S,FString&)
+	{
+		++SyncCalls; S.SyncTransactionID=TEXT("sync-single"); S.AssignmentDigest=FString::ChrN(64,TEXT('d'));
+		Observation.TransactionID=S.SyncTransactionID; Observation.FleetSessionID=S.FleetSessionID;
+		Observation.AssignmentAuthoritySessionID=S.AssignmentAuthoritySessionID;
+		Observation.AssignmentRevision=S.AssignmentRevision; Observation.AssignmentDigest=S.AssignmentDigest;
+		return true;
+	};
+	Hooks.ObserveSync=[&Observation](){return Observation;};
+	Hooks.ValidateSnapshot=[](const FGCSRouteAutoStartSnapshot&,FString&){return true;};
+	Hooks.StartJob=[&StartCalls](int32 Maximum,FString& JobID,FString&){++StartCalls;JobID=TEXT("job-single");return Maximum==1;};
+	C->SetAutoStartTestHooks(MoveTemp(Hooks)); FString Error;
+	TestTrue(TEXT("Single target transaction begins"),C->StartAutoStartForTest(Error));
+	Observation.State=static_cast<uint8>(EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted);
+	C->AdvanceAutoStartForTest(); C->AdvanceAutoStartForTest();
+	TestEqual(TEXT("Single target builds once"),BuildCalls,1);
+	TestEqual(TEXT("Single target freezes once"),FreezeCalls,1);
+	TestEqual(TEXT("Single target syncs once"),SyncCalls,1);
+	TestEqual(TEXT("Single target starts once"),StartCalls,1);
+	TestEqual(TEXT("Single target count"),C->GetAutoStartSnapshotForTest().Targets.Num(),1);
+	TestEqual(TEXT("Drone001 maps to RouteSlot 0"),C->GetAutoStartSnapshotForTest().Targets[0].RouteSlotIndex,0);
+	TestEqual(TEXT("Manifest record path is preserved"),
+		C->GetAutoStartSnapshotForTest().Targets[0].RouteRelativePath,
+		FString(TEXT("manifest/routes/slot-zero.waypoints")));
+	C->Shutdown(); return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowAutoStartFailClosedTest,
+	"DroneGCS.UI.RouteWorkflow.AutoStart.FailClosed",
+	EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowAutoStartFailClosedTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	AddExpectedError(TEXT("[ROUTE_AUTO_START]"),EAutomationExpectedErrorFlags::Contains,4);
+	auto RunScenario=[this](const FString& Name,const bool bSyncFailure,const bool bStaleAccepted)
+	{
+		UGCSRouteWorkflowCoordinator* C=NewObject<UGCSRouteWorkflowCoordinator>();
+		FGCSRouteAutoStartSnapshot Base; Base.SelectedDroneIDs={TEXT("Drone001")};
+		Base.FleetSessionID=TEXT("fleet-a"); Base.FleetRevision=1; Base.ArtifactSetID=TEXT("artifact-a");
+		Base.ArtifactSetDigest=FString::ChrN(64,TEXT('a')); Base.SourceDatasetDigest=FString::ChrN(64,TEXT('b')); Base.RouteSlotCount=1000;
+		FGCSRouteAutoStartTargetSnapshot Target; Target.DroneID=TEXT("Drone001");Target.EndpointIdentity=TEXT("127.0.0.1:14550");Target.NumericDroneID=1;Target.RouteSlotIndex=0;Target.RouteRelativePath=TEXT("routes/0.waypoints");Target.RouteFileByteSize=100;Target.RouteDigest=FString::ChrN(64,TEXT('c'));Base.Targets.Add(Target);
+		int32 StartCalls=0; FGCSRouteAutoStartSyncObservation Observation;
+		Observation.State=static_cast<uint8>(EDSPGCSFrozenAssignmentSyncState::SyncingToConsole);
+		FGCSRouteAutoStartTestHooks Hooks;
+		Hooks.CaptureSnapshot=[Base](FGCSRouteAutoStartSnapshot& Out,FString&){Out=Base;return true;};
+		Hooks.BuildAssignment=[](FGCSRouteAutoStartSnapshot&,FString&){return true;};
+		Hooks.FreezeAssignment=[](FGCSRouteAutoStartSnapshot& S,FString&){S.AssignmentAuthoritySessionID=TEXT("authority-a");S.AssignmentRevision=2;return true;};
+		Hooks.StartSync=[&Observation](FGCSRouteAutoStartSnapshot& S,FString&){S.SyncTransactionID=TEXT("sync-a");S.AssignmentDigest=FString::ChrN(64,TEXT('d'));Observation.TransactionID=S.SyncTransactionID;Observation.FleetSessionID=S.FleetSessionID;Observation.AssignmentAuthoritySessionID=S.AssignmentAuthoritySessionID;Observation.AssignmentRevision=S.AssignmentRevision;Observation.AssignmentDigest=S.AssignmentDigest;return true;};
+		Hooks.ObserveSync=[&Observation](){return Observation;};
+		Hooks.ValidateSnapshot=[bStaleAccepted](const FGCSRouteAutoStartSnapshot&,FString& Error){if(bStaleAccepted){Error=TEXT("Synthetic selection/fleet/endpoint/artifact/record stale");return false;}return true;};
+		Hooks.StartJob=[&StartCalls](int32,FString&,FString&){++StartCalls;return true;};
+		C->SetAutoStartTestHooks(MoveTemp(Hooks)); FString Error;
+		TestTrue(*Name,C->StartAutoStartForTest(Error));
+		if(bSyncFailure){Observation.State=static_cast<uint8>(EDSPGCSFrozenAssignmentSyncState::SyncFailed);Observation.LastError=TEXT("Synthetic Console reject/timeout");}
+		else{Observation.State=static_cast<uint8>(EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted);}
+		C->AdvanceAutoStartForTest();
+		TestEqual(TEXT("Rejected scenario does not Start Job"),StartCalls,0);
+		TestTrue(TEXT("Rejected scenario is terminal"),C->GetAutoStartStateForTest()==EGCSRouteAutoStartState::Failed||C->GetAutoStartStateForTest()==EGCSRouteAutoStartState::CancelledAsStale);
+		C->Shutdown();
+	};
+	RunScenario(TEXT("AutoStartConsoleReject"),true,false);
+	RunScenario(TEXT("AutoStartStaleAuthorities"),false,true);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowAutoStartPreflightRejectMatrixTest,
+	"DroneGCS.UI.RouteWorkflow.AutoStart.PreflightRejectMatrix",
+	EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowAutoStartPreflightRejectMatrixTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const TArray<FString> Rejections={
+		TEXT("No drones selected"),TEXT("Unknown selected drone"),TEXT("Selected drone offline"),
+		TEXT("Invalid canonical DroneID"),TEXT("Duplicate numeric DroneID"),
+		TEXT("Duplicate RouteSlot"),TEXT("RouteSlot out of range"),
+		TEXT("Manifest Route Record missing"),TEXT("Artifact is not READY"),
+		TEXT("Upload job already active")};
+	for(const FString& Rejection : Rejections)
+	{
+		UGCSRouteWorkflowCoordinator* C=NewObject<UGCSRouteWorkflowCoordinator>();
+		int32 BuildCalls=0,FreezeCalls=0,SyncCalls=0,StartCalls=0;
+		FGCSRouteAutoStartTestHooks Hooks;
+		Hooks.CaptureSnapshot=[Rejection](FGCSRouteAutoStartSnapshot&,FString& Error)
+		{
+			Error=Rejection;
+			return false;
+		};
+		Hooks.BuildAssignment=[&BuildCalls](FGCSRouteAutoStartSnapshot&,FString&){++BuildCalls;return true;};
+		Hooks.FreezeAssignment=[&FreezeCalls](FGCSRouteAutoStartSnapshot&,FString&){++FreezeCalls;return true;};
+		Hooks.StartSync=[&SyncCalls](FGCSRouteAutoStartSnapshot&,FString&){++SyncCalls;return true;};
+		Hooks.StartJob=[&StartCalls](int32,FString&,FString&){++StartCalls;return true;};
+		C->SetAutoStartTestHooks(MoveTemp(Hooks));
+		FString Error;
+		TestFalse(*Rejection,C->StartAutoStartForTest(Error));
+		TestEqual(*FString::Printf(TEXT("%s returns its diagnostic"),*Rejection),Error,Rejection);
+		TestEqual(TEXT("Rejected preflight does not build"),BuildCalls,0);
+		TestEqual(TEXT("Rejected preflight does not Freeze"),FreezeCalls,0);
+		TestEqual(TEXT("Rejected preflight does not Sync"),SyncCalls,0);
+		TestEqual(TEXT("Rejected preflight does not Start Job"),StartCalls,0);
+		C->Shutdown();
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowAutoStartStaleMatrixTest,
+	"DroneGCS.UI.RouteWorkflow.AutoStart.StaleMatrix",
+	EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowAutoStartStaleMatrixTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const TArray<FString> StaleReasons={TEXT("Command Selection changed"),TEXT("Fleet Session changed"),
+		TEXT("Fleet Revision changed"),TEXT("endpoint changed"),TEXT("Online state changed"),
+		TEXT("ArtifactSetID changed"),TEXT("Manifest digest changed"),
+		TEXT("Route record digest/path/size changed")};
+	AddExpectedError(TEXT("[ROUTE_AUTO_START]"),EAutomationExpectedErrorFlags::Contains,StaleReasons.Num()*2);
+	for(const FString& StaleReason : StaleReasons)
+	{
+		UGCSRouteWorkflowCoordinator* C=NewObject<UGCSRouteWorkflowCoordinator>();
+		FGCSRouteAutoStartSnapshot Base; Base.SelectedDroneIDs={TEXT("Drone001")};
+		Base.FleetSessionID=TEXT("fleet-a"); Base.FleetRevision=1;
+		Base.ArtifactSetID=TEXT("artifact-a"); Base.ArtifactSetDigest=FString::ChrN(64,TEXT('a'));
+		Base.SourceDatasetDigest=FString::ChrN(64,TEXT('b')); Base.RouteSlotCount=1000;
+		FGCSRouteAutoStartTargetSnapshot Target; Target.DroneID=TEXT("Drone001");
+		Target.EndpointIdentity=TEXT("127.0.0.1:14550"); Target.NumericDroneID=1;
+		Target.RouteSlotIndex=0; Target.RouteRelativePath=TEXT("routes/0.waypoints");
+		Target.RouteFileByteSize=100; Target.RouteDigest=FString::ChrN(64,TEXT('c'));
+		Base.Targets.Add(Target);
+		int32 StartCalls=0;
+		FGCSRouteAutoStartSyncObservation Observation;
+		Observation.State=static_cast<uint8>(EDSPGCSFrozenAssignmentSyncState::SyncingToConsole);
+		FGCSRouteAutoStartTestHooks Hooks;
+		Hooks.CaptureSnapshot=[Base](FGCSRouteAutoStartSnapshot& Out,FString&){Out=Base;return true;};
+		Hooks.BuildAssignment=[](FGCSRouteAutoStartSnapshot&,FString&){return true;};
+		Hooks.FreezeAssignment=[](FGCSRouteAutoStartSnapshot& S,FString&){S.AssignmentAuthoritySessionID=TEXT("authority-a");S.AssignmentRevision=2;return true;};
+		Hooks.StartSync=[&Observation](FGCSRouteAutoStartSnapshot& S,FString&)
+		{
+			S.SyncTransactionID=TEXT("sync-a"); S.AssignmentDigest=FString::ChrN(64,TEXT('d'));
+			Observation.TransactionID=S.SyncTransactionID; Observation.FleetSessionID=S.FleetSessionID;
+			Observation.AssignmentAuthoritySessionID=S.AssignmentAuthoritySessionID;
+			Observation.AssignmentRevision=S.AssignmentRevision; Observation.AssignmentDigest=S.AssignmentDigest;
+			return true;
+		};
+		Hooks.ObserveSync=[&Observation](){return Observation;};
+		Hooks.ValidateSnapshot=[StaleReason](const FGCSRouteAutoStartSnapshot&,FString& Error){Error=StaleReason;return false;};
+		Hooks.StartJob=[&StartCalls](int32,FString&,FString&){++StartCalls;return true;};
+		C->SetAutoStartTestHooks(MoveTemp(Hooks)); FString Error;
+		TestTrue(*FString::Printf(TEXT("Begin %s"),*StaleReason),C->StartAutoStartForTest(Error));
+		Observation.State=static_cast<uint8>(EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted);
+		C->AdvanceAutoStartForTest();
+		TestEqual(*FString::Printf(TEXT("%s cannot Start Job"),*StaleReason),StartCalls,0);
+		TestEqual(TEXT("Changed authority cancels transaction as stale"),
+			C->GetAutoStartStateForTest(),EGCSRouteAutoStartState::CancelledAsStale);
+		C->Shutdown();
+	}
+	return true;
 }
 
 #endif

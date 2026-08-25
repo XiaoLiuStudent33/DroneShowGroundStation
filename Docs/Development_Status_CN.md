@@ -2,8 +2,8 @@
 
 Status: CURRENT
 Authority: 当前实现状态与开发顺序
-Last Updated: 2026-08-24
-Baseline: `master` / `d2f933c6e4a180d3996452fee58827801dfd3cb1`
+Last Updated: 2026-08-25
+Baseline: `master` / `ed96318db10908f8e7d75bb3a0087d2d0976fd4a`
 
 ## 1. DONE / IMPLEMENTED
 
@@ -29,6 +29,7 @@ Route Upload 阶段：
 | Phase 2G DSP Upload Job Protocol | IMPLEMENTED |
 | RouteUploadManager / 并发、取消、重试、状态 | IMPLEMENTED |
 | UI-3C 上传操作按钮与状态展示 | IMPLEMENTED |
+| Phase 2I-C.3.E.0 Selected Drone 自动分配与 Start 事务 | IMPLEMENTED |
 | MAVFTP 9100/4000 三段生产上传与最终验证 | DONE |
 | MissionTransport abstraction | DONE |
 | MissionFtpCompiler | DONE |
@@ -39,6 +40,9 @@ Route Upload 阶段：
 
 ```text
 UE Route Workflow
+-> SelectedCommandDroneIDs
+-> canonical DroneID -> RouteSlot (`NumericDroneID - 1`，临时 E.0 规则)
+-> explicit Working Assignment -> Freeze(AllowDegraded) -> Console Accepted
 -> DSP-GCS Upload Job
 -> ConsoleUploadJobAuthority
 -> RouteUploadManager
@@ -53,10 +57,10 @@ UE Route Workflow
 
 ## 2. CURRENT / NEXT
 
-当前阶段：
+当前完成点：
 
 ```text
-Phase 2I-C.3.D.4 — MAVFTP Single-Transport Freeze
+Phase 2I-C.3.E.0 — Automatic Selected-Drone Assignment and Start Transaction
 ```
 
 已冻结：
@@ -65,15 +69,20 @@ Phase 2I-C.3.D.4 — MAVFTP Single-Transport Freeze
 - 复用现有 `MissionFtpCompiler` 的唯一 deterministic segment plan，不创建第二套 planner。
 - MAVFTP 参数、Quick Test、retry/timeout、逐段日志与 metrics 的生产接线。
 - 真实飞控 9100/4000 三段 `CLEAR + NO_CLEAR` 与 Count/Home/First/Last 验证。
+- 正常 UI Start 已不依赖手工 `RouteAssignment.BindExplicit`；该 Cmd 只保留诊断用途。
+- E.0 支持一个 Job 的多 Target，但 `MaxConcurrentTargets` 安全冻结为 `1`。
+- 自动事务在 Console Accepted 后重新校验 Selection/Fleet/endpoint/Artifact/Manifest/Route record，并且每个事务最多发送一次 Start。
 
 ## 3. NOT STARTED
 
-- 多机并发上传与 20000 台目标架构扩展。
+- E.1 全局 outstanding cap 与多 Target 真并发上传。
+- E.2 多机硬件规模验证与调度冻结。
 
 ## 4. DEFERRED
 
 - 10000-drone chunked/sharded Route Store。
 - Backup Drone Replacement、故障补点、冲突预测、120-degree rejoin rule。
+- E.3 Console 重启后的 DroneID 发现顺序/稳定身份风险。
 
 ## 5. FIRMWARE UNKNOWN
 
@@ -100,9 +109,11 @@ Target=Succeeded / Job ElapsedMs=8829
 
 ## 7. 当前验证快照
 
-2026-08-24 已使用当前 checkout 完成 Release x64 Solution Rebuild（0 errors）484 warnings，ExitCode 0），随后运行：
+2026-08-25 已使用当前 checkout 完成 Release x64 Solution Build（0 errors、12 warnings、ExitCode 0），随后运行：
 
 ```text
+--drone-id-tests = PASS
+--artifact-v2-consumer-tests = PASS
 --mission-tests = PASS
 --mission-upload-tests = PASS
 --upload-job-tests = PASS
@@ -110,7 +121,7 @@ Target=Succeeded / Job ElapsedMs=8829
 Full ConsoleGCSTests = PASS
 ```
 
-本轮没有运行 UE Automation，没有运行真实飞控上传。
+UE Development/DebugGame Editor Build 均为 PASS；E.0 AutoStart 专项 6/6 PASS，Route Assignment + Frozen Sync + DSP Upload Job + Route Workflow 合并回归 164/164 PASS。本轮没有运行真实飞控上传。
 
 当前 Artifact 样本位于 `UnrealGCS/Saved/RouteArtifacts/Current/manifest.json`：Schema 2、9100 frames、1000 RouteSlots、1000 route records；`Saved` 样本不是应提交的 Production 源码。
 

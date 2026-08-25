@@ -20,7 +20,7 @@
   <PropertyGroup><IntDir>$(Platform)\$(Configuration)\DSPGCSAcceptance\</IntDir><OutDir>$(Platform)\$(Configuration)\</OutDir></PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile><WarningLevel>Level3</WarningLevel><SDLCheck>true</SDLCheck><ConformanceMode>true</ConformanceMode><LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;$(ProjectDir)\..\Shared\RouteMission;$(ProjectDir)\..\Shared\RouteWaypoint;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;$(ProjectDir)\..\Shared\RouteMission;$(ProjectDir)\..\Shared\RouteWaypoint;$(ProjectDir)\..\Shared\DroneIdentity;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
     <Link><SubSystem>Console</SubSystem><AdditionalDependencies>%(AdditionalDependencies);ws2_32.lib</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>

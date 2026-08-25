@@ -2,8 +2,8 @@
 
 Status: CURRENT
 Authority: 当前 Route domain、Upload Job、Mission Transport 与下一阶段边界
-Last Updated: 2026-08-24
-Baseline: `d2f933c6e4a180d3996452fee58827801dfd3cb1`
+Last Updated: 2026-08-25
+Baseline: `ed96318db10908f8e7d75bb3a0087d2d0976fd4a`
 
 历史证据见 [Legacy BGC2 Route Upload Audit](History/Audit_Legacy_BGC2_RouteUpload_CN.md) 与 [2026-08-14 DroneGCS Gap Audit](History/Audit_DroneGCS_RouteUpload_Gap_CN.md)。历史 Audit 不代表当前实现状态。
 
@@ -28,6 +28,7 @@ Waypoint Generation                IMPLEMENTED
 Waypoint Validation                IMPLEMENTED
 Artifact Freeze / READY            IMPLEMENTED
 Frozen Assignment DSP              IMPLEMENTED
+Selected-Drone Auto Assignment     IMPLEMENTED (E.0, SERIAL TARGETS)
 DSP-GCS Upload Job                 IMPLEMENTED
 Console Artifact Consumer          IMPLEMENTED
 Console RouteUploadManager         IMPLEMENTED
@@ -64,7 +65,9 @@ DroneID <-> RouteSlotIndex
 - working/frozen snapshot、monotonic Revision、source identity 与 digest。
 - conflict、unassigned、vacant 与质量信息。
 
-禁止使用 SYSID、particle index 或 `DroneID == RouteSlotIndex` 假设。
+E.0 的临时自动映射规则是 `RouteSlotIndex = NumericDroneID - 1`。输入只来自 `SelectedCommandDroneIDs`，DroneID 必须通过共享 canonical parser；零选择、offline/unknown、非法或重复 ID、越界 Slot、缺失 Manifest Route Record 均整体失败。正常 UI 不再依赖手工 `RouteAssignment.BindExplicit`，该命令仅保留诊断用途。
+
+禁止使用 SYSID、Detail Selection、Niagara particle index、屏幕排序或“所有 Online Drone”隐式回退。`M_DroneIdLabel` 只是可视化下标材质，不是 DroneID/RouteSlot Authority。
 
 ## 5. Waypoint Generation / Validation — IMPLEMENTED
 
@@ -108,6 +111,8 @@ UE Frozen Assignment
 
 Upload Job 必须双绑定 Artifact 与 accepted Frozen Assignment，不得仅凭 RouteSlot 数字或任意路径启动。
 
+E.0 Start 在长生命周期 `UGCSRouteWorkflowCoordinator` 中执行有界事务：捕获已排序 Command Selection、Fleet session/revision/endpoint 与 Artifact/Manifest/Route record identity，一次性建立 explicit Working Assignment，`Freeze(AllowDegraded)`，等待精确匹配 Transaction/Fleet/Authority/Revision/Digest 的 Console Accepted，再重新校验全部快照并 exactly-once 创建一个多 Target Job。每次新的 Start 都重新建立 Frozen，不复用来源未知的旧 Frozen。
+
 ## 8. DSP-GCS Upload Job — IMPLEMENTED
 
 `DSPGCSUploadJobProtocol` schema 2 已实现：
@@ -133,6 +138,8 @@ ConsoleUploadJobAuthority
 ```
 
 `RouteUploadManager` 已实现 preparation bound、max active uploads、per-route lifecycle、cancel/retry、failure isolation、progress、metrics 与 terminal summary。
+
+E.0 可由一次 Start 创建 N 个 Targets，但传给生产 Job 的 `MaxConcurrentTargets` 固定为 `1`；E.1 全局 outstanding cap 和 E.2 多机硬件验证完成前不开放并行飞控发送。
 
 当前 `RouteUploadManager::StartPrepared` 的 production factory 只创建 `MAVFTPMissionTransport`，并借用 Session 已有 Client。构造或运行失败会明确失败，不会切换协议。
 

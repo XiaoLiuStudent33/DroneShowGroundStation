@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
+#include "RouteAssignmentTypes.h"
 #include "UObject/Object.h"
 
 #include "GCSRouteWorkflowCoordinator.generated.h"
@@ -11,6 +12,60 @@ class UGameInstance;
 class UListView;
 class UUserWidget;
 class UWidget;
+
+enum class EGCSRouteAutoStartState : uint8
+{
+	Idle,
+	ValidatingMapping,
+	Freezing,
+	SyncingConsole,
+	StartingJob,
+	Completed,
+	Failed,
+	CancelledAsStale
+};
+
+struct FGCSRouteAutoStartTargetSnapshot
+{
+	FString DroneID;
+	FString EndpointIdentity;
+	int32 NumericDroneID = 0;
+	int32 RouteSlotIndex = INDEX_NONE;
+	FString RouteRelativePath;
+	int64 RouteFileByteSize = 0;
+	FString RouteDigest;
+};
+
+struct FGCSRouteAutoStartSnapshot
+{
+	FString TransactionID;
+	TArray<FString> SelectedDroneIDs;
+	FString FleetSessionID;
+	int64 FleetRevision = 0;
+	FString ArtifactSetID;
+	FString ArtifactSetDigest;
+	FString SourceDatasetDigest;
+	int32 RouteSlotCount = 0;
+	TArray<FGCSRouteAutoStartTargetSnapshot> Targets;
+	FRouteAssignmentSourceIdentity AssignmentSourceIdentity;
+	FString AssignmentAuthoritySessionID;
+	int64 AssignmentRevision = 0;
+	FString AssignmentDigest;
+	FString SyncTransactionID;
+	bool bJobStartAttempted = false;
+	bool bJobStartDispatched = false;
+};
+
+struct FGCSRouteAutoStartSyncObservation
+{
+	uint8 State = 0;
+	FString FleetSessionID;
+	FString AssignmentAuthoritySessionID;
+	int64 AssignmentRevision = 0;
+	FString AssignmentDigest;
+	FString TransactionID;
+	FString LastError;
+};
 
 /** Stable, identity-only ListView item. Route state remains in the Phase 2G mirror. */
 UCLASS()
@@ -22,12 +77,18 @@ public:
 	int32 GetRouteSlotIndex() const { return RouteSlotIndex; }
 	const FString& GetUploadJobID() const { return UploadJobID; }
 	const FString& GetSnapshotToken() const { return SnapshotToken; }
+	bool IsAutoStartPreview() const { return bAutoStartPreview; }
+	const FString& GetPreviewDroneID() const { return PreviewDroneID; }
+	const FString& GetPreviewRouteRelativePath() const { return PreviewRouteRelativePath; }
 
 private:
 	friend class UGCSRouteWorkflowCoordinator;
 	int32 RouteSlotIndex = INDEX_NONE;
 	FString UploadJobID;
 	FString SnapshotToken;
+	bool bAutoStartPreview = false;
+	FString PreviewDroneID;
+	FString PreviewRouteRelativePath;
 };
 
 struct FGCSRouteUploadArtifactDisplay
@@ -70,6 +131,9 @@ struct FGCSRouteUploadCommandGateInputs
 {
 	bool bArtifactReady = false;
 	bool bFrozenConsoleAccepted = false;
+	bool bAutoStartMappingValid = false;
+	bool bAutoStartInFlight = false;
+	FString StartBlockedReason;
 	bool bHasActiveJobBinding = false;
 	bool bHasExecutableJob = false;
 	bool bCommandInFlight = false;
@@ -85,6 +149,7 @@ struct FGCSRouteUploadCommandGate
 	bool bCancelEnabled = false;
 	bool bRetryFailedEnabled = false;
 	bool bApplyMaxEnabled = false;
+	FString StartBlockedReason;
 };
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -102,6 +167,17 @@ struct FGCSRouteWorkflowCommandTestHooks
 	TFunction<bool(const FString&, FString&)> SetWorkspaceRoot;
 	TFunction<bool(FString&, FString&)> ResolveWorkspaceRoot;
 	TFunction<bool(int32, FString&)> StartGeneration;
+};
+
+struct FGCSRouteAutoStartTestHooks
+{
+	TFunction<bool(FGCSRouteAutoStartSnapshot&, FString&)> CaptureSnapshot;
+	TFunction<bool(FGCSRouteAutoStartSnapshot&, FString&)> BuildAssignment;
+	TFunction<bool(FGCSRouteAutoStartSnapshot&, FString&)> FreezeAssignment;
+	TFunction<bool(FGCSRouteAutoStartSnapshot&, FString&)> StartSync;
+	TFunction<FGCSRouteAutoStartSyncObservation()> ObserveSync;
+	TFunction<bool(const FGCSRouteAutoStartSnapshot&, FString&)> ValidateSnapshot;
+	TFunction<bool(int32, FString&, FString&)> StartJob;
 };
 #endif
 
@@ -159,6 +235,7 @@ public:
 		FString& OutError);
 	static FGCSRouteUploadCommandGate ComputeUploadCommandGate(
 		const FGCSRouteUploadCommandGateInputs& Inputs);
+	static FString FormatAutoStartState(EGCSRouteAutoStartState State);
 
 #if WITH_DEV_AUTOMATION_TESTS
 	void InitializeForTest(UGameInstance* InGameInstance);
@@ -202,6 +279,18 @@ public:
 	bool IsViewVisibleForTest() const { return bViewVisible; }
 	int32 GetSelectedPageIndexForTest() const { return SelectedPageIndex; }
 	int32 GetCloseRequestCountForTest() const { return CloseRequestCountForTest; }
+	void SetAutoStartTestHooks(FGCSRouteAutoStartTestHooks InHooks)
+	{
+		AutoStartTestHooks = MoveTemp(InHooks);
+	}
+	bool StartAutoStartForTest(FString& OutError) { return BeginAutoStartTransaction(OutError); }
+	void AdvanceAutoStartForTest() { AdvanceAutoStartTransaction(); }
+	bool TickRefreshForTest() { return TickRefresh(0.0f); }
+	EGCSRouteAutoStartState GetAutoStartStateForTest() const { return AutoStartState; }
+	const FGCSRouteAutoStartSnapshot& GetAutoStartSnapshotForTest() const
+	{
+		return AutoStartSnapshot;
+	}
 #endif
 
 private:
@@ -266,6 +355,15 @@ private:
 		const FString& SnapshotToken,
 		const TArray<int32>& SortedRouteSlots);
 	void ClearRouteListModel();
+	bool ReplaceAutoStartPreviewItems(const FGCSRouteAutoStartSnapshot& Snapshot);
+	bool CaptureAutoStartSnapshot(FGCSRouteAutoStartSnapshot& OutSnapshot, FString& OutError) const;
+	bool BeginAutoStartTransaction(FString& OutError);
+	void AdvanceAutoStartTransaction();
+	bool ValidateAutoStartSnapshotStillCurrent(FString& OutError) const;
+	FGCSRouteAutoStartSyncObservation ObserveAutoStartSync() const;
+	void FinishAutoStart(EGCSRouteAutoStartState FinalState, const FString& Diagnostic);
+	void ResetAutoStartForNewDataset();
+	bool IsAutoStartInFlight() const;
 	bool TickRefresh(float DeltaSeconds);
 	void StartRefreshTicker();
 	void StopRefreshTicker();
@@ -306,6 +404,9 @@ private:
 	bool bBindingValid = false;
 	bool bViewVisible = false;
 	int32 SelectedPageIndex = 0;
+	EGCSRouteAutoStartState AutoStartState = EGCSRouteAutoStartState::Idle;
+	FGCSRouteAutoStartSnapshot AutoStartSnapshot;
+	FString AutoStartDiagnostic;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	TFunction<UUserWidget*()> WorkflowFactoryForTest;
@@ -313,6 +414,7 @@ private:
 	int32 WorkflowCreationCount = 0;
 	int32 CloseRequestCountForTest = 0;
 	FGCSRouteWorkflowCommandTestHooks CommandTestHooks;
+	FGCSRouteAutoStartTestHooks AutoStartTestHooks;
 	TOptional<FGCSRouteWorkflowCommandGateInputs> CommandGateInputsForTest;
 #endif
 

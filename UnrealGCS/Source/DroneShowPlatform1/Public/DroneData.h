@@ -28,6 +28,10 @@ struct DRONESHOWPLATFORM1_API FDroneData
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone")
 	int32 SysID = 0;
 
+	/** Stable Fleet transport identity supplied by Console (Remote IP + UDP source port). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone")
+	FString EndpointIdentity;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone|GPS")
 	double GPSLat = 0.0;
 

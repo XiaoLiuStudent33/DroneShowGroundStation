@@ -38,6 +38,7 @@ namespace
 		FDroneData Target;
 		Target.DroneID = FromProductionProtocolString(Source.droneId);
 		Target.SysID = static_cast<int32>(Source.sysId);
+		Target.EndpointIdentity = FromProductionProtocolString(Source.connection.linkId);
 		Target.GPSLat = Source.gps.latitudeDeg;
 		Target.GPSLon = Source.gps.longitudeDeg;
 		Target.bGPSValid = Source.gps.valid;

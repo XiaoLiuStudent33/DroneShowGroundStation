@@ -2,7 +2,7 @@
 
 Status: CURRENT SUPPORTING
 Authority: 测试资产、运行入口与证据等级
-Last Updated: 2026-08-24
+Last Updated: 2026-08-25
 
 Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，当前调用链见 [Code_Architecture_CN.md](Code_Architecture_CN.md)，进度见 [Development_Status_CN.md](Development_Status_CN.md)。
 
@@ -33,17 +33,21 @@ Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，�
 .\x64\Release\ConsoleGCSTests.exe --mission-upload-tests
 .\x64\Release\ConsoleGCSTests.exe --upload-job-tests
 .\x64\Release\ConsoleGCSTests.exe --mavftp-probe-tests
+.\x64\Release\ConsoleGCSTests.exe --drone-id-tests
 ```
 
 - `--mission-tests`：Route Mission codec 与 Mission FTP compiler。
 - `--mission-upload-tests`：Mission transaction、transport abstraction、preparation 与 RouteUploadManager integration。
 - `--upload-job-tests`：DSP Upload Job schema/binding/materialization/scale。
 - `--mavftp-probe-tests`：MAVFTP protocol/client、MissionProfileProbe、Mission writer 与 Hardware Harness safety。
+- `--drone-id-tests`：Console/UE 共享 canonical DroneID format/parse/overflow/RouteSlot 合同。
 - Full suite 还覆盖 Console pipeline、command、Frozen Assignment、Artifact Consumer v2 与 contract。
 
 ## 3. UE Regression
 
 UE 自动化测试位于 `UnrealGCS/Source/DroneShowPlatform1/Private/Tests/`，覆盖 Fleet、Route Overlay、Assignment、Artifact、Waypoint、Frozen Assignment、Upload Job 与 Workflow 等领域。
+
+E.0 专项前缀 `DroneGCS.UI.RouteWorkflow.AutoStart` 覆盖 canonical ID、单/多 Target exactly-once、拒绝矩阵、Console failure 与 Selection/Fleet/endpoint/Artifact/Manifest/Route record stale 矩阵。既有 `ViewStatePersistence`、`LiveAggregate`、Route Assignment 与 Frozen Sync 继续作为生命周期、cross-job 和 DSP identity 回归。
 
 运行要求：构建 `DroneShowPlatform1Editor Development Win64` 后执行：
 
@@ -66,9 +70,11 @@ Quick Test 从 `UnrealGCS/Saved/RouteArtifacts/Current/manifest.json` 引导，�
 
 ## 5. 当前自动化证据
 
-2026-08-24 在当前 checkout 完成 Release x64 Solution Rebuild（0 errors）484 warnings，ExitCode 0），随后运行：
+2026-08-25 在当前 checkout 完成 Release x64 Solution Build（0 errors、12 warnings、ExitCode 0），随后运行：
 
 ```text
+--drone-id-tests = PASS
+--artifact-v2-consumer-tests = PASS
 --mission-tests = PASS
 --mission-upload-tests = PASS
 --upload-job-tests = PASS
@@ -76,7 +82,7 @@ Quick Test 从 `UnrealGCS/Saved/RouteArtifacts/Current/manifest.json` 引导，�
 Full ConsoleGCSTests = PASS
 ```
 
-证据限定：本轮未运行 UE Automation、未运行真实飞控上传。
+UE Development/DebugGame Editor Build 均 PASS；AutoStart 6/6 PASS，Route Assignment + Frozen shared contract + DSP Upload Job + Route Workflow 合并回归 164/164 PASS。证据限定：本轮未运行真实飞控上传。
 
 ## 6. 用户确认的硬件证据
 

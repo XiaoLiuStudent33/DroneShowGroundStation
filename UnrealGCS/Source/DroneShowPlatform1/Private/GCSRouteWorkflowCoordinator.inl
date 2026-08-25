@@ -9,11 +9,16 @@
 #include "Components/WidgetSwitcher.h"
 #include "DSPGCSFrozenAssignmentSyncSubsystem.h"
 #include "DSPGCSUploadJobSubsystem.h"
+#include "DroneLogicalId.h"
 #include "Engine/GameInstance.h"
+#include "FleetManagerSubsystem.h"
 #include "GameFramework/PlayerController.h"
+#include "GCSUIBridgeSubsystem.h"
 #include "HAL/PlatformTime.h"
+#include "Misc/Guid.h"
 #include "Misc/Paths.h"
 #include "RouteArtifactWorkspaceSubsystem.h"
+#include "RouteAssignmentSubsystem.h"
 #include "RoutePreviewSubsystem.h"
 #include "RouteWaypointGenerationSubsystem.h"
 
@@ -138,6 +143,32 @@ namespace GCSRouteWorkflowPrivate
 		if (Result.EndsWith(TEXT(".0"))) Result.LeftChopInline(2);
 		return Result;
 	}
+
+	bool SameAssignmentSource(
+		const FRouteAssignmentSourceIdentity& Left,
+		const FRouteAssignmentSourceIdentity& Right)
+	{
+		return Left.SourceDatasetDigest == Right.SourceDatasetDigest
+			&& Left.NormalizedShowOriginLatitudeE7 == Right.NormalizedShowOriginLatitudeE7
+			&& Left.NormalizedShowOriginLongitudeE7 == Right.NormalizedShowOriginLongitudeE7
+			&& Left.FleetSessionID == Right.FleetSessionID
+			&& Left.FleetRevisionAtCapture == Right.FleetRevisionAtCapture
+			&& Left.RouteDatasetGeneration == Right.RouteDatasetGeneration
+			&& Left.bShowOriginSet == Right.bShowOriginSet;
+	}
+
+	bool SameAutoStartTarget(
+		const FGCSRouteAutoStartTargetSnapshot& Left,
+		const FGCSRouteAutoStartTargetSnapshot& Right)
+	{
+		return Left.DroneID == Right.DroneID
+			&& Left.EndpointIdentity == Right.EndpointIdentity
+			&& Left.NumericDroneID == Right.NumericDroneID
+			&& Left.RouteSlotIndex == Right.RouteSlotIndex
+			&& Left.RouteRelativePath == Right.RouteRelativePath
+			&& Left.RouteFileByteSize == Right.RouteFileByteSize
+			&& Left.RouteDigest == Right.RouteDigest;
+	}
 }
 
 bool UGCSRouteWorkflowCoordinator::Initialize(UGameInstance* GI, UUserWidget* RightPanel)
@@ -179,10 +210,14 @@ void UGCSRouteWorkflowCoordinator::Shutdown()
 	bCommandInFlight = false;
 	bViewVisible = false;
 	SelectedPageIndex = 0;
+	AutoStartState = EGCSRouteAutoStartState::Idle;
+	AutoStartSnapshot = FGCSRouteAutoStartSnapshot{};
+	AutoStartDiagnostic.Reset();
 #if WITH_DEV_AUTOMATION_TESTS
 	WorkflowFactoryForTest = {};
 	bSkipRequiredWidgetBindingForTest = false;
 	CommandTestHooks = {};
+	AutoStartTestHooks = {};
 	CommandGateInputsForTest.Reset();
 	CloseRequestCountForTest = 0;
 #endif
@@ -364,6 +399,7 @@ bool UGCSRouteWorkflowCoordinator::BindWorkflowWidgets(UUserWidget* Workflow, FS
 	WorkflowWidgets = MoveTemp(WorkflowMap);
 	RouteConvertWidgetRef = Convert; RouteUploadWidgetRef = Upload;
 	ClearRouteListModel();
+	SetEdit(UploadWidgets, TEXT("EDT_MaxConcurrency"), TEXT("1"));
 	ApplyReadOnlyControlState();
 	BindCommandControls();
 	bBindingValid = true; return true;
@@ -617,6 +653,14 @@ void UGCSRouteWorkflowCoordinator::HandleOutputBrowseClicked()
 void UGCSRouteWorkflowCoordinator::HandleLoadPreviewClicked()
 {
 	if (!IsInGameThread() || bCommandInFlight || !GameInstanceRef.IsValid()) return;
+	if (IsAutoStartInFlight())
+	{
+		SetCommandError(
+			EGCSRouteWorkflowCommandErrorCategory::Preview,
+			TEXT("当前仍有上传准备事务运行，请等待完成。"));
+		UpdateCommandControlState();
+		return;
+	}
 	URoutePreviewSubsystem* Preview = GameInstanceRef->GetSubsystem<URoutePreviewSubsystem>();
 	UDSPGCSUploadJobSubsystem* Upload =
 		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
@@ -701,6 +745,7 @@ void UGCSRouteWorkflowCoordinator::HandleLoadPreviewClicked()
 	}
 	if (bSucceeded)
 	{
+		ResetAutoStartForNewDataset();
 		ClearRouteListModel();
 		ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview);
 		RefreshReadOnlyState();
@@ -760,20 +805,22 @@ void UGCSRouteWorkflowCoordinator::HandleStartUploadClicked()
 {
 	if (!IsInGameThread() || !GameInstanceRef.IsValid()) return;
 	if (!ComputeUploadCommandGate(GatherUploadCommandGateInputs()).bStartEnabled) return;
-	int32 Maximum = 0;
 	FString Error;
-	if (!ReadConcurrencyDraft(Maximum, Error))
+	int32 RequestedMaximum = 1;
+	if (GCSRouteWorkflowPrivate::Get<UEditableTextBox>(
+		UploadWidgets, TEXT("EDT_MaxConcurrency")) &&
+		(!ReadConcurrencyDraft(RequestedMaximum, Error) || RequestedMaximum != 1))
 	{
+		if (Error.IsEmpty())
+		{
+			Error = TEXT("E.0 safety freeze requires maximum concurrency to be exactly 1.");
+		}
 		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
 		return;
 	}
-	UDSPGCSUploadJobSubsystem* Upload =
-		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
-	FString UploadJobID;
-	if (!Upload || !Upload->StartUploadJobFromCurrentAuthorities(
-		Maximum, UploadJobID, Error))
+	if (!BeginAutoStartTransaction(Error))
 	{
-		if (Error.IsEmpty()) Error = TEXT("Upload Job Start was rejected.");
+		if (Error.IsEmpty()) Error = TEXT("Automatic upload start was rejected.");
 		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
 	}
 	else
@@ -781,6 +828,502 @@ void UGCSRouteWorkflowCoordinator::HandleStartUploadClicked()
 		ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload);
 	}
 	RefreshReadOnlyState();
+}
+
+bool UGCSRouteWorkflowCoordinator::CaptureAutoStartSnapshot(
+	FGCSRouteAutoStartSnapshot& OutSnapshot,
+	FString& OutError) const
+{
+	OutSnapshot = FGCSRouteAutoStartSnapshot{};
+	OutError.Reset();
+#if WITH_DEV_AUTOMATION_TESTS
+	if (AutoStartTestHooks.CaptureSnapshot)
+	{
+		return AutoStartTestHooks.CaptureSnapshot(OutSnapshot, OutError);
+	}
+#endif
+	if (!GameInstanceRef.IsValid())
+	{
+		OutError = TEXT("Route Workflow Coordinator is not initialized.");
+		return false;
+	}
+	const UGameInstance* GI = GameInstanceRef.Get();
+	const UGCSUIBridgeSubsystem* Bridge = GI->GetSubsystem<UGCSUIBridgeSubsystem>();
+	const UFleetManagerSubsystem* Fleet = GI->GetSubsystem<UFleetManagerSubsystem>();
+	const URouteArtifactWorkspaceSubsystem* Workspace =
+		GI->GetSubsystem<URouteArtifactWorkspaceSubsystem>();
+	if (!Bridge || !Fleet || !Workspace)
+	{
+		OutError = TEXT("Selection, Fleet, or Artifact authority is unavailable.");
+		return false;
+	}
+
+	OutSnapshot.SelectedDroneIDs = Bridge->GetSelectedCommandDroneIDs();
+	OutSnapshot.SelectedDroneIDs.Sort();
+	if (OutSnapshot.SelectedDroneIDs.IsEmpty())
+	{
+		OutError = TEXT("No drones selected.");
+		return false;
+	}
+	OutSnapshot.FleetSessionID = Fleet->GetActiveFleetSessionID();
+	OutSnapshot.FleetRevision = Fleet->GetFleetRevision();
+	if (OutSnapshot.FleetSessionID.TrimStartAndEnd().IsEmpty() ||
+		OutSnapshot.FleetRevision < 0)
+	{
+		OutError = TEXT("Current Fleet identity is invalid.");
+		return false;
+	}
+
+	const ERouteArtifactRecoveryStatus Recovery = Workspace->GetLastRecoveryResult().Status;
+	if (Workspace->GetCurrentStatus() != ERouteArtifactCurrentStatus::Ready ||
+		(Recovery != ERouteArtifactRecoveryStatus::Stable &&
+		 Recovery != ERouteArtifactRecoveryStatus::Recovered))
+	{
+		OutError = TEXT("Artifact is not READY.");
+		return false;
+	}
+	const FRouteArtifactCurrentInfo& Info = Workspace->GetCurrentInfo();
+	if (Info.ArtifactSetID.IsEmpty() || !Info.ArtifactSetDigest.IsValid() ||
+		!Info.SourceDatasetDigest.IsValid() || Info.RouteSlotCount <= 0)
+	{
+		OutError = TEXT("Current Artifact identity is invalid.");
+		return false;
+	}
+	OutSnapshot.ArtifactSetID = Info.ArtifactSetID;
+	OutSnapshot.ArtifactSetDigest = Info.ArtifactSetDigest.ToLowerHex();
+	OutSnapshot.SourceDatasetDigest = Info.SourceDatasetDigest.ToLowerHex();
+	OutSnapshot.RouteSlotCount = Info.RouteSlotCount;
+
+	TSet<int32> NumericIDs;
+	TSet<int32> RouteSlots;
+	OutSnapshot.Targets.Reserve(OutSnapshot.SelectedDroneIDs.Num());
+	for (const FString& DroneID : OutSnapshot.SelectedDroneIDs)
+	{
+		FTCHARToUTF8 EncodedDroneID(*DroneID);
+		std::uint64_t NumericID64 = 0;
+		if (!dronegcs::identity::TryParseDroneLogicalId(
+			std::string_view(EncodedDroneID.Get(), EncodedDroneID.Length()), NumericID64) ||
+			NumericID64 > static_cast<std::uint64_t>(MAX_int32))
+		{
+			OutError = FString::Printf(TEXT("Invalid canonical DroneID: %s"), *DroneID);
+			return false;
+		}
+		const int32 NumericID = static_cast<int32>(NumericID64);
+		const int32 RouteSlot = NumericID - 1;
+		if (NumericIDs.Contains(NumericID) || RouteSlots.Contains(RouteSlot))
+		{
+			OutError = FString::Printf(TEXT("Duplicate numeric DroneID or RouteSlot: %s"), *DroneID);
+			return false;
+		}
+		if (RouteSlot < 0 || RouteSlot >= OutSnapshot.RouteSlotCount)
+		{
+			OutError = FString::Printf(
+				TEXT("RouteSlot %d for %s is outside Manifest RouteSlotCount %d."),
+				RouteSlot, *DroneID, OutSnapshot.RouteSlotCount);
+			return false;
+		}
+
+		FDroneData Drone;
+		if (!Fleet->GetDroneByID(DroneID, Drone))
+		{
+			OutError = FString::Printf(TEXT("Selected drone does not exist: %s"), *DroneID);
+			return false;
+		}
+		if (!Drone.bOnline)
+		{
+			OutError = FString::Printf(TEXT("Selected drone is offline: %s"), *DroneID);
+			return false;
+		}
+		if (Drone.EndpointIdentity.TrimStartAndEnd().IsEmpty())
+		{
+			OutError = FString::Printf(TEXT("Selected drone endpoint identity is invalid: %s"), *DroneID);
+			return false;
+		}
+
+		FRouteArtifactRecord Record;
+		if (!Workspace->FindCurrentRouteRecord(RouteSlot, Record) ||
+			Record.RouteSlotIndex != RouteSlot || Record.RelativePath.IsEmpty() ||
+			Record.FileByteSize <= 0 || !Record.RouteArtifactDigest.IsValid())
+		{
+			OutError = FString::Printf(
+				TEXT("Manifest Route Record is missing or invalid for RouteSlot %d."), RouteSlot);
+			return false;
+		}
+
+		NumericIDs.Add(NumericID);
+		RouteSlots.Add(RouteSlot);
+		FGCSRouteAutoStartTargetSnapshot Target;
+		Target.DroneID = DroneID;
+		Target.EndpointIdentity = Drone.EndpointIdentity;
+		Target.NumericDroneID = NumericID;
+		Target.RouteSlotIndex = RouteSlot;
+		Target.RouteRelativePath = Record.RelativePath;
+		Target.RouteFileByteSize = Record.FileByteSize;
+		Target.RouteDigest = Record.RouteArtifactDigest.ToLowerHex();
+		OutSnapshot.Targets.Add(MoveTemp(Target));
+	}
+	return true;
+}
+
+bool UGCSRouteWorkflowCoordinator::BeginAutoStartTransaction(FString& OutError)
+{
+	check(IsInGameThread());
+	OutError.Reset();
+	if (IsAutoStartInFlight())
+	{
+		OutError = TEXT("An automatic assignment transaction is already in progress.");
+		return false;
+	}
+
+	FGCSRouteAutoStartSnapshot Candidate;
+	if (!CaptureAutoStartSnapshot(Candidate, OutError)) return false;
+#if WITH_DEV_AUTOMATION_TESTS
+	const bool bUsingAutoStartTestHooks = static_cast<bool>(AutoStartTestHooks.CaptureSnapshot);
+#else
+	const bool bUsingAutoStartTestHooks = false;
+#endif
+	if (!bUsingAutoStartTestHooks)
+	{
+		UDSPGCSUploadJobSubsystem* Upload = GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+		UDSPGCSFrozenAssignmentSyncSubsystem* Sync =
+			GameInstanceRef->GetSubsystem<UDSPGCSFrozenAssignmentSyncSubsystem>();
+		if (!Upload || !Sync)
+		{
+			OutError = TEXT("Upload Job or Frozen Assignment Sync subsystem is unavailable.");
+			return false;
+		}
+		const FDSPGCSUploadJobCommandStatus Command = Upload->GetCommandStatus();
+		if (Command.bHasActiveJobBinding || Command.bHasExecutableJob || Command.bCommandInFlight)
+		{
+			OutError = TEXT("An Upload Job is already active or starting.");
+			return false;
+		}
+		if (Sync->GetSyncState() == EDSPGCSFrozenAssignmentSyncState::SyncingToConsole)
+		{
+			OutError = TEXT("A Frozen Assignment sync is already active.");
+			return false;
+		}
+	}
+
+	Candidate.TransactionID = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+	AutoStartSnapshot = MoveTemp(Candidate);
+	AutoStartState = EGCSRouteAutoStartState::ValidatingMapping;
+	AutoStartDiagnostic.Reset();
+	ReplaceAutoStartPreviewItems(AutoStartSnapshot);
+	for (const FGCSRouteAutoStartTargetSnapshot& Target : AutoStartSnapshot.Targets)
+	{
+		UE_LOG(LogGCSRouteWorkflow, Display,
+			TEXT("[ROUTE_AUTO_ASSIGN] Transaction=%s DroneID=%s Endpoint=%s RouteSlot=%d Route=%s Bytes=%lld Digest=%s"),
+			*AutoStartSnapshot.TransactionID, *Target.DroneID, *Target.EndpointIdentity,
+			Target.RouteSlotIndex, *Target.RouteRelativePath, Target.RouteFileByteSize,
+			*Target.RouteDigest);
+	}
+
+#if WITH_DEV_AUTOMATION_TESTS
+	if (AutoStartTestHooks.BuildAssignment)
+	{
+		if (!AutoStartTestHooks.BuildAssignment(AutoStartSnapshot, OutError))
+		{
+			FinishAutoStart(EGCSRouteAutoStartState::Failed, OutError);
+			return false;
+		}
+	}
+	else
+#endif
+	{
+		URouteAssignmentSubsystem* Assignment =
+			GameInstanceRef->GetSubsystem<URouteAssignmentSubsystem>();
+		if (!Assignment)
+		{
+			OutError = TEXT("Route Assignment authority is unavailable.");
+			FinishAutoStart(EGCSRouteAutoStartState::Failed, OutError);
+			return false;
+		}
+		FRouteAssignmentSourceSnapshot Source;
+		if (!Assignment->CaptureSourceSnapshot(Source, OutError) ||
+			Source.SourceIdentity.FleetSessionID != AutoStartSnapshot.FleetSessionID ||
+			Source.SourceIdentity.FleetRevisionAtCapture != AutoStartSnapshot.FleetRevision ||
+			Source.RouteSlots.Num() != AutoStartSnapshot.RouteSlotCount ||
+			Source.SourceIdentity.SourceDatasetDigest.ToLowerHex() !=
+				AutoStartSnapshot.SourceDatasetDigest)
+		{
+			if (OutError.IsEmpty()) OutError = TEXT("Assignment source changed during mapping validation.");
+			FinishAutoStart(EGCSRouteAutoStartState::CancelledAsStale, OutError);
+			return false;
+		}
+		AutoStartSnapshot.AssignmentSourceIdentity = Source.SourceIdentity;
+		FRouteAssignmentExplicitBindingRequest Request;
+		Request.ExpectedSourceIdentity = Source.SourceIdentity;
+		for (const FGCSRouteAutoStartTargetSnapshot& Target : AutoStartSnapshot.Targets)
+		{
+			FRouteAssignmentExplicitBinding Binding;
+			Binding.DroneID = Target.DroneID;
+			Binding.RouteSlotIndex = Target.RouteSlotIndex;
+			Request.Bindings.Add(MoveTemp(Binding));
+		}
+		Assignment->Reset();
+		if (!Assignment->BuildAndReplaceExplicitWorkingAssignment(Request, OutError))
+		{
+			FinishAutoStart(EGCSRouteAutoStartState::Failed, OutError);
+			return false;
+		}
+	}
+
+	AutoStartState = EGCSRouteAutoStartState::Freezing;
+#if WITH_DEV_AUTOMATION_TESTS
+	if (AutoStartTestHooks.FreezeAssignment)
+	{
+		if (!AutoStartTestHooks.FreezeAssignment(AutoStartSnapshot, OutError))
+		{
+			FinishAutoStart(EGCSRouteAutoStartState::Failed, OutError);
+			return false;
+		}
+	}
+	else
+#endif
+	{
+		URouteAssignmentSubsystem* Assignment =
+			GameInstanceRef->GetSubsystem<URouteAssignmentSubsystem>();
+		FRouteAssignmentSnapshot Frozen;
+		if (!Assignment || !Assignment->Freeze(ERouteAssignmentFreezePolicy::AllowDegraded, OutError) ||
+			!Assignment->GetFrozenSnapshot(Frozen))
+		{
+			if (OutError.IsEmpty()) OutError = TEXT("Freeze did not produce an immutable snapshot.");
+			FinishAutoStart(EGCSRouteAutoStartState::Failed, OutError);
+			return false;
+		}
+		AutoStartSnapshot.AssignmentAuthoritySessionID = Frozen.AssignmentAuthoritySessionID;
+		AutoStartSnapshot.AssignmentRevision = Frozen.AssignmentRevision;
+	}
+
+#if WITH_DEV_AUTOMATION_TESTS
+	if (AutoStartTestHooks.StartSync)
+	{
+		if (!AutoStartTestHooks.StartSync(AutoStartSnapshot, OutError))
+		{
+			FinishAutoStart(EGCSRouteAutoStartState::Failed, OutError);
+			return false;
+		}
+	}
+	else
+#endif
+	{
+		UDSPGCSFrozenAssignmentSyncSubsystem* Sync =
+			GameInstanceRef->GetSubsystem<UDSPGCSFrozenAssignmentSyncSubsystem>();
+		if (!Sync || !Sync->StartSyncFrozenAssignment(OutError))
+		{
+			FinishAutoStart(EGCSRouteAutoStartState::Failed, OutError);
+			return false;
+		}
+		const FDSPGCSFrozenAssignmentSyncStatus Status = Sync->GetSyncStatus();
+		AutoStartSnapshot.SyncTransactionID = Status.TransactionID;
+		AutoStartSnapshot.AssignmentDigest = Status.CanonicalPayloadDigest;
+		if (Status.FleetSessionID != AutoStartSnapshot.FleetSessionID ||
+			Status.AssignmentAuthoritySessionID != AutoStartSnapshot.AssignmentAuthoritySessionID ||
+			Status.AssignmentRevision != AutoStartSnapshot.AssignmentRevision ||
+			Status.TransactionID.IsEmpty() || Status.CanonicalPayloadDigest.IsEmpty())
+		{
+			OutError = TEXT("Frozen Assignment sync did not bind the current automatic transaction.");
+			FinishAutoStart(EGCSRouteAutoStartState::Failed, OutError);
+			return false;
+		}
+	}
+
+	AutoStartState = EGCSRouteAutoStartState::SyncingConsole;
+	UE_LOG(LogGCSRouteWorkflow, Display,
+		TEXT("[ROUTE_AUTO_START] Transaction=%s State=SyncingConsole Targets=%d MaxConcurrentTargets=1"),
+		*AutoStartSnapshot.TransactionID, AutoStartSnapshot.Targets.Num());
+	AdvanceAutoStartTransaction();
+	return AutoStartState != EGCSRouteAutoStartState::Failed &&
+		AutoStartState != EGCSRouteAutoStartState::CancelledAsStale;
+}
+
+FGCSRouteAutoStartSyncObservation UGCSRouteWorkflowCoordinator::ObserveAutoStartSync() const
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	if (AutoStartTestHooks.ObserveSync) return AutoStartTestHooks.ObserveSync();
+#endif
+	FGCSRouteAutoStartSyncObservation Result;
+	if (!GameInstanceRef.IsValid()) return Result;
+	const UDSPGCSFrozenAssignmentSyncSubsystem* Sync =
+		GameInstanceRef->GetSubsystem<UDSPGCSFrozenAssignmentSyncSubsystem>();
+	if (!Sync) return Result;
+	const FDSPGCSFrozenAssignmentSyncStatus Status = Sync->GetSyncStatus();
+	Result.State = static_cast<uint8>(Status.State);
+	Result.FleetSessionID = Status.FleetSessionID;
+	Result.AssignmentAuthoritySessionID = Status.AssignmentAuthoritySessionID;
+	Result.AssignmentRevision = Status.AssignmentRevision;
+	Result.AssignmentDigest = Status.CanonicalPayloadDigest;
+	Result.TransactionID = Status.TransactionID;
+	Result.LastError = Status.LastError;
+	return Result;
+}
+
+bool UGCSRouteWorkflowCoordinator::ValidateAutoStartSnapshotStillCurrent(FString& OutError) const
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	if (AutoStartTestHooks.ValidateSnapshot)
+		return AutoStartTestHooks.ValidateSnapshot(AutoStartSnapshot, OutError);
+#endif
+	FGCSRouteAutoStartSnapshot Current;
+	if (!CaptureAutoStartSnapshot(Current, OutError)) return false;
+	if (Current.SelectedDroneIDs != AutoStartSnapshot.SelectedDroneIDs ||
+		Current.FleetSessionID != AutoStartSnapshot.FleetSessionID ||
+		Current.FleetRevision != AutoStartSnapshot.FleetRevision ||
+		Current.ArtifactSetID != AutoStartSnapshot.ArtifactSetID ||
+		Current.ArtifactSetDigest != AutoStartSnapshot.ArtifactSetDigest ||
+		Current.SourceDatasetDigest != AutoStartSnapshot.SourceDatasetDigest ||
+		Current.RouteSlotCount != AutoStartSnapshot.RouteSlotCount ||
+		Current.Targets.Num() != AutoStartSnapshot.Targets.Num())
+	{
+		OutError = TEXT("Selection, Fleet, or Artifact identity changed during Console sync.");
+		return false;
+	}
+	for (int32 Index = 0; Index < Current.Targets.Num(); ++Index)
+	{
+		if (!GCSRouteWorkflowPrivate::SameAutoStartTarget(
+			Current.Targets[Index], AutoStartSnapshot.Targets[Index]))
+		{
+			OutError = FString::Printf(TEXT("Target identity changed during Console sync: %s"),
+				*AutoStartSnapshot.Targets[Index].DroneID);
+			return false;
+		}
+	}
+
+	const URouteAssignmentSubsystem* Assignment =
+		GameInstanceRef->GetSubsystem<URouteAssignmentSubsystem>();
+	FRouteAssignmentSourceSnapshot Source;
+	FRouteAssignmentSnapshot Frozen;
+	if (!Assignment || !Assignment->CaptureSourceSnapshot(Source, OutError) ||
+		!GCSRouteWorkflowPrivate::SameAssignmentSource(
+			Source.SourceIdentity, AutoStartSnapshot.AssignmentSourceIdentity) ||
+		!Assignment->GetFrozenSnapshot(Frozen) ||
+		Frozen.AssignmentAuthoritySessionID != AutoStartSnapshot.AssignmentAuthoritySessionID ||
+		Frozen.AssignmentRevision != AutoStartSnapshot.AssignmentRevision)
+	{
+		if (OutError.IsEmpty()) OutError = TEXT("Frozen Assignment authority changed during Console sync.");
+		return false;
+	}
+	const UDSPGCSUploadJobSubsystem* Upload =
+		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	if (!Upload)
+	{
+		OutError = TEXT("Upload Job subsystem is unavailable.");
+		return false;
+	}
+	const FDSPGCSUploadJobCommandStatus Command = Upload->GetCommandStatus();
+	if (Command.bHasActiveJobBinding || Command.bHasExecutableJob || Command.bCommandInFlight)
+	{
+		OutError = TEXT("Another Upload Job became active during Console sync.");
+		return false;
+	}
+	return true;
+}
+
+void UGCSRouteWorkflowCoordinator::AdvanceAutoStartTransaction()
+{
+	if (!IsInGameThread() || AutoStartState != EGCSRouteAutoStartState::SyncingConsole) return;
+	const FGCSRouteAutoStartSyncObservation Sync = ObserveAutoStartSync();
+	const EDSPGCSFrozenAssignmentSyncState SyncState =
+		static_cast<EDSPGCSFrozenAssignmentSyncState>(Sync.State);
+	if (SyncState == EDSPGCSFrozenAssignmentSyncState::SyncFailed)
+	{
+		FinishAutoStart(EGCSRouteAutoStartState::Failed,
+			Sync.LastError.IsEmpty() ? TEXT("Console rejected or timed out Frozen Assignment sync.") : Sync.LastError);
+		return;
+	}
+	if (SyncState != EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted)
+	{
+		if (SyncState != EDSPGCSFrozenAssignmentSyncState::SyncingToConsole)
+		{
+			FinishAutoStart(EGCSRouteAutoStartState::Failed,
+				TEXT("Frozen Assignment sync left the active transaction unexpectedly."));
+		}
+		return;
+	}
+	if (Sync.TransactionID != AutoStartSnapshot.SyncTransactionID ||
+		Sync.FleetSessionID != AutoStartSnapshot.FleetSessionID ||
+		Sync.AssignmentAuthoritySessionID != AutoStartSnapshot.AssignmentAuthoritySessionID ||
+		Sync.AssignmentRevision != AutoStartSnapshot.AssignmentRevision ||
+		Sync.AssignmentDigest != AutoStartSnapshot.AssignmentDigest)
+	{
+		FinishAutoStart(EGCSRouteAutoStartState::CancelledAsStale,
+			TEXT("Ignored stale or cross-transaction Frozen Assignment Accepted ACK."));
+		return;
+	}
+
+	FString Error;
+	if (!ValidateAutoStartSnapshotStillCurrent(Error))
+	{
+		FinishAutoStart(EGCSRouteAutoStartState::CancelledAsStale, Error);
+		return;
+	}
+	AutoStartState = EGCSRouteAutoStartState::StartingJob;
+	if (AutoStartSnapshot.bJobStartAttempted) return;
+	AutoStartSnapshot.bJobStartAttempted = true;
+	FString UploadJobID;
+	bool bStarted = false;
+#if WITH_DEV_AUTOMATION_TESTS
+	if (AutoStartTestHooks.StartJob)
+	{
+		bStarted = AutoStartTestHooks.StartJob(1, UploadJobID, Error);
+	}
+	else
+#endif
+	{
+		UDSPGCSUploadJobSubsystem* Upload =
+			GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+		bStarted = Upload && Upload->StartUploadJobFromCurrentAuthorities(1, UploadJobID, Error);
+	}
+	if (!bStarted)
+	{
+		if (Error.IsEmpty()) Error = TEXT("Upload Job Start was rejected.");
+		FinishAutoStart(EGCSRouteAutoStartState::Failed, Error);
+		return;
+	}
+	AutoStartSnapshot.bJobStartDispatched = true;
+	FinishAutoStart(EGCSRouteAutoStartState::Completed, FString());
+	UE_LOG(LogGCSRouteWorkflow, Display,
+		TEXT("[ROUTE_AUTO_START] Transaction=%s State=Completed UploadJobID=%s Targets=%d MaxConcurrentTargets=1"),
+		*AutoStartSnapshot.TransactionID, *UploadJobID, AutoStartSnapshot.Targets.Num());
+}
+
+void UGCSRouteWorkflowCoordinator::FinishAutoStart(
+	const EGCSRouteAutoStartState FinalState,
+	const FString& Diagnostic)
+{
+	AutoStartState = FinalState;
+	AutoStartDiagnostic = Diagnostic.Left(320);
+	if (!AutoStartDiagnostic.IsEmpty())
+	{
+		UE_LOG(LogGCSRouteWorkflow, Warning,
+			TEXT("[ROUTE_AUTO_START] Transaction=%s State=%s Diagnostic=%s"),
+			*AutoStartSnapshot.TransactionID, *FormatAutoStartState(FinalState),
+			*AutoStartDiagnostic);
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, AutoStartDiagnostic);
+	}
+}
+
+void UGCSRouteWorkflowCoordinator::ResetAutoStartForNewDataset()
+{
+	if (IsAutoStartInFlight()) return;
+	AutoStartState = EGCSRouteAutoStartState::Idle;
+	AutoStartSnapshot = FGCSRouteAutoStartSnapshot{};
+	AutoStartDiagnostic.Reset();
+}
+
+bool UGCSRouteWorkflowCoordinator::IsAutoStartInFlight() const
+{
+	switch (AutoStartState)
+	{
+	case EGCSRouteAutoStartState::ValidatingMapping:
+	case EGCSRouteAutoStartState::Freezing:
+	case EGCSRouteAutoStartState::SyncingConsole:
+	case EGCSRouteAutoStartState::StartingJob:
+		return true;
+	default:
+		return false;
+	}
 }
 
 void UGCSRouteWorkflowCoordinator::HandlePauseUploadClicked()
@@ -859,6 +1402,13 @@ void UGCSRouteWorkflowCoordinator::HandleApplyMaxConcurrencyClicked()
 		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
 		return;
 	}
+	if (Maximum != 1)
+	{
+		SetCommandError(
+			EGCSRouteWorkflowCommandErrorCategory::Upload,
+			TEXT("E.0 safety freeze does not allow concurrency greater than 1."));
+		return;
+	}
 	UDSPGCSUploadJobSubsystem* Upload =
 		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
 	if (!Upload || !Upload->SetMaxConcurrentUploads(Maximum, Error))
@@ -876,7 +1426,7 @@ FGCSRouteWorkflowCommandGateInputs UGCSRouteWorkflowCoordinator::GatherCommandGa
 	if (CommandGateInputsForTest.IsSet()) return CommandGateInputsForTest.GetValue();
 #endif
 	FGCSRouteWorkflowCommandGateInputs Inputs;
-	Inputs.bCommandInFlight = bCommandInFlight;
+	Inputs.bCommandInFlight = bCommandInFlight || IsAutoStartInFlight();
 	if (!GameInstanceRef.IsValid()) return Inputs;
 	UGameInstance* GI = GameInstanceRef.Get();
 	const URoutePreviewSubsystem* Preview = GI->GetSubsystem<URoutePreviewSubsystem>();
@@ -968,11 +1518,44 @@ UGCSRouteWorkflowCoordinator::GatherUploadCommandGateInputs() const
 	}
 	Inputs.bFrozenConsoleAccepted = Frozen &&
 		Frozen->GetSyncState() == EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted;
-	if (!Upload) return Inputs;
+	Inputs.bAutoStartInFlight = IsAutoStartInFlight();
+	if (!Inputs.bArtifactReady)
+	{
+		Inputs.StartBlockedReason = TEXT("Artifact is not READY.");
+	}
+	else if (Inputs.bAutoStartInFlight)
+	{
+		Inputs.StartBlockedReason = TEXT("Automatic assignment sync is in progress.");
+	}
+	else if (Frozen && Frozen->GetSyncState() ==
+		EDSPGCSFrozenAssignmentSyncState::SyncingToConsole)
+	{
+		Inputs.StartBlockedReason = TEXT("Assignment sync is already in progress.");
+	}
+	else
+	{
+		FGCSRouteAutoStartSnapshot Candidate;
+		FString MappingError;
+		Inputs.bAutoStartMappingValid = CaptureAutoStartSnapshot(Candidate, MappingError);
+		if (!Inputs.bAutoStartMappingValid)
+		{
+			Inputs.StartBlockedReason = MappingError;
+		}
+	}
+	if (!Upload)
+	{
+		if (Inputs.StartBlockedReason.IsEmpty())
+			Inputs.StartBlockedReason = TEXT("Upload Job subsystem is unavailable.");
+		return Inputs;
+	}
 	const FDSPGCSUploadJobCommandStatus Command = Upload->GetCommandStatus();
 	Inputs.bHasActiveJobBinding = Command.bHasActiveJobBinding;
 	Inputs.bHasExecutableJob = Command.bHasExecutableJob;
-	Inputs.bCommandInFlight = Command.bCommandInFlight;
+	Inputs.bCommandInFlight = Command.bCommandInFlight || Inputs.bAutoStartInFlight;
+	if (Command.bCommandInFlight)
+		Inputs.StartBlockedReason = TEXT("An Upload Job command is in progress.");
+	else if (Command.bHasActiveJobBinding || Command.bHasExecutableJob)
+		Inputs.StartBlockedReason = TEXT("An Upload Job is already active.");
 	if (const dspgcs::UploadJobSnapshotDTO* Snapshot =
 		Upload->GetStateMirror().GetSnapshot())
 	{
@@ -988,7 +1571,12 @@ void UGCSRouteWorkflowCoordinator::UpdateUploadCommandControlState()
 	const FGCSRouteUploadCommandGate Gate =
 		ComputeUploadCommandGate(GatherUploadCommandGateInputs());
 	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_StartUpload")))
+	{
 		Button->SetIsEnabled(Gate.bStartEnabled);
+		Button->SetToolTipText(FText::FromString(
+			Gate.bStartEnabled ? TEXT("Automatic selected-drone assignment; E.0 concurrency = 1.")
+				: Gate.StartBlockedReason));
+	}
 	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_PauseUpload")))
 		Button->SetIsEnabled(Gate.bPauseEnabled);
 	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_ResumeUpload")))
@@ -1106,10 +1694,15 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	FString ConsoleState = FrozenState(FrozenSync
 		? FrozenSync->GetSyncState() : EDSPGCSFrozenAssignmentSyncState::NotFrozen);
 	if (Job) ConsoleState += TEXT(" / Artifact: ") + Gate(Job->artifactGateState);
+	else if (AutoStartState != EGCSRouteAutoStartState::Idle)
+		ConsoleState += TEXT(" / Auto: ") + FormatAutoStartState(AutoStartState);
 	SetText(UploadWidgets,TEXT("TXT_ConsoleValidatedValue"),ConsoleState);
 	FString JobPresentation = Job
 		? FormatUploadJobPresentation(static_cast<uint8>(Job->jobState))
-		: TEXT("State: --");
+		: (AutoStartState == EGCSRouteAutoStartState::Idle
+			? TEXT("State: --") : TEXT("State: ") + FormatAutoStartState(AutoStartState));
+	if (!Job && !AutoStartDiagnostic.IsEmpty())
+		JobPresentation += TEXT(" / ") + AutoStartDiagnostic.Left(320);
 	if (Job && Job->jobState == dspgcs::UploadJobState::Failed &&
 		!Job->firstFailure.safeSummary.empty())
 	{
@@ -1128,7 +1721,7 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 		JobPresentation += TEXT(" / ") + CommandStatus.LastSafeDiagnostic.Left(320);
 	}
 	SetText(UploadWidgets,TEXT("TXT_UploadJobStateValue"),JobPresentation);
-	const uint64 Total=Job?Job->totalBytes:0,Done=Job?Job->bytesCompleted:0; const double UR=ComputeProgressRatio(Done,Total); SetText(UploadWidgets,TEXT("TXT_UploadThroughputValue"),FormatThroughput(Job?Job->throughputBytesPerSecond:0)); SetText(UploadWidgets,TEXT("TXT_UploadBytesValue"),FormatLogicalByteProgress(Done,Total)); SetText(UploadWidgets,TEXT("TXT_UploadElapsedValue"),FormatElapsedMilliseconds(Job?Job->elapsedMs:0)); if(UProgressBar* Bar=Get<UProgressBar>(UploadWidgets,TEXT("PROGRESS_Upload"))) Bar->SetPercent(UR); SetText(UploadWidgets,TEXT("TXT_UploadPercent"),FormatPercent(UR)); SetText(UploadWidgets,TEXT("TXT_CurrentMaxConcurrencyValue"),Job?FString::Printf(TEXT("Current: %u"),Job->effectiveMaxConcurrentUploads):TEXT("Current: --"));
+	const uint64 Total=Job?Job->totalBytes:0,Done=Job?Job->bytesCompleted:0; const double UR=ComputeProgressRatio(Done,Total); SetText(UploadWidgets,TEXT("TXT_UploadThroughputValue"),FormatThroughput(Job?Job->throughputBytesPerSecond:0)); SetText(UploadWidgets,TEXT("TXT_UploadBytesValue"),FormatLogicalByteProgress(Done,Total)); SetText(UploadWidgets,TEXT("TXT_UploadElapsedValue"),FormatElapsedMilliseconds(Job?Job->elapsedMs:0)); if(UProgressBar* Bar=Get<UProgressBar>(UploadWidgets,TEXT("PROGRESS_Upload"))) Bar->SetPercent(UR); SetText(UploadWidgets,TEXT("TXT_UploadPercent"),FormatPercent(UR)); SetText(UploadWidgets,TEXT("TXT_CurrentMaxConcurrencyValue"),Job?FString::Printf(TEXT("Current: %u"),Job->effectiveMaxConcurrentUploads):(AutoStartState!=EGCSRouteAutoStartState::Idle?TEXT("E.0 Start: 1"):TEXT("Current: --")));
 	RefreshArtifactIdentity();
 	SyncRouteListModel();
 	RefreshVisibleRouteRows();
@@ -1224,6 +1817,12 @@ void UGCSRouteWorkflowCoordinator::SyncRouteListModel()
 	const dspgcs::UploadJobSnapshotDTO* Job = Mirror ? Mirror->GetSnapshot() : nullptr;
 	if (!Job)
 	{
+		if (!RouteListItems.IsEmpty() && RouteListItems[0] &&
+			RouteListItems[0]->bAutoStartPreview &&
+			AutoStartState != EGCSRouteAutoStartState::Idle)
+		{
+			return;
+		}
 		if (!RouteListItems.IsEmpty() || !RouteListJobID.IsEmpty()) ClearRouteListModel();
 		return;
 	}
@@ -1334,6 +1933,38 @@ void UGCSRouteWorkflowCoordinator::ClearRouteListModel()
 	RouteRowDiagnostics.Reset();
 }
 
+bool UGCSRouteWorkflowCoordinator::ReplaceAutoStartPreviewItems(
+	const FGCSRouteAutoStartSnapshot& Snapshot)
+{
+	if (!IsInGameThread() || Snapshot.Targets.IsEmpty()) return false;
+	ClearRouteListModel();
+	RouteListJobID = TEXT("AUTO:") + Snapshot.TransactionID;
+	RouteListSnapshotToken = Snapshot.TransactionID;
+	TArray<UObject*> ListItems;
+	RouteListItems.Reserve(Snapshot.Targets.Num());
+	ListItems.Reserve(Snapshot.Targets.Num());
+	for (const FGCSRouteAutoStartTargetSnapshot& Target : Snapshot.Targets)
+	{
+		UGCSRouteUploadListItem* Item = NewObject<UGCSRouteUploadListItem>(this);
+		Item->RouteSlotIndex = Target.RouteSlotIndex;
+		Item->UploadJobID = RouteListJobID;
+		Item->SnapshotToken = RouteListSnapshotToken;
+		Item->bAutoStartPreview = true;
+		Item->PreviewDroneID = Target.DroneID;
+		Item->PreviewRouteRelativePath = Target.RouteRelativePath;
+		RouteListItems.Add(Item);
+		RouteItemsBySlot.Add(Target.RouteSlotIndex, Item);
+		ListItems.Add(Item);
+	}
+	if (UListView* List = GCSRouteWorkflowPrivate::Get<UListView>(
+		UploadWidgets, TEXT("LIST_RouteUploadStates")))
+	{
+		List->SetListItems(ListItems);
+	}
+	++RouteListRebuildCount;
+	return true;
+}
+
 void UGCSRouteWorkflowCoordinator::RefreshVisibleRouteRows()
 {
 	using namespace GCSRouteWorkflowPrivate;
@@ -1343,8 +1974,8 @@ void UGCSRouteWorkflowCoordinator::RefreshVisibleRouteRows()
 		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
 	const URouteArtifactWorkspaceSubsystem* Workspace =
 		GameInstanceRef->GetSubsystem<URouteArtifactWorkspaceSubsystem>();
-	if (!List || !Upload) return;
-	const FDSPGCSUploadJobStateMirror& Mirror = Upload->GetStateMirror();
+	if (!List) return;
+	const FDSPGCSUploadJobStateMirror* Mirror = Upload ? &Upload->GetStateMirror() : nullptr;
 
 	for (UUserWidget* Row : List->GetDisplayedEntryWidgets())
 	{
@@ -1386,7 +2017,26 @@ void UGCSRouteWorkflowCoordinator::RefreshVisibleRouteRows()
 		RouteRowDiagnostics.Remove(Row);
 		if (!Item || Item->UploadJobID != RouteListJobID
 			|| Item->SnapshotToken != RouteListSnapshotToken) continue;
-		const dspgcs::UploadRouteStateDTO* State = Mirror.FindRoute(Item->RouteSlotIndex);
+		if (Item->bAutoStartPreview)
+		{
+			UTextBlock* RouteText = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_Route")));
+			UTextBlock* DroneText = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_Drone")));
+			UTextBlock* StateText = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_State")));
+			UTextBlock* ProgressText = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_Progress")));
+			UTextBlock* RetryText = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_Retry")));
+			RouteText->SetText(FText::FromString(FString::Printf(
+				TEXT("Slot %d / %s"), Item->RouteSlotIndex,
+				*FormatRouteFileDisplay(Item->PreviewRouteRelativePath))));
+			RouteText->SetToolTipText(FText::FromString(Item->PreviewRouteRelativePath));
+			DroneText->SetText(FText::FromString(Item->PreviewDroneID));
+			StateText->SetText(FText::FromString(FormatAutoStartState(AutoStartState)));
+			StateText->SetToolTipText(FText::FromString(AutoStartDiagnostic));
+			ProgressText->SetText(FText::FromString(TEXT("--")));
+			RetryText->SetText(FText::FromString(TEXT("0")));
+			continue;
+		}
+		if (!Mirror) continue;
+		const dspgcs::UploadRouteStateDTO* State = Mirror->FindRoute(Item->RouteSlotIndex);
 		if (!State) continue;
 
 		FRouteArtifactRecord Record;
@@ -1419,7 +2069,7 @@ void UGCSRouteWorkflowCoordinator::RefreshVisibleRouteRows()
 	}
 }
 
-bool UGCSRouteWorkflowCoordinator::TickRefresh(float DeltaSeconds) { (void)DeltaSeconds; if(RouteWorkflowWidget&&RouteWorkflowWidget->IsVisible()) RefreshReadOnlyState(); return true; }
+bool UGCSRouteWorkflowCoordinator::TickRefresh(float DeltaSeconds) { (void)DeltaSeconds; AdvanceAutoStartTransaction(); if(RouteWorkflowWidget&&RouteWorkflowWidget->IsVisible()) RefreshReadOnlyState(); return true; }
 void UGCSRouteWorkflowCoordinator::StartRefreshTicker() { if(!RefreshTickerHandle.IsValid()) RefreshTickerHandle=FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this,&UGCSRouteWorkflowCoordinator::TickRefresh),RefreshIntervalSeconds); }
 void UGCSRouteWorkflowCoordinator::StopRefreshTicker() { if(RefreshTickerHandle.IsValid()) { FTSTicker::GetCoreTicker().RemoveTicker(RefreshTickerHandle); RefreshTickerHandle.Reset(); } }
 double UGCSRouteWorkflowCoordinator::ComputeProgressRatio(uint64 Completed,uint64 Total) { return Total==0?0.0:FMath::Clamp(static_cast<double>(Completed)/Total,0.0,1.0); }
@@ -1614,11 +2264,14 @@ FGCSRouteUploadCommandGate UGCSRouteWorkflowCoordinator::ComputeUploadCommandGat
 	const FGCSRouteUploadCommandGateInputs& Inputs)
 {
 	FGCSRouteUploadCommandGate Gate;
+	Gate.StartBlockedReason = Inputs.StartBlockedReason;
 	if (Inputs.bCommandInFlight) return Gate;
 	if (!Inputs.bHasActiveJobBinding && !Inputs.bHasExecutableJob)
 	{
 		Gate.bStartEnabled =
-			Inputs.bArtifactReady && Inputs.bFrozenConsoleAccepted;
+			Inputs.bArtifactReady && Inputs.bAutoStartMappingValid &&
+			!Inputs.bAutoStartInFlight;
+		if (Gate.bStartEnabled) Gate.StartBlockedReason.Reset();
 		return Gate;
 	}
 	if (!Inputs.bHasExecutableJob) return Gate;
@@ -1644,6 +2297,22 @@ FGCSRouteUploadCommandGate UGCSRouteWorkflowCoordinator::ComputeUploadCommandGat
 		break;
 	}
 	return Gate;
+}
+
+FString UGCSRouteWorkflowCoordinator::FormatAutoStartState(
+	const EGCSRouteAutoStartState State)
+{
+	switch (State)
+	{
+	case EGCSRouteAutoStartState::ValidatingMapping: return TEXT("Validating Mapping");
+	case EGCSRouteAutoStartState::Freezing: return TEXT("Freezing Assignment");
+	case EGCSRouteAutoStartState::SyncingConsole: return TEXT("Syncing Console");
+	case EGCSRouteAutoStartState::StartingJob: return TEXT("Starting Upload");
+	case EGCSRouteAutoStartState::Completed: return TEXT("Upload Job Started");
+	case EGCSRouteAutoStartState::Failed: return TEXT("Automatic Start Failed");
+	case EGCSRouteAutoStartState::CancelledAsStale: return TEXT("Automatic Start Stale");
+	default: return TEXT("Idle");
+	}
 }
 
 #if WITH_DEV_AUTOMATION_TESTS

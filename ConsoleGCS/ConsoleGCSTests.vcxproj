@@ -32,7 +32,7 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;$(ProjectDir)\..\Shared\RouteWaypoint;$(ProjectDir)\..\Shared\RouteArtifact;$(ProjectDir)\..\Shared\RouteMission;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)\mavlink;$(ProjectDir)\..\Shared\DSPGCSProtocol;$(ProjectDir)\..\Shared\DSPGCSTransport;$(ProjectDir)\..\Shared\RouteWaypoint;$(ProjectDir)\..\Shared\RouteArtifact;$(ProjectDir)\..\Shared\RouteMission;$(ProjectDir)\..\Shared\DroneIdentity;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -55,6 +55,7 @@
     <ClCompile Include="tests\DSPFrozenAssignmentProtocolTests.cpp" />
     <ClCompile Include="tests\DSPFrozenAssignmentReceiverTests.cpp" />
     <ClCompile Include="tests\DSPFrozenAssignmentE2EServer.cpp" />
+    <ClCompile Include="tests\DroneLogicalIdTests.cpp" />
     <ClCompile Include="AppConfig.cpp" />
     <ClCompile Include="CommandManager.cpp" />
     <ClCompile Include="ConsoleArtifactConsumerV2.cpp" />

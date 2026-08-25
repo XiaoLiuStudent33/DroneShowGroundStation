@@ -1955,13 +1955,15 @@ bool FDSPGCSFrozenAssignmentSyncTests::RunTest(const FString& Parameters)
 				return false;
 			}
 			const double RestartNakDeadline = FPlatformTime::Seconds() + 3.0;
-			while (Relay.GetSnapshot().RejectedAcks <= RejectedBefore &&
+			while (Sync->Status.State == EState::SyncingToConsole &&
 				FPlatformTime::Seconds() < RestartNakDeadline)
 			{
+				PumpGameThread(Sync);
 				FPlatformProcess::SleepNoStats(0.002f);
 			}
 			Sync->ProcessPendingAcks();
 			OutResult.bQueueBoundaryVerified =
+				Relay.GetSnapshot().RejectedAcks > RejectedBefore &&
 				Sync->Status.State == EState::SyncFailed &&
 				Sync->Status.LastErrorCode == static_cast<int32>(EError::FleetSessionMismatch);
 			if (!OutResult.bQueueBoundaryVerified)
