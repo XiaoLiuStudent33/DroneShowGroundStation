@@ -258,3 +258,11 @@ Quick Test 当前从 `Current/manifest.json` 引导，但会使用默认 segment
 - Production Transport：MAVFTP only。
 - Phase 2I-C.3.D.1-D.3：IMPLEMENTED；D.4 冻结单 Transport 并删除旧选择路径。
 - Mission Ready、timing、RGB 与 mission.dat apply：FIRMWARE UNKNOWN / NOT PROVEN。
+
+## 16. Console Presentation Authority
+
+`ConsoleUI` 是 Console 物理输出的唯一 Authority。业务线程只提交完整日志记录或替换 Fleet 快照；容量为 1024 的 MPSC 队列和不可变快照由单一 Renderer 线程消费。Dashboard 的 Fleet、Drone List 与 Runtime Log 在内存中完成布局后按完整帧提交，不允许业务线程操作 cursor、颜色或 stdout。
+
+`auto` 模式使用 Windows stdout Handle 的 `GetFileType`、`GetConsoleMode` 与实时 Console geometry 判定：真实 Windows Console 使用 Dashboard；Pipe、Disk/File、无效 Handle、PowerShell `Tee-Object` 和 CI 使用 Linear 行日志。Dashboard 每次绘制重新读取可见窗口宽高，长行只在 Presentation 层做 UTF-8 边界安全截断，完整原文仍保留在线性输出。
+
+队列满时优先丢弃非关键记录并公开累计 `DroppedLogCount`；Error/Job terminal 记录可抢占非关键记录。若关键记录本身耗尽整个上限，critical drop 也必须出现在同一可观测计数中，不能静默发生。Renderer 停止前排空有界队列并恢复 Console cursor。

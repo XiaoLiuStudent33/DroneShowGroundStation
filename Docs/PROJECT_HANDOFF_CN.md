@@ -62,11 +62,14 @@ UE Route Workflow
 Phase 2I-C.3.D.1-D.3 = DONE
 Phase 2I-C.3.D.4 = MAVFTP SINGLE-TRANSPORT FREEZE
 Phase 2I-C.3.E.0 = AUTOMATIC SELECTED-DRONE ASSIGNMENT / SERIAL MULTI-TARGET DONE
+Phase 2I-C.3.E.0.1 = CONSOLE RENDER INTEGRITY DONE
 ```
 
 生产参数为 `segment_items=4000`、request/terminate timeout `750/2500 ms`、retry `3`、write window `16`。`segmentCapacity` 以包含 Reserved Home 的 Wire Mission Items 计数。
 
 正常 UI Start 每次重新建立当前选择的 Working/Frozen Assignment，等待精确 Console Accepted，重新校验全部 Authority 后 exactly once 创建一个 Job。一个 Job 可含多个 Targets，但 E.0 强制 `MaxConcurrentTargets=1`。E.1 全局 outstanding cap、E.2 多机硬件验证尚未完成；Console 重启后的 DroneID 发现顺序风险为 DEFERRED/E.3。
+
+Console 可观测性由 `ConsoleUI` 的单一 Renderer 线程负责。Producer 只入队 1024 条上限的结构化记录或发布 Fleet 快照；真实 Windows Console 使用动态尺寸 Dashboard，重定向、Pipe、文件、Tee 和 CI 使用无 cursor 控制的 Linear 输出。溢出通过 `DroppedLogCount` 可观测，terminal/error 优先于普通日志。E.1 尚未开始。
 
 ## 5. 保护规则
 

@@ -1,36 +1,22 @@
-﻿#pragma once
+#pragma once
 
 /**
- * @brief Console 进程的日志和 Fleet 摘要显示接口。
+ * @brief Console presentation boundary for the backend service.
  *
- * 分类：Production。
- * 输入：Application/Session/Command 状态；输出：线程安全的 Windows Console 文本界面。
- * 该 UI 只展示状态，不是 Fleet 身份或业务状态的权威来源。
+ * Producers only publish immutable fleet snapshots or complete log records.
+ * A single renderer thread owns every physical stdout/cursor write.
  */
 
-//--------------------------------------------------
-// Windows
-//--------------------------------------------------
-
-#include <windows.h>
-
-//--------------------------------------------------
-// C++
-//--------------------------------------------------
-
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
-
-//--------------------------------------------------
-// 工程
-//--------------------------------------------------
 
 #include "FlightData.h"
 #include "HoverTest.h"
-
-//==================================================
-// Console backend fleet status row.
-//==================================================
 
 struct ConsoleDroneStatus
 {
@@ -38,89 +24,96 @@ struct ConsoleDroneStatus
     bool online = false;
 };
 
+enum class ConsoleOutputMode
+{
+    Auto,
+    Dashboard,
+    Linear
+};
+
+enum class ConsoleOutputHandleKind
+{
+    Console,
+    Pipe,
+    Disk,
+    Invalid
+};
+
+enum class ConsoleLogSeverity
+{
+    Info,
+    Error,
+    Terminal
+};
+
+struct ConsoleTargetState
+{
+    ConsoleOutputHandleKind handleKind = ConsoleOutputHandleKind::Invalid;
+    bool geometryValid = false;
+    short width = 0;
+    short height = 0;
+};
+
+/**
+ * Test seam and physical-output abstraction. Only the renderer thread calls
+ * WriteDashboard/WriteLinear/Restore. Inspect is read-only.
+ */
+class IConsoleRenderTarget
+{
+public:
+    virtual ~IConsoleRenderTarget() = default;
+
+    virtual ConsoleTargetState Inspect() = 0;
+    virtual bool WriteDashboard(const std::vector<std::string>& lines) = 0;
+    virtual bool WriteLinear(const std::string& line) = 0;
+    virtual void Restore() = 0;
+};
+
+struct ConsoleUIStats
+{
+    std::uint64_t submittedLogCount = 0;
+    std::uint64_t renderedLogCount = 0;
+    std::uint64_t droppedLogCount = 0;
+    std::uint64_t droppedCriticalLogCount = 0;
+    std::uint64_t rejectedAfterShutdownCount = 0;
+    std::size_t pendingLogCount = 0;
+    std::size_t queueCapacity = 0;
+    ConsoleOutputMode activeMode = ConsoleOutputMode::Linear;
+    std::thread::id rendererThreadId;
+};
+
 class ConsoleUI
 {
 public:
-
-    //--------------------------------------------------
-    // 初始化控制台
-    //--------------------------------------------------
-
     static void Init();
+    static void Shutdown();
 
-    //--------------------------------------------------
-    // Update backend fleet overview and drone list.
-    //--------------------------------------------------
-
-    static void UpdateFleet(
-        const std::vector<ConsoleDroneStatus>& drones);
-
-    //--------------------------------------------------
-    // Compatibility adapters for legacy callers. They no longer display
-    // single-drone telemetry and should not be used by the backend service.
-    //--------------------------------------------------
-
-    static void Update(
-        const FlightData& data,
-        const HoverTest& test);
-
+    static void UpdateFleet(const std::vector<ConsoleDroneStatus>& drones);
+    static void Update(const FlightData& data, const HoverTest& test);
     static void Update(
         const std::string& droneId,
         const FlightData& data,
         const HoverTest& test);
 
-    //--------------------------------------------------
-    // 添加运行日志
-    //--------------------------------------------------
-
+    static void AddLog(const std::string& text);
     static void AddLog(
-        const std::string& text);
-
-private:
-
-    //--------------------------------------------------
-    // 绘制固定界面
-    //--------------------------------------------------
-
-    static void DrawFrame();
-
-    //--------------------------------------------------
-    // 指定位置输出文本
-    //--------------------------------------------------
-
-    static void Print(
-        short x,
-        short y,
+        const std::string& category,
         const std::string& text,
-        WORD color = 7);
+        ConsoleLogSeverity severity = ConsoleLogSeverity::Info);
+    static void AddErrorLog(const std::string& text);
+    static void AddTerminalLog(const std::string& text);
 
-    //--------------------------------------------------
-    // 设置文字颜色
-    //--------------------------------------------------
-
-    static void SetColor(
-        WORD color);
-
-    //--------------------------------------------------
-    // 移动光标
-    //--------------------------------------------------
-
-    static void MoveCursor(
-        short x,
-        short y);
-
-    //--------------------------------------------------
-    // 清空指定行
-    //--------------------------------------------------
-
-    static void ClearLine(
-        short y);
+    // Console-only test controls. They must be configured while stopped.
+    static bool ConfigureForTesting(
+        std::shared_ptr<IConsoleRenderTarget> target,
+        ConsoleOutputMode mode,
+        std::size_t queueCapacity = 1024,
+        std::chrono::milliseconds renderInterval =
+            std::chrono::milliseconds(10));
+    static bool WaitUntilIdle(std::chrono::milliseconds timeout);
+    static ConsoleUIStats GetStats();
+    static void ResetTestingConfiguration();
 
 private:
-
-    //--------------------------------------------------
-    // 当前日志输出位置
-    //--------------------------------------------------
-
-    static int logLine;
+    ConsoleUI() = delete;
 };

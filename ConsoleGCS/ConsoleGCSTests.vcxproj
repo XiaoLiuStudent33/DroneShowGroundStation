@@ -41,6 +41,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="tests\ConsolePipelineTests.cpp" />
+    <ClCompile Include="tests\ConsoleRenderTests.cpp" />
     <ClCompile Include="tests\CommandTests.cpp" />
     <ClCompile Include="tests\ConsoleArtifactConsumerV2Tests.cpp" />
     <ClCompile Include="tests\RouteArtifactV2ContractTests.cpp" />

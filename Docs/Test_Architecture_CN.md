@@ -34,6 +34,7 @@ Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，�
 .\x64\Release\ConsoleGCSTests.exe --upload-job-tests
 .\x64\Release\ConsoleGCSTests.exe --mavftp-probe-tests
 .\x64\Release\ConsoleGCSTests.exe --drone-id-tests
+.\x64\Release\ConsoleGCSTests.exe --console-render-tests
 ```
 
 - `--mission-tests`：Route Mission codec 与 Mission FTP compiler。
@@ -41,6 +42,7 @@ Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，�
 - `--upload-job-tests`：DSP Upload Job schema/binding/materialization/scale。
 - `--mavftp-probe-tests`：MAVFTP protocol/client、MissionProfileProbe、Mission writer 与 Hardware Harness safety。
 - `--drone-id-tests`：Console/UE 共享 canonical DroneID format/parse/overflow/RouteSlot 合同。
+- `--console-render-tests`：单 Writer、Dashboard/Linear Handle 判定、长行与短行覆盖、Resize/compact layout、1024 条有界队列、critical retention、active-producer Shutdown 和生产风格终帧。
 - Full suite 还覆盖 Console pipeline、command、Frozen Assignment、Artifact Consumer v2 与 contract。
 
 ## 3. UE Regression
@@ -80,7 +82,10 @@ Quick Test 从 `UnrealGCS/Saved/RouteArtifacts/Current/manifest.json` 引导，�
 --upload-job-tests = PASS
 --mavftp-probe-tests = PASS
 Full ConsoleGCSTests = PASS
+--console-render-tests = PASS (连续 20/20)
 ```
+
+E.0.1 Console Render Integrity 另完成 Full ConsoleGCSTests 连续 3/3 PASS。Fake Console 只替换物理 target，生产 Renderer/queue/layout 未复制；Pipe/File 断言不含 cursor/clear escape，Dashboard 所有输出行严格受当前 viewport 边界约束。
 
 UE Development/DebugGame Editor Build 均 PASS；AutoStart 6/6 PASS，Route Assignment + Frozen shared contract + DSP Upload Job + Route Workflow 合并回归 164/164 PASS。证据限定：本轮未运行真实飞控上传。
 

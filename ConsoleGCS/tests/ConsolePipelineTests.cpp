@@ -46,6 +46,7 @@ int RunMAVFTPMissionWriterTests();
 int RunMAVFTPMissionHardwareTestTests();
 int RunMissionUploadTests();
 int RunDroneLogicalIdTests();
+int RunConsoleRenderTests();
 
 namespace
 {
@@ -1598,6 +1599,10 @@ int main(const int argc, char** argv)
     {
         return RunDroneLogicalIdTests();
     }
+    if (argc > 1 && std::string(argv[1]) == "--console-render-tests")
+    {
+        return RunConsoleRenderTests();
+    }
     if (argc > 1 && std::string(argv[1]) == "--artifact-v2-consumer-tests")
     {
         return RunConsoleArtifactConsumerV2Tests();
@@ -1649,6 +1654,7 @@ int main(const int argc, char** argv)
     const int mavFtpHarnessResult = RunMAVFTPMissionHardwareTestTests();
     const int missionUploadResult = RunMissionUploadTests();
     const int droneLogicalIdResult = RunDroneLogicalIdTests();
+    const int consoleRenderResult = RunConsoleRenderTests();
 
     if (pipelineResult == 0 && commandResult == 0 && dspCommandResult == 0 &&
         frozenAssignmentResult == 0 && frozenAssignmentReceiverResult == 0
@@ -1661,7 +1667,8 @@ int main(const int argc, char** argv)
         && mavFtpWriterResult == 0
         && mavFtpHarnessResult == 0
         && missionUploadResult == 0
-        && droneLogicalIdResult == 0)
+        && droneLogicalIdResult == 0
+        && consoleRenderResult == 0)
     {
         std::cout << "ConsoleGCS regression suite passed\n";
         return 0;

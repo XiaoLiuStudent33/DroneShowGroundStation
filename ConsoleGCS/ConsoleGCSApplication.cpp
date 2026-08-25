@@ -44,6 +44,24 @@
 
 namespace
 {
+    class ScopedConsolePresentation
+    {
+    public:
+        ScopedConsolePresentation()
+        {
+            ConsoleUI::Init();
+        }
+
+        ~ScopedConsolePresentation()
+        {
+            ConsoleUI::Shutdown();
+        }
+
+        ScopedConsolePresentation(const ScopedConsolePresentation&) = delete;
+        ScopedConsolePresentation& operator=(
+            const ScopedConsolePresentation&) = delete;
+    };
+
     template <typename Integer>
     bool ParseInteger(const std::string& text, Integer& output)
     {
@@ -393,7 +411,7 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
             appConfig.mavlinkBindIP,
             appConfig.mavlinkBindPort);
 
-    ConsoleUI::Init();
+    ScopedConsolePresentation consolePresentation;
     ConsoleUI::AddLog("Drone GCS Started");
     ConsoleUI::AddLog(
         std::string("SAFE_TEST_MODE=") +
@@ -440,9 +458,9 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
         (!appConfig.safeTestMode || !appConfig.realCommandEnabled ||
             !appConfig.routeUploadEnabled))
     {
-        std::cerr
-            << "MAVFTP hardware validation requires the existing safe-test, "
-               "real-command, and route-upload safety gates; configuration was not changed.\n";
+        ConsoleUI::AddErrorLog(
+            "MAVFTP hardware validation requires the existing safe-test, "
+            "real-command, and route-upload safety gates; configuration was not changed.");
         return -6;
     }
 
@@ -457,9 +475,9 @@ int ConsoleGCSApplication::RunProductionMavlink(
 {
     if (probeOptions.enabled && appConfig.realCommandEnabled)
     {
-        std::cerr
-            << "MissionProfileProbe requires real_command_enabled=false so no "
-               "unrelated vehicle command can share the probe process.\n";
+        ConsoleUI::AddErrorLog(
+            "MissionProfileProbe requires real_command_enabled=false so no "
+            "unrelated vehicle command can share the probe process.");
         return -5;
     }
     if (appConfig.realCommandEnabled &&
@@ -645,8 +663,8 @@ int ConsoleGCSApplication::RunProductionMavlink(
         if (!hardwareTest->Start(
             std::chrono::steady_clock::now(), hardwareTestError))
         {
-            std::cerr << "MAVFTP hardware test rejected: "
-                << hardwareTestError << '\n';
+            ConsoleUI::AddErrorLog(
+                "MAVFTP hardware test rejected: " + hardwareTestError);
             return -6;
         }
     }
@@ -700,7 +718,8 @@ int ConsoleGCSApplication::RunProductionMavlink(
                     droneManager, probeOptions, probeError);
                 if (!missionProfileProbe)
                 {
-                    std::cerr << "MissionProfileProbe rejected: " << probeError << '\n';
+                    ConsoleUI::AddErrorLog(
+                        "MissionProfileProbe rejected: " + probeError);
                     return -5;
                 }
                 ConsoleUI::AddLog(
@@ -713,7 +732,8 @@ int ConsoleGCSApplication::RunProductionMavlink(
             }
             else if (now >= probeDiscoveryDeadline)
             {
-                std::cerr << "MissionProfileProbe failed: explicitly requested DroneID was not online before the bounded discovery deadline.\n";
+                ConsoleUI::AddErrorLog(
+                    "MissionProfileProbe failed: explicitly requested DroneID was not online before the bounded discovery deadline.");
                 return -5;
             }
         }
@@ -724,8 +744,8 @@ int ConsoleGCSApplication::RunProductionMavlink(
             {
                 const MissionProfileProbeReport& report =
                     missionProfileProbe->GetReport();
-                std::cout << report.ToMachineJson() << '\n'
-                    << report.ToHumanSummary() << '\n';
+                ConsoleUI::AddTerminalLog(
+                    report.ToMachineJson() + "\n" + report.ToHumanSummary());
                 return report.succeeded ? 0 : -5;
             }
         }
@@ -737,7 +757,7 @@ int ConsoleGCSApplication::RunProductionMavlink(
             {
                 const MAVFTPMissionHardwareTestReport& report =
                     hardwareTest->GetReport();
-                std::cout << report.ToHumanSummary() << '\n';
+                ConsoleUI::AddTerminalLog(report.ToHumanSummary());
                 return report.succeeded ? 0 : -6;
             }
         }

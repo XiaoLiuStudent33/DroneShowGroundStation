@@ -30,6 +30,7 @@ Route Upload 阶段：
 | RouteUploadManager / 并发、取消、重试、状态 | IMPLEMENTED |
 | UI-3C 上传操作按钮与状态展示 | IMPLEMENTED |
 | Phase 2I-C.3.E.0 Selected Drone 自动分配与 Start 事务 | IMPLEMENTED |
+| Phase 2I-C.3.E.0.1 Console Render Integrity | IMPLEMENTED |
 | MAVFTP 9100/4000 三段生产上传与最终验证 | DONE |
 | MissionTransport abstraction | DONE |
 | MissionFtpCompiler | DONE |
@@ -71,6 +72,7 @@ Phase 2I-C.3.E.0 — Automatic Selected-Drone Assignment and Start Transaction
 - 真实飞控 9100/4000 三段 `CLEAR + NO_CLEAR` 与 Count/Home/First/Last 验证。
 - 正常 UI Start 已不依赖手工 `RouteAssignment.BindExplicit`；该 Cmd 只保留诊断用途。
 - E.0 支持一个 Job 的多 Target，但 `MaxConcurrentTargets` 安全冻结为 `1`。
+- E.0.1 已冻结 Console 单一 Renderer Authority；真实 Console 为 Dashboard，Pipe/File/Tee/CI 为 Linear，业务线程不再直接参与物理绘制。
 - 自动事务在 Console Accepted 后重新校验 Selection/Fleet/endpoint/Artifact/Manifest/Route record，并且每个事务最多发送一次 Start。
 
 ## 3. NOT STARTED
@@ -119,7 +121,10 @@ Target=Succeeded / Job ElapsedMs=8829
 --upload-job-tests = PASS
 --mavftp-probe-tests = PASS
 Full ConsoleGCSTests = PASS
+--console-render-tests = PASS (连续 20/20)
 ```
+
+E.0.1 完整 Console 回归连续 3/3 PASS；有界队列压力、长行、短行覆盖、Resize、compact viewport、单 Writer 和 active-producer Shutdown 均由 Fake Console 专项覆盖。E.1 多 Target 真并发尚未开始。
 
 UE Development/DebugGame Editor Build 均为 PASS；E.0 AutoStart 专项 6/6 PASS，Route Assignment + Frozen Sync + DSP Upload Job + Route Workflow 合并回归 164/164 PASS。本轮没有运行真实飞控上传。
 

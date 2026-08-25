@@ -5,6 +5,7 @@
 #include "MavlinkDiscoveryService.h"
 #include "MAVFTPMissionTransport.h"
 #include "RouteUploadManager.h"
+#include "ConsoleUI.h"
 #include "RouteArtifactContract.h"
 #include "Wpl110Core.h"
 
@@ -13,6 +14,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -34,9 +37,54 @@ namespace
     class ScopedCoutCapture final
     {
     public:
+        class Target final : public IConsoleRenderTarget
+        {
+        public:
+            ConsoleTargetState Inspect() override
+            {
+                return { ConsoleOutputHandleKind::Pipe, false, 0, 0 };
+            }
+
+            bool WriteDashboard(
+                const std::vector<std::string>& /*lines*/) override
+            {
+                return false;
+            }
+
+            bool WriteLinear(const std::string& line) override
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                output_ << line << '\n';
+                return true;
+            }
+
+            void Restore() override {}
+
+            std::string GetOutput() const
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                return output_.str();
+            }
+
+        private:
+            mutable std::mutex mutex_;
+            std::ostringstream output_;
+        };
+
         explicit ScopedCoutCapture(const bool enabled)
         {
-            if (enabled) original_ = std::cout.rdbuf(output_.rdbuf());
+            if (!enabled) return;
+            target_ = std::make_shared<Target>();
+            ConsoleUI::Shutdown();
+            ConsoleUI::ResetTestingConfiguration();
+            if (!ConsoleUI::ConfigureForTesting(
+                    target_, ConsoleOutputMode::Linear, 128,
+                    std::chrono::milliseconds(1)))
+            {
+                throw std::runtime_error(
+                    "unable to configure RouteUpload runtime log capture");
+            }
+            ConsoleUI::Init();
         }
 
         ~ScopedCoutCapture() { Restore(); }
@@ -44,19 +92,21 @@ namespace
         std::string Stop()
         {
             Restore();
-            return output_.str();
+            return target_ ? target_->GetOutput() : std::string{};
         }
 
     private:
         void Restore()
         {
-            if (!original_) return;
-            std::cout.rdbuf(original_);
-            original_ = nullptr;
+            if (!target_ || stopped_) return;
+            ConsoleUI::WaitUntilIdle(std::chrono::seconds(2));
+            ConsoleUI::Shutdown();
+            ConsoleUI::ResetTestingConfiguration();
+            stopped_ = true;
         }
 
-        std::ostringstream output_;
-        std::streambuf* original_ = nullptr;
+        std::shared_ptr<Target> target_;
+        bool stopped_ = false;
     };
 
     MissionVerificationPeerIdentity Peer()
