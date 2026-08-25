@@ -4,6 +4,7 @@
 #include "DroneManager.h"
 #include "MavFtpClient.h"
 #include "MavFtpProtocol.h"
+#include "MavFtpWritePermitPool.h"
 #include "MavlinkDatagramSender.h"
 #include "MavlinkReadOnlyIngress.h"
 #include "MissionProfileProbe.h"
@@ -607,27 +608,41 @@ namespace
     class CapturingSender final : public IMavlinkDatagramSender
     {
     public:
+        struct Datagram
+        {
+            std::uint16_t port = 0;
+            std::vector<std::uint8_t> bytes;
+        };
+
         bool SendTo(const std::string& ip, const std::uint16_t port,
             const std::uint8_t* data, const int length) override
         {
-            if (ip != "127.0.0.1" || port != 30007 || !data || length <= 0)
+            if (ip != "127.0.0.1" ||
+                (port != 30007 && port != 30008) || !data || length <= 0)
                 return false;
-            datagrams.emplace_back(data, data + length);
+            datagrams.push_back({ port,
+                std::vector<std::uint8_t>(data, data + length) });
             return true;
         }
 
-        mavlink_message_t Pop()
+        std::pair<std::uint16_t, mavlink_message_t> PopWithEndpoint()
         {
             Expect(cursor < datagrams.size(), "DroneSession emitted no request");
             mavlink_message_t message{};
             mavlink_status_t status{};
-            for (const std::uint8_t byte : datagrams[cursor++])
+            const Datagram& datagram = datagrams[cursor++];
+            for (const std::uint8_t byte : datagram.bytes)
                 (void)mavlink_parse_char(MAVLINK_COMM_3, byte, &message, &status);
-            return message;
+            return { datagram.port, message };
+        }
+
+        mavlink_message_t Pop()
+        {
+            return PopWithEndpoint().second;
         }
 
         std::size_t cursor = 0;
-        std::vector<std::vector<std::uint8_t>> datagrams;
+        std::vector<Datagram> datagrams;
     };
 
     DiscoveredDroneIdentity Identity()
@@ -1120,6 +1135,270 @@ namespace
             session->ConsumeMissionCount() == 3,
             "MISSION_COUNT ingress did not preserve same-session identity");
     }
+
+    void TestIngressTwoEndpointAckIsolation()
+    {
+        CapturingSender sender;
+        DroneManager manager;
+        DroneSessionConfig defaults;
+        defaults.receiveOnly = true;
+        defaults.mavFtpServiceEnabled = true;
+        defaults.sharedMavlinkEndpoint = &sender;
+        MavlinkDiscoveryService discovery(manager, defaults);
+        MavlinkReadOnlyIngress ingress(manager, discovery);
+
+        mavlink_message_t heartbeat{};
+        mavlink_msg_heartbeat_pack(7, MAV_COMP_ID_AUTOPILOT1, &heartbeat,
+            MAV_TYPE_QUADROTOR, MAV_AUTOPILOT_ARDUPILOTMEGA, 0, 0,
+            MAV_STATE_STANDBY);
+        const auto heartbeatBytes = SerializeMavlink(heartbeat);
+        Expect(ingress.SubmitDatagram(heartbeatBytes.data(),
+                heartbeatBytes.size(), "127.0.0.1", 30007).heartbeatsApplied == 1 &&
+            ingress.SubmitDatagram(heartbeatBytes.data(),
+                heartbeatBytes.size(), "127.0.0.1", 30008).heartbeatsApplied == 1 &&
+            manager.GetDroneCount() == 2,
+            "same-SYSID A/B endpoints did not create distinct Sessions");
+        const auto ids = manager.GetDroneIds();
+        DroneSession* sessionA = manager.FindDrone(ids[0]);
+        DroneSession* sessionB = manager.FindDrone(ids[1]);
+        Expect(sessionA && sessionB && sessionA->GetMavFtpClient() &&
+            sessionB->GetMavFtpClient(),
+            "A/B endpoint Sessions omitted their unique Clients");
+        std::string error;
+        Expect(sessionA->GetMavFtpClient()->StartResetSessions(error) &&
+            sessionB->GetMavFtpClient()->StartResetSessions(error),
+            "A/B identical request fixture did not start");
+
+        const auto decodeRequest = [&sender]()
+        {
+            const mavlink_message_t message = sender.Pop();
+            mavlink_file_transfer_protocol_t envelope{};
+            mavlink_msg_file_transfer_protocol_decode(&message, &envelope);
+            ftp::Payload request;
+            ftp::Error decodeError;
+            Expect(ftp::DecodePayload(envelope.payload,
+                sizeof(envelope.payload), request, decodeError),
+                "A/B ResetSessions request did not decode");
+            return request;
+        };
+        const ftp::Payload requestA = decodeRequest();
+        const ftp::Payload requestB = decodeRequest();
+        Expect(requestA.sequence == requestB.sequence &&
+            requestA.session == requestB.session &&
+            requestA.offset == requestB.offset &&
+            requestA.opcode == requestB.opcode,
+            "A/B isolation fixture did not share identical ACK identity fields");
+
+        ftp::Payload response;
+        response.sequence = ftp::NextSequence(requestA.sequence);
+        response.session = requestA.session;
+        response.opcode = ftp::Opcode::Ack;
+        response.requestOpcode = requestA.opcode;
+        response.offset = requestA.offset;
+        std::array<std::uint8_t, ftp::PayloadBytes> responseWire{};
+        ftp::Error protocolError;
+        Expect(ftp::EncodePayload(response, responseWire, protocolError),
+            "A/B identical ACK did not encode");
+        mavlink_message_t responseMessage{};
+        mavlink_msg_file_transfer_protocol_pack(7, MAV_COMP_ID_AUTOPILOT1,
+            &responseMessage, 0, 255, MAV_COMP_ID_MISSIONPLANNER,
+            responseWire.data());
+        const auto responseBytes = SerializeMavlink(responseMessage);
+
+        const auto statsA = ingress.SubmitDatagram(responseBytes.data(),
+            responseBytes.size(), "127.0.0.1", 30007);
+        const auto resultA = sessionA->GetMavFtpClient()->ConsumeResult();
+        Expect(statsA.ftpMessagesApplied == 1 && resultA && resultA->success &&
+            sessionB->GetMavFtpClient()->IsBusy() &&
+            !sessionB->GetMavFtpClient()->ConsumeResult(),
+            "endpoint A ACK advanced endpoint B with identical identity fields");
+        const auto statsB = ingress.SubmitDatagram(responseBytes.data(),
+            responseBytes.size(), "127.0.0.1", 30008);
+        const auto resultB = sessionB->GetMavFtpClient()->ConsumeResult();
+        Expect(statsB.ftpMessagesApplied == 1 && resultB && resultB->success,
+            "endpoint B did not independently consume its identical ACK");
+    }
+
+    void TestIngressTwoEndpointWritePermitIsolation()
+    {
+        CapturingSender sender;
+        ftp::WritePermitPool permitPool(2);
+        DroneManager manager;
+        DroneSessionConfig defaults;
+        defaults.receiveOnly = true;
+        defaults.mavFtpServiceEnabled = true;
+        defaults.sharedMavlinkEndpoint = &sender;
+        defaults.mavFtpWritePermitPool = &permitPool;
+        defaults.mavFtpWriteWindow = 1;
+        defaults.mavFtpRequestRetryCount = 1;
+        defaults.mavFtpRequestTimeoutMs = 750;
+        MavlinkDiscoveryService discovery(manager, defaults);
+        MavlinkReadOnlyIngress ingress(manager, discovery);
+
+        mavlink_message_t heartbeat{};
+        mavlink_msg_heartbeat_pack(7, MAV_COMP_ID_AUTOPILOT1, &heartbeat,
+            MAV_TYPE_QUADROTOR, MAV_AUTOPILOT_ARDUPILOTMEGA, 0, 0,
+            MAV_STATE_STANDBY);
+        const auto heartbeatBytes = SerializeMavlink(heartbeat);
+        Expect(ingress.SubmitDatagram(heartbeatBytes.data(),
+                heartbeatBytes.size(), "127.0.0.1", 30007).heartbeatsApplied == 1 &&
+            ingress.SubmitDatagram(heartbeatBytes.data(),
+                heartbeatBytes.size(), "127.0.0.1", 30008).heartbeatsApplied == 1,
+            "Write isolation endpoints did not create two Sessions");
+
+        DroneSession* sessionA = nullptr;
+        DroneSession* sessionB = nullptr;
+        for (const std::string& id : manager.GetDroneIds())
+        {
+            DroneSession* session = manager.FindDrone(id);
+            const ftp::Client* client = session ? session->GetMavFtpClient() : nullptr;
+            if (client && client->GetPeer().remotePort == 30007) sessionA = session;
+            else if (client && client->GetPeer().remotePort == 30008) sessionB = session;
+        }
+        Expect(sessionA && sessionB && sessionA->GetMavFtpClient() &&
+            sessionB->GetMavFtpClient(),
+            "Write isolation could not resolve endpoint-owned Clients");
+        ftp::Client* const clientA = sessionA->GetMavFtpClient();
+        ftp::Client* const clientB = sessionB->GetMavFtpClient();
+        std::string error;
+        const std::vector<std::uint8_t> bytesA(1, 0xA1);
+        const std::vector<std::uint8_t> bytesB(300, 0xB2);
+        Expect(clientA->StartWriteFile("@MISSION/mission.dat", bytesA, error) &&
+            clientB->StartWriteFile("@MISSION/mission.dat", bytesB, error),
+            "A/B endpoint Write operations did not start");
+
+        const auto DecodeRequest = [](const mavlink_message_t& message)
+        {
+            mavlink_file_transfer_protocol_t envelope{};
+            mavlink_msg_file_transfer_protocol_decode(&message, &envelope);
+            ftp::Payload request;
+            ftp::Error decodeError;
+            Expect(ftp::DecodePayload(envelope.payload,
+                sizeof(envelope.payload), request, decodeError),
+                "A/B endpoint request did not decode");
+            return request;
+        };
+        const auto SubmitResponse = [&ingress](
+            const std::uint16_t port, const ftp::Payload& request,
+            const ftp::Opcode responseOpcode, const std::uint8_t session,
+            std::vector<std::uint8_t> data = {})
+        {
+            ftp::Payload response;
+            response.sequence = ftp::NextSequence(request.sequence);
+            response.session = session;
+            response.opcode = responseOpcode;
+            response.requestOpcode = request.opcode;
+            response.offset = request.offset;
+            response.data = std::move(data);
+            std::array<std::uint8_t, ftp::PayloadBytes> wire{};
+            ftp::Error encodeError;
+            Expect(ftp::EncodePayload(response, wire, encodeError),
+                "A/B endpoint response did not encode");
+            mavlink_message_t message{};
+            mavlink_msg_file_transfer_protocol_pack(7,
+                MAV_COMP_ID_AUTOPILOT1, &message, 0, 255,
+                MAV_COMP_ID_MISSIONPLANNER, wire.data());
+            const auto datagram = SerializeMavlink(message);
+            return ingress.SubmitDatagram(datagram.data(), datagram.size(),
+                "127.0.0.1", port);
+        };
+
+        const auto createDatagramA = sender.PopWithEndpoint();
+        const auto createDatagramB = sender.PopWithEndpoint();
+        Expect(createDatagramA.first == 30007 && createDatagramB.first == 30008,
+            "A/B CreateFile requests crossed endpoints");
+        const ftp::Payload createA = DecodeRequest(createDatagramA.second);
+        const ftp::Payload createB = DecodeRequest(createDatagramB.second);
+        Expect(createA.opcode == ftp::Opcode::CreateFile &&
+            createB.opcode == ftp::Opcode::CreateFile &&
+            createA.sequence == createB.sequence,
+            "A/B CreateFile identity fixture diverged");
+        Expect(SubmitResponse(30007, createA, ftp::Opcode::Ack, 41)
+                .ftpMessagesApplied == 1 &&
+            SubmitResponse(30008, createB, ftp::Opcode::Ack, 41)
+                .ftpMessagesApplied == 1,
+            "A/B CreateFile ACKs were not routed by endpoint");
+
+        const auto writeDatagramA = sender.PopWithEndpoint();
+        const auto writeDatagramB = sender.PopWithEndpoint();
+        const ftp::Payload writeA = DecodeRequest(writeDatagramA.second);
+        const ftp::Payload writeB = DecodeRequest(writeDatagramB.second);
+        Expect(writeDatagramA.first == 30007 && writeDatagramB.first == 30008 &&
+            writeA.opcode == ftp::Opcode::WriteFile &&
+            writeB.opcode == ftp::Opcode::WriteFile &&
+            writeA.sequence == writeB.sequence &&
+            writeA.session == writeB.session &&
+            writeA.offset == writeB.offset &&
+            permitPool.GetMetrics().outstanding == 2,
+            "A/B identical Write identity did not hold two isolated permits");
+
+        const auto unknownEndpoint = SubmitResponse(
+            30009, writeA, ftp::Opcode::Ack, 41);
+        Expect(unknownEndpoint.ftpMessagesApplied == 0 &&
+            permitPool.GetMetrics().outstanding == 2,
+            "unknown endpoint ACK released a Write permit");
+
+        clientA->Tick(std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(751));
+        const auto retryDatagramA = sender.PopWithEndpoint();
+        const ftp::Payload retryA = DecodeRequest(retryDatagramA.second);
+        Expect(retryDatagramA.first == 30007 && retryA.sequence == writeA.sequence &&
+            retryA.session == writeA.session && retryA.offset == writeA.offset &&
+            retryA.data == writeA.data &&
+            permitPool.GetMetrics().outstanding == 2 &&
+            permitPool.GetMetrics().permitsGranted == 2,
+            "A retry changed identity or reacquired its existing permit");
+
+        Expect(SubmitResponse(30008, writeB, ftp::Opcode::Ack, 41)
+                .ftpMessagesApplied == 1 &&
+            clientA->IsBusy() && clientB->IsBusy(),
+            "A timeout/retry blocked B Write progress");
+        const auto secondWriteDatagramB = sender.PopWithEndpoint();
+        const ftp::Payload secondWriteB = DecodeRequest(secondWriteDatagramB.second);
+        Expect(secondWriteDatagramB.first == 30008 &&
+            secondWriteB.opcode == ftp::Opcode::WriteFile &&
+            secondWriteB.offset > writeB.offset &&
+            permitPool.GetMetrics().outstanding == 2,
+            "B did not reuse its ACK-released permit while A was retrying");
+
+        Expect(SubmitResponse(30007, writeA, ftp::Opcode::Ack, 41)
+                .ftpMessagesApplied == 1,
+            "A Write ACK did not route to A");
+        const auto terminateDatagramA = sender.PopWithEndpoint();
+        const ftp::Payload terminateA = DecodeRequest(terminateDatagramA.second);
+        Expect(terminateDatagramA.first == 30007 &&
+            terminateA.opcode == ftp::Opcode::TerminateSession &&
+            clientA->IsAwaitingWriteCommit() && clientB->IsBusy() &&
+            permitPool.GetMetrics().outstanding == 1,
+            "A Terminate wait prevented B from retaining its Write permit");
+
+        Expect(SubmitResponse(30007, writeA, ftp::Opcode::Ack, 41)
+                .ftpMessagesApplied == 0 &&
+            permitPool.GetMetrics().outstanding == 1,
+            "duplicate A Write ACK released B's permit");
+        Expect(SubmitResponse(30008, secondWriteB, ftp::Opcode::Nak, 41, { 1 })
+                .ftpMessagesApplied == 1 &&
+            permitPool.GetMetrics().outstanding == 0 && clientA->IsBusy(),
+            "B Write NAK leaked a permit or terminated A");
+        const auto resultB = clientB->ConsumeResult();
+        Expect(resultB && !resultB->success && !clientB->ConsumeResult(),
+            "B Write NAK did not complete B exactly once");
+
+        Expect(SubmitResponse(30007, terminateA, ftp::Opcode::Ack, 41)
+                .ftpMessagesApplied == 1,
+            "A Terminate ACK did not route to A");
+        const auto resultA = clientA->ConsumeResult();
+        Expect(resultA && resultA->success && !clientA->ConsumeResult() &&
+            !clientA->IsBusy() && !clientB->IsBusy() &&
+            permitPool.GetMetrics().permitsGranted ==
+                permitPool.GetMetrics().permitsReleased &&
+            permitPool.GetMetrics().invalidReleaseCount == 0,
+            "A/B terminal isolation leaked, double-released, or double-completed");
+        Expect(SubmitResponse(30008, secondWriteB, ftp::Opcode::Ack, 41)
+                .ftpMessagesApplied == 0 &&
+            permitPool.GetMetrics().outstanding == 0,
+            "stale B ACK advanced a terminal Client");
+    }
 }
 
 int RunMavFtpProbeTests()
@@ -1133,6 +1412,8 @@ int RunMavFtpProbeTests()
         TestPerOpcodeTimeoutAndTerminateSafety();
         TestProbeReadOnlyAndGuards();
         TestIngressDispatcher();
+        TestIngressTwoEndpointAckIsolation();
+        TestIngressTwoEndpointWritePermitIsolation();
         std::cout << "MAVFTP protocol/client and MissionProfileProbe tests passed\n";
         return 0;
     }

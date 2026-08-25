@@ -464,6 +464,8 @@ namespace dronegcs::mission_ftp
         mavftpMetrics_.terminateRetries += result.terminateRetries;
         mavftpMetrics_.duplicateAcks += result.duplicateAcks;
         mavftpMetrics_.staleOrMismatchedAcks += result.staleOrMismatchedAcks;
+        mavftpMetrics_.permitGrantCount += result.permitGrantCount;
+        mavftpMetrics_.permitWaitCount += result.permitWaitCount;
         mavftpMetrics_.configuredWriteWindow = result.configuredWriteWindow;
         mavftpMetrics_.maxObservedOutstanding = (std::max)(
             mavftpMetrics_.maxObservedOutstanding,

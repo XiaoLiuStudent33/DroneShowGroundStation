@@ -43,6 +43,8 @@ int RunRouteMissionBenchmarks(int argc, char** argv);
 int RunDSPUploadJobProtocolTests();
 int RunMavFtpProbeTests();
 int RunMAVFTPMissionWriterTests();
+int RunMAVFTPWritePermitConcurrencyTests();
+int RunRouteUploadConcurrencySchedulerTests();
 int RunMAVFTPMissionHardwareTestTests();
 int RunMissionUploadTests();
 int RunDroneLogicalIdTests();
@@ -116,6 +118,7 @@ snapshot_items_per_chunk=256
  terminate_timeout_ms=2500
  request_retry_count=3
 write_window=10
+global_write_outstanding_cap=123
 )" );
 
         AppConfig config;
@@ -141,7 +144,8 @@ write_window=10
              config.mavftpRequestTimeoutMs == 750 &&
              config.mavftpTerminateTimeoutMs == 2500 &&
              config.mavftpRequestRetryCount == 3U &&
-            config.mavftpWriteWindow == 10U,
+            config.mavftpWriteWindow == 10U &&
+            config.mavftpGlobalWriteOutstandingCap == 123U,
             "legal MAVFTP configuration values were not loaded");
         Expect(
             config.artifactWorkspaceRoot == "C:\\DroneGCSArtifactWorkspace",
@@ -210,7 +214,9 @@ dspgcs_command_enabled=false
             fallbackConfig.mavftpRequestRetryCount ==
                 AppConfigDefaults::MavftpRequestRetryCount &&
             fallbackConfig.mavftpWriteWindow ==
-                AppConfigDefaults::MavftpWriteWindow,
+                AppConfigDefaults::MavftpWriteWindow &&
+            fallbackConfig.mavftpGlobalWriteOutstandingCap ==
+                AppConfigDefaults::MavftpGlobalWriteOutstandingCap,
             "missing optional keys did not preserve code defaults");
         Expect(!fallbackConfig.routeUploadEnabled,
             "route_upload_enabled did not default fail-closed");
@@ -247,7 +253,8 @@ transport=)") + value + "\n");
             shipping.mavftpWriteWindow == 16U &&
             shipping.mavftpRequestTimeoutMs == 750 &&
             shipping.mavftpTerminateTimeoutMs == 2500 &&
-            shipping.mavftpRequestRetryCount == 3U,
+            shipping.mavftpRequestRetryCount == 3U &&
+            shipping.mavftpGlobalWriteOutstandingCap == 16U,
             "shipping upload INI does not freeze the production MAVFTP profile");
 
         const auto expectInvalidMavftp = [](
@@ -284,6 +291,40 @@ dspgcs_command_enabled=false
         expectInvalidMavftp("window-zero", "write_window=0");
         expectInvalidMavftp("window-negative", "write_window=-1");
         expectInvalidMavftp("window-high", "write_window=17");
+        expectInvalidMavftp("global-cap-zero", "global_write_outstanding_cap=0");
+        expectInvalidMavftp("global-cap-negative", "global_write_outstanding_cap=-1");
+        expectInvalidMavftp("global-cap-high", "global_write_outstanding_cap=801");
+
+        for (const int cap : { 1, 16, 800 })
+        {
+            TemporaryConfigFile legalCap(
+                "global-cap-" + std::to_string(cap), std::string(R"(
+safe_test_mode=true
+mavlink_network_enabled=false
+real_command_enabled=false
+heartbeat_timeout_ms=3000
+dspgcs_telemetry_enabled=false
+dspgcs_command_enabled=false
+[mavftp]
+global_write_outstanding_cap=)") + std::to_string(cap) + "\n");
+            AppConfig legalConfig;
+            std::string legalError;
+            Expect(AppConfig::Load(legalCap.GetPath(), legalConfig, legalError) &&
+                legalConfig.mavftpGlobalWriteOutstandingCap ==
+                    static_cast<std::uint32_t>(cap),
+                "legal MAVFTP global Write cap was rejected");
+        }
+
+        AppConfig cliOverride = config;
+        std::string cliError;
+        Expect(ApplyMavFtpGlobalWriteOutstandingCapCliOverride(
+                cliOverride, 800, cliError) &&
+            cliOverride.mavftpGlobalWriteOutstandingCap == 800U,
+            "CLI did not override INI global Write cap");
+        Expect(!ApplyMavFtpGlobalWriteOutstandingCapCliOverride(
+                cliOverride, 0, cliError) &&
+            cliOverride.mavftpGlobalWriteOutstandingCap == 800U,
+            "explicit CLI zero was accepted or changed the previous valid cap");
 
          for (const int window : { 1, 2, 4, 8, 10, 16 })
         {
@@ -1636,6 +1677,12 @@ int main(const int argc, char** argv)
     if (argc > 1 && std::string(argv[1]) == "--mission-upload-tests")
     {
         return RunMissionUploadTests();
+    }
+    if (argc > 1 && std::string(argv[1]) == "--mavftp-concurrency-tests")
+    {
+        const int permitResult = RunMAVFTPWritePermitConcurrencyTests();
+        const int schedulerResult = RunRouteUploadConcurrencySchedulerTests();
+        return permitResult == 0 && schedulerResult == 0 ? 0 : 1;
     }
 
     const int pipelineResult = RunConsolePipelineTests();

@@ -196,6 +196,7 @@
     <ClInclude Include="DroneDiscovery.h" />
     <ClInclude Include="MavlinkDiscoveryService.h" />
     <ClInclude Include="MavFtpClient.h" />
+    <ClInclude Include="MavFtpWritePermitPool.h" />
     <ClInclude Include="MavFtpProtocol.h" />
     <ClInclude Include="MavlinkDatagramSender.h" />
     <ClInclude Include="MavlinkReadOnlyIngress.h" />

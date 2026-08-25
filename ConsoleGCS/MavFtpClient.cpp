@@ -1,4 +1,5 @@
 #include "MavFtpClient.h"
+#include "MavFtpWritePermitPool.h"
 
 #include <algorithm>
 #include <limits>
@@ -189,6 +190,7 @@ namespace dronegcs::mavftp
         {
             return false;
         }
+        RegisterWritePermitOwner();
         operationBytes_ = std::move(bytes);
         operationSize_ = operationBytes_.size();
         return true;
@@ -226,6 +228,7 @@ namespace dronegcs::mavftp
         {
             return false;
         }
+        RegisterWritePermitOwner();
         operationSize_ = totalBytes;
         maximumWriteChunkBytes_ = maximumChunkBytes;
         writeChunkReader_ = reader;
@@ -310,6 +313,9 @@ namespace dronegcs::mavftp
                     return;
                 }
             }
+            std::string fillError;
+            if (!FillWriteWindow(fillError))
+                FailWriteOperation(fillError);
             return;
         }
         if (!pending_ || now < deadline_) return;
@@ -472,12 +478,32 @@ namespace dronegcs::mavftp
         while (pendingWrites_.size() < config_.writeWindow &&
             nextWriteOffset_ < operationSize_)
         {
+            bool permitHeld = false;
+            if (config_.writePermitPool)
+            {
+                config_.writePermitPool->SetReady(this, true);
+                if (!config_.writePermitPool->TryAcquire(this))
+                {
+                    ++permitWaitCount_;
+                    error.clear();
+                    return true;
+                }
+                permitHeld = true;
+                ++permitGrantCount_;
+            }
             const std::size_t remaining = operationSize_ - nextWriteOffset_;
             const std::size_t size = (std::min)(
                 remaining, maximumWriteChunkBytes_);
-            if (!SendWriteRequest(nextWriteOffset_, size, error)) return false;
+            if (!SendWriteRequest(nextWriteOffset_, size, error))
+            {
+                if (permitHeld) config_.writePermitPool->Release(this);
+                return false;
+            }
+            pendingWrites_.back().permitHeld = permitHeld;
             nextWriteOffset_ += size;
         }
+        if (config_.writePermitPool)
+            config_.writePermitPool->SetReady(this, false);
         return true;
     }
 
@@ -621,6 +647,7 @@ namespace dronegcs::mavftp
             response.offset });
         if (recentWriteAcks_.size() > MaximumRecentWriteAcks)
             recentWriteAcks_.pop_front();
+        ReleaseWritePermit(*pending);
         pendingWrites_.erase(pending);
 
         std::string error;
@@ -646,6 +673,7 @@ namespace dronegcs::mavftp
         std::string diagnostic,
         const std::uint8_t nakError)
     {
+        ReleaseAllWritePermits();
         pendingWrites_.clear();
         BestEffortTerminate();
         CompleteFailure(std::move(diagnostic), nakError);
@@ -878,6 +906,7 @@ namespace dronegcs::mavftp
             pending_ = false;
             phase_ = Phase::Idle;
             operation_ = OperationKind::None;
+            ResetWriteSource();
         }
     }
 
@@ -926,6 +955,8 @@ namespace dronegcs::mavftp
             ? 0 : ackRttSumMs_ / ackRttCount_;
         result.interAckAverageMs = interAckCount_ == 0
             ? 0 : interAckSumMs_ / interAckCount_;
+        result.permitGrantCount = permitGrantCount_;
+        result.permitWaitCount = permitWaitCount_;
         if (ackRttSampleCount_ > 0)
         {
             std::vector<std::uint64_t> samples = ackRttSamples_;
@@ -946,6 +977,10 @@ namespace dronegcs::mavftp
 
     void Client::ResetWriteSource()
     {
+        ReleaseAllWritePermits();
+        if (config_.writePermitPool && writePermitOwnerRegistered_)
+            config_.writePermitPool->Unregister(this);
+        writePermitOwnerRegistered_ = false;
         writeChunkReader_ = nullptr;
         writeChunkReaderContext_ = nullptr;
         operationSize_ = 0;
@@ -962,12 +997,37 @@ namespace dronegcs::mavftp
         interAckCount_ = 0;
         writeBlocksSent_ = 0;
         writeBlocksCompleted_ = 0;
+        permitGrantCount_ = 0;
+        permitWaitCount_ = 0;
         maxObservedOutstanding_ = 0;
         createConfirmedAt_ = {};
         firstWriteSentAt_ = {};
         lastWriteAckedAt_ = {};
         previousWriteAckAt_ = {};
         terminateStartedAt_ = {};
+    }
+
+    void Client::RegisterWritePermitOwner()
+    {
+        if (!config_.writePermitPool || writePermitOwnerRegistered_) return;
+        config_.writePermitPool->Register(this);
+        config_.writePermitPool->SetReady(this, false);
+        writePermitOwnerRegistered_ = true;
+    }
+
+    void Client::ReleaseWritePermit(PendingWrite& pending)
+    {
+        if (!pending.permitHeld || !config_.writePermitPool) return;
+        config_.writePermitPool->Release(this);
+        pending.permitHeld = false;
+    }
+
+    void Client::ReleaseAllWritePermits()
+    {
+        for (PendingWrite& pending : pendingWrites_)
+            ReleaseWritePermit(pending);
+        if (config_.writePermitPool)
+            config_.writePermitPool->SetReady(this, false);
     }
 
     std::optional<OperationResult> Client::ConsumeResult()

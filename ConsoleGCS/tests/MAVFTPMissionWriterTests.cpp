@@ -1,5 +1,6 @@
 #include "MAVFTPMissionTransport.h"
 #include "ArduPilotMissionWireAdapter.h"
+#include "MavFtpWritePermitPool.h"
 
 #include <algorithm>
 #include <array>
@@ -988,6 +989,114 @@ namespace
             metricResult->writeDataDurationMs <= metricResult->totalDurationMs,
             "RTT/duration aggregation exceeded its bound or ordering contract");
     }
+
+    void TestDynamicNWritePermitFairnessAndLifetime()
+    {
+        std::array<int, 50> owners{};
+        ftp::WritePermitPool fairPool(1);
+        for (int& owner : owners)
+        {
+            fairPool.Register(&owner);
+            fairPool.SetReady(&owner, true);
+        }
+        std::array<std::uint32_t, 50> grants{};
+        for (std::size_t round = 0; round < owners.size() * 2; ++round)
+        {
+            const std::size_t expected = round % owners.size();
+            const std::size_t wrong = (expected + 1) % owners.size();
+            Expect(!fairPool.TryAcquire(&owners[wrong]),
+                "round-robin pool admitted a later Target out of turn");
+            Expect(fairPool.TryAcquire(&owners[expected]),
+                "round-robin pool starved the next dynamic Target");
+            ++grants[expected];
+            Expect(fairPool.GetMetrics().outstanding == 1,
+                "global cap one was exceeded");
+            fairPool.Release(&owners[expected]);
+        }
+        Expect(std::all_of(grants.begin(), grants.end(),
+                [](const std::uint32_t count) { return count == 2; }) &&
+            fairPool.GetMetrics().maxObservedOutstanding == 1 &&
+            fairPool.GetMetrics().outstanding == 0 &&
+            fairPool.GetMetrics().permitsGranted ==
+                fairPool.GetMetrics().permitsReleased &&
+            fairPool.GetMetrics().invalidReleaseCount == 0,
+            "GlobalCap<TargetCount fairness or exact release regressed at N=50");
+        for (int& owner : owners) fairPool.Unregister(&owner);
+        Expect(fairPool.GetRegisteredOwnerCount() == 0,
+            "dynamic Target permit registrations leaked");
+
+        FakeWire wire;
+        ftp::WritePermitPool lifetimePool(1);
+        ftp::ClientConfig config;
+        config.writeWindow = 16;
+        config.maximumRetries = 1;
+        config.requestTimeout = std::chrono::milliseconds(1);
+        config.writePermitPool = &lifetimePool;
+        ftp::Client client(wire, TestPeer(), config);
+        std::string error;
+        Expect(client.StartWriteFile("@MISSION/mission.dat",
+            Bytes(2 * ftp::MaximumDataBytes), error),
+            "permit lifetime Write did not start");
+        Expect(lifetimePool.GetMetrics().outstanding == 0,
+            "CreateFile control request consumed a Write permit");
+        wire.Ack(client, wire.Decode(0), 91);
+        const ftp::Payload firstWrite = wire.Decode(1);
+        Expect(client.GetOutstandingWriteCount() == 1 &&
+            lifetimePool.GetMetrics().outstanding == 1 &&
+            lifetimePool.GetMetrics().permitsGranted == 1,
+            "first Write did not hold exactly one global permit");
+        client.Tick(std::chrono::steady_clock::now() + std::chrono::seconds(1));
+        Expect(wire.Last().sequence == firstWrite.sequence &&
+            lifetimePool.GetMetrics().outstanding == 1 &&
+            lifetimePool.GetMetrics().permitsGranted == 1 &&
+            lifetimePool.GetMetrics().permitsReleased == 0,
+            "Write retry released or reacquired its existing permit");
+        wire.Ack(client, firstWrite, 91);
+        const ftp::Payload secondWrite = wire.Last();
+        Expect(secondWrite.opcode == ftp::Opcode::WriteFile &&
+            secondWrite.offset == ftp::MaximumDataBytes &&
+            lifetimePool.GetMetrics().outstanding == 1 &&
+            lifetimePool.GetMetrics().permitsGranted == 2 &&
+            lifetimePool.GetMetrics().permitsReleased == 1,
+            "ACK did not release once before the next Write acquired once");
+        const auto nak = wire.Reply(
+            secondWrite, ftp::Opcode::Nak, 91, { 1 });
+        Expect(client.HandleResponse(TestPeer(), nak.data(), nak.size()),
+            "permit lifetime NAK was not consumed");
+        const auto failed = client.ConsumeResult();
+        Expect(failed && !failed->success && failed->permitGrantCount == 2 &&
+            lifetimePool.GetMetrics().outstanding == 0 &&
+            lifetimePool.GetMetrics().permitsGranted ==
+                lifetimePool.GetMetrics().permitsReleased &&
+            lifetimePool.GetMetrics().invalidReleaseCount == 0 &&
+            lifetimePool.GetRegisteredOwnerCount() == 0,
+            "NAK/failure did not release every held Write permit exactly once");
+
+        for (const bool shutdown : { false, true })
+        {
+            FakeWire cleanupWire;
+            ftp::WritePermitPool cleanupPool(4);
+            config.writeWindow = 16;
+            config.writePermitPool = &cleanupPool;
+            ftp::Client cleanupClient(cleanupWire, TestPeer(), config);
+            Expect(cleanupClient.StartWriteFile("@MISSION/mission.dat",
+                Bytes(8 * ftp::MaximumDataBytes), error),
+                "permit cleanup Write did not start");
+            cleanupWire.Ack(cleanupClient, cleanupWire.Decode(0), 92);
+            Expect(cleanupPool.GetMetrics().outstanding == 4,
+                "permit cleanup fixture did not fill the global cap");
+            if (shutdown) cleanupClient.Shutdown();
+            else cleanupClient.Cancel();
+            Expect(cleanupPool.GetMetrics().outstanding == 0 &&
+                cleanupPool.GetMetrics().permitsGranted ==
+                    cleanupPool.GetMetrics().permitsReleased &&
+                cleanupPool.GetMetrics().invalidReleaseCount == 0 &&
+                cleanupPool.GetRegisteredOwnerCount() == 0,
+                shutdown
+                    ? "Shutdown leaked or double-released Write permits"
+                    : "Cancel leaked or double-released Write permits");
+        }
+    }
 }
 
 int RunMAVFTPMissionWriterTests()
@@ -1008,12 +1117,29 @@ int RunMAVFTPMissionWriterTests()
         TestWindowCorrelationAndSequenceWrap();
         TestSingleBlockRetryAndWindowNakFailure();
         TestWindowBoundariesExhaustionShutdownAndMetricBound();
+        TestDynamicNWritePermitFairnessAndLifetime();
         std::cout << "MAVFTP Mission writer core tests passed\n";
         return 0;
     }
     catch (const std::exception& error)
     {
         std::cerr << "MAVFTP Mission writer core tests FAILED: "
+            << error.what() << '\n';
+        return 1;
+    }
+}
+
+int RunMAVFTPWritePermitConcurrencyTests()
+{
+    try
+    {
+        TestDynamicNWritePermitFairnessAndLifetime();
+        std::cout << "MAVFTP dynamic-N Write permit tests passed\n";
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "MAVFTP dynamic-N Write permit tests FAILED: "
             << error.what() << '\n';
         return 1;
     }

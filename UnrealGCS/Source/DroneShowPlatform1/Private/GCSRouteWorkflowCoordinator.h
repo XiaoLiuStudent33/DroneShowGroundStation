@@ -46,6 +46,7 @@ struct FGCSRouteAutoStartSnapshot
 	FString ArtifactSetDigest;
 	FString SourceDatasetDigest;
 	int32 RouteSlotCount = 0;
+	int32 MaxConcurrentTargets = 1;
 	TArray<FGCSRouteAutoStartTargetSnapshot> Targets;
 	FRouteAssignmentSourceIdentity AssignmentSourceIdentity;
 	FString AssignmentAuthoritySessionID;
@@ -272,6 +273,10 @@ public:
 	void ClickCloseForTest() { HandleRouteCloseClicked(); }
 	void ClickConvertTabForTest() { HandleRouteConvertTabClicked(); }
 	void ClickUploadTabForTest() { HandleRouteUploadTabClicked(); }
+	void ClickApplyMaxConcurrencyForTest()
+	{
+		HandleApplyMaxConcurrencyClicked();
+	}
 	void RefreshCommandControlsForTest() { UpdateCommandControlState(); }
 	void RefreshReadOnlyStateForTest() { RefreshReadOnlyState(); }
 	const FString& GetSelectedRoutePathForTest() const { return SelectedRouteImportFilePath; }
@@ -291,6 +296,14 @@ public:
 	const FGCSRouteAutoStartSnapshot& GetAutoStartSnapshotForTest() const
 	{
 		return AutoStartSnapshot;
+	}
+	int32 GetAppliedMaxConcurrentTargetsForTest() const
+	{
+		return AppliedMaxConcurrentTargets;
+	}
+	void SetAppliedMaxConcurrentTargetsForTest(const int32 Value)
+	{
+		AppliedMaxConcurrentTargets = Value;
 	}
 #endif
 
@@ -405,6 +418,7 @@ private:
 	bool bBindingValid = false;
 	bool bViewVisible = false;
 	int32 SelectedPageIndex = 0;
+	int32 AppliedMaxConcurrentTargets = 1;
 	EGCSRouteAutoStartState AutoStartState = EGCSRouteAutoStartState::Idle;
 	FGCSRouteAutoStartSnapshot AutoStartSnapshot;
 	FString AutoStartDiagnostic;

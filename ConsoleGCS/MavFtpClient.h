@@ -12,6 +12,7 @@
 
 namespace dronegcs::mavftp
 {
+    class IWritePermitPool;
     struct PeerIdentity
     {
         std::string droneId;
@@ -41,6 +42,7 @@ namespace dronegcs::mavftp
         std::uint16_t initialRequestSequence = 0;
         std::chrono::steady_clock::time_point (*clockNow)(void*) = nullptr;
         void* clockContext = nullptr;
+        IWritePermitPool* writePermitPool = nullptr;
     };
 
     enum class OperationKind : std::uint8_t
@@ -88,6 +90,8 @@ namespace dronegcs::mavftp
         std::uint64_t ackRttP99Ms = 0;
         std::uint64_t maxAckRttMs = 0;
         std::uint64_t interAckAverageMs = 0;
+        std::uint64_t permitGrantCount = 0;
+        std::uint64_t permitWaitCount = 0;
         std::vector<std::uint64_t> boundedAckRttSamples;
     };
 
@@ -166,8 +170,11 @@ namespace dronegcs::mavftp
             { return static_cast<std::uint64_t>(transferred_); }
         std::uint64_t GetAcknowledgedWriteBlocks() const
             { return writeBlocksCompleted_; }
+        std::uint32_t GetOutstandingWriteCount() const
+            { return static_cast<std::uint32_t>(pendingWrites_.size()); }
 
     private:
+        struct PendingWrite;
         enum class Phase : std::uint8_t
         {
             Idle,
@@ -207,6 +214,9 @@ namespace dronegcs::mavftp
         bool StartNextRead(std::string& error);
         void PopulateOperationMetrics(OperationResult& result) const;
         void ResetWriteSource();
+        void RegisterWritePermitOwner();
+        void ReleaseWritePermit(PendingWrite& pending);
+        void ReleaseAllWritePermits();
         std::uint16_t ReserveRequestSequence();
         std::chrono::steady_clock::time_point Now() const;
         std::chrono::milliseconds TimeoutForOpcode(Opcode opcode) const;
@@ -220,6 +230,7 @@ namespace dronegcs::mavftp
             std::chrono::steady_clock::time_point deadline{};
             std::chrono::milliseconds timeout{ 0 };
             std::uint32_t retriesUsed = 0;
+            bool permitHeld = false;
         };
 
         struct WriteAckIdentity
@@ -267,6 +278,9 @@ namespace dronegcs::mavftp
         std::uint64_t interAckCount_ = 0;
         std::uint64_t writeBlocksSent_ = 0;
         std::uint64_t writeBlocksCompleted_ = 0;
+        std::uint64_t permitGrantCount_ = 0;
+        std::uint64_t permitWaitCount_ = 0;
+        bool writePermitOwnerRegistered_ = false;
         std::uint64_t operationRetriesAtStart_ = 0;
         std::uint64_t createRetriesAtStart_ = 0;
         std::uint64_t writeRetriesAtStart_ = 0;

@@ -144,7 +144,9 @@ GCSRouteWorkflowCoordinator / WBP_GCS_RouteUpload
 
 Start 由 `UGCSRouteWorkflowCoordinator` 的 E.0 AutoStart 状态机拥有：`ValidatingMapping -> Freezing -> SyncingConsole -> StartingJob -> Completed/Failed/CancelledAsStale`。快照包含排序后的 Command Selection、Fleet session/revision、每台 endpoint、ArtifactSet/digests 以及 Manifest Route Record path/size/digest；Accepted 后重新捕获并逐项比较。`bJobStartAttempted` 在调用前设置，重复 Tick/ACK/重开 Widget 不会创建第二个 Job。
 
-已实现 Start、Pause、Resume、Cancel、RetryFailed 与 max concurrency 操作，以及 aggregate snapshot、route page 和 route delta。E.0 一个 Job 可包含多 Targets，但固定 `MaxConcurrentTargets=1`；E.1/E.2 尚未实现。Upload Job 同时绑定 Artifact identity 与 Frozen Assignment identity；不能只凭任意路径或 UI 内存状态启动。
+已实现 Start、Pause、Resume、Cancel、RetryFailed 与 max concurrency 操作，以及 aggregate snapshot、route page 和 route delta。E.1 的 max concurrency 由 UE 已应用值拥有，合法范围 `1..50`；Start 快照后复用现有 DTO，Console 再次严格校验，`EffectiveMaxConcurrentTargets = min(DTO.MaxConcurrentTargets, MatchedTargetCount)`。运行中 Apply 被拒绝，当前 Job 不受后续 UI 修改影响。Upload Job 同时绑定 Artifact identity 与 Frozen Assignment identity；不能只凭任意路径或 UI 内存状态启动。
+
+`RouteUploadManager` 对 Target 使用动态容器和准入队列，不存在固定 2/16/50 长度。共享 `WritePermitPool` 对所有活动 Client 执行 round-robin 公平背压：每 Client `write_window=16`，全局 cap 独立配置 `1..800`，有效值为 `min(ConfiguredGlobalCap, EffectiveMaxConcurrentTargets * PerClientWriteWindow)`。同一 pending Write 的 retry 保留原 permit；成功 ACK、NAK、失败、Cancel、Shutdown 和 teardown 精确释放。控制请求不计入 Write cap。
 
 ## 8. Console Artifact Consumer 与 Upload Authority
 

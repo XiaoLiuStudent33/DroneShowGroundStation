@@ -244,9 +244,10 @@ bool UDSPGCSUploadJobSubsystem::StartUploadJobFromCurrentAuthorities(
 {
 	check(IsInGameThread());
 	OutUploadJobID.Reset();
-	if (RequestedMaxConcurrentUploads <= 0)
+	if (RequestedMaxConcurrentUploads < 1 ||
+		RequestedMaxConcurrentUploads > 50)
 	{
-		OutError = TEXT("Maximum concurrent uploads must be a positive integer.");
+		OutError = TEXT("Maximum concurrent uploads must be in range 1..50.");
 		SetLocalCommandFailure(dspgcs::UploadJobCommandType::Start, OutError);
 		return false;
 	}
@@ -293,6 +294,13 @@ bool UDSPGCSUploadJobSubsystem::StartUploadJob(
 	FString& OutError)
 {
 	check(IsInGameThread());
+	if (RequestedMaxConcurrentUploads < 1 ||
+		RequestedMaxConcurrentUploads > 50)
+	{
+		OutError = TEXT("Maximum concurrent uploads must be in range 1..50.");
+		SetLocalCommandFailure(dspgcs::UploadJobCommandType::Start, OutError);
+		return false;
+	}
 	if (bCommandInFlight || !ActiveJobID.empty() ||
 		Mirror.HasAuthoritativeSnapshot() || Mirror.HasAuthoritativeError())
 	{

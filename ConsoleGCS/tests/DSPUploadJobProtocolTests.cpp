@@ -821,13 +821,15 @@ namespace
         const auto targetAfterConcurrency = authority.FindTargetMetadataForTest(
             start.uploadJobId, 0);
         Expect(acknowledgement.status ==
-                dspgcs::UploadJobCommandAckStatus::Accepted &&
-            acknowledgement.effectiveMaxConcurrentUploads == 3 &&
+                dspgcs::UploadJobCommandAckStatus::Rejected &&
+            acknowledgement.resultCode ==
+                dspgcs::UploadJobErrorCode::InvalidJobState &&
+            acknowledgement.effectiveMaxConcurrentUploads == 2 &&
             targetAfterConcurrency.has_value() &&
             targetAfterConcurrency->routeArtifactDigest ==
                 originalTarget->routeArtifactDigest &&
             targetAfterConcurrency->droneId == originalTarget->droneId,
-            "SetMaxConcurrentUploads rebound immutable Job authorities");
+            "SetMaxConcurrentUploads changed frozen E.1 Job concurrency or authorities");
 
         auto failed = dspgcs::UploadRouteStateDTO{};
         failed.routeSlotIndex = 0;
@@ -1257,6 +1259,60 @@ namespace
             && !acceptedArtifact->routes[1].validationConfirmed,
             "1000-route Artifact materialized or validated Vacant targets");
     }
+
+    void VerifyE1ConcurrencyAuthority()
+    {
+        auto fixture = MakeArtifact("e1-concurrency", 6, 2);
+        FrozenAssignmentStore store;
+        const auto frozen = AcceptFrozen(store, MakeFrozen(fixture, 6, 0));
+        ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+        ConsoleUploadJobAuthority authority(
+            fixture.workspace->root.u8string(), &consumer, &store);
+
+        auto zero = StartCommand(fixture, *frozen, Id('1'), Id('2'), 0);
+        auto acknowledgement = authority.HandleCommand("zero", zero, {});
+        Expect(acknowledgement.status ==
+                dspgcs::UploadJobCommandAckStatus::Rejected &&
+            acknowledgement.resultCode ==
+                dspgcs::UploadJobErrorCode::InvalidMaxConcurrency &&
+            authority.GetPendingStartCount() == 0,
+            "Console accepted Start concurrency zero or began validation");
+
+        auto over = StartCommand(fixture, *frozen, Id('3'), Id('4'), 51);
+        acknowledgement = authority.HandleCommand("over", over, {});
+        Expect(acknowledgement.status ==
+                dspgcs::UploadJobCommandAckStatus::Rejected &&
+            acknowledgement.resultCode ==
+                dspgcs::UploadJobErrorCode::InvalidMaxConcurrency &&
+            authority.GetPendingStartCount() == 0,
+            "Console accepted Start concurrency above 50");
+
+        auto overflow = StartCommand(
+            fixture, *frozen, Id('5'), Id('6'), UINT32_MAX);
+        acknowledgement = authority.HandleCommand("overflow", overflow, {});
+        Expect(acknowledgement.status ==
+                dspgcs::UploadJobCommandAckStatus::Rejected &&
+            acknowledgement.resultCode ==
+                dspgcs::UploadJobErrorCode::InvalidMaxConcurrency &&
+            authority.GetPendingStartCount() == 0,
+            "Console accepted an overflowing Start concurrency");
+
+        const auto valid = StartCommand(
+            fixture, *frozen, Id('7'), Id('8'), 50);
+        acknowledgement = authority.HandleCommand(
+            "valid", valid, EncodeCommand(valid));
+        Expect(acknowledgement.status ==
+                dspgcs::UploadJobCommandAckStatus::Accepted &&
+            acknowledgement.effectiveMaxConcurrentUploads == 6,
+            "Console did not reduce requested 50 to six matched Targets");
+        const auto snapshot = WaitForStart(authority, valid.uploadJobId);
+        const auto view = authority.GetExecutionView(valid.uploadJobId);
+        Expect(snapshot.effectiveMaxConcurrentUploads == 6 && view &&
+            view->requestedMaxConcurrentUploads == 50 &&
+            view->effectiveMaxConcurrentUploads == 6 &&
+            view->targets.size() == 6,
+            "Job did not freeze requested/effective concurrency with all Targets");
+    }
 }
 
 int RunDSPUploadJobProtocolTests()
@@ -1271,6 +1327,7 @@ int RunDSPUploadJobProtocolTests()
         VerifyLifecycleAndLease();
         VerifyScaleAndSnapshotDelta();
         VerifySingleMatchedTargetBoundsThousandRouteArtifact();
+        VerifyE1ConcurrencyAuthority();
         std::cout << "DSP Upload Job schema2 dual-binding tests passed\n";
         return 0;
     }

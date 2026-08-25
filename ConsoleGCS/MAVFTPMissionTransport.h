@@ -51,6 +51,8 @@ namespace dronegcs::mission_ftp
         std::uint64_t terminateRetries = 0;
         std::uint64_t duplicateAcks = 0;
         std::uint64_t staleOrMismatchedAcks = 0;
+        std::uint64_t permitGrantCount = 0;
+        std::uint64_t permitWaitCount = 0;
         std::uint32_t configuredWriteWindow = 1;
         std::uint32_t maxObservedOutstanding = 0;
         std::uint64_t writeDataDurationMs = 0;

@@ -48,6 +48,7 @@ Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，�
 - `--mission-upload-tests`：Mission transaction、transport abstraction、preparation 与 RouteUploadManager integration。
 - `--upload-job-tests`：DSP Upload Job schema/binding/materialization/scale。
 - `--mavftp-probe-tests`：MAVFTP protocol/client、MissionProfileProbe、Mission writer 与 Hardware Harness safety。
+- `--mavftp-concurrency-tests`：E.1 动态 N Target scheduler、全局 Write permit、公平性、精确 release/retry 与 endpoint/ACK 隔离。
 - `--drone-id-tests`：Console/UE 共享 canonical DroneID format/parse/overflow/RouteSlot 合同。
 - `--console-render-tests`：单 Writer、Dashboard/Linear Handle 判定、长行与短行覆盖、Resize/compact layout、1024 条有界队列、critical retention、active-producer Shutdown 和生产风格终帧。
 - Full suite 还覆盖 Console pipeline、command、Frozen Assignment、Artifact Consumer v2 与 contract。
@@ -57,6 +58,8 @@ Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，�
 UE 自动化测试位于 `UnrealGCS/Source/DroneShowPlatform1/Private/Tests/`，覆盖 Fleet、Route Overlay、Assignment、Artifact、Waypoint、Frozen Assignment、Upload Job 与 Workflow 等领域。
 
 E.0 专项前缀 `DroneGCS.UI.RouteWorkflow.AutoStart` 覆盖 canonical ID、单/多 Target exactly-once、拒绝矩阵、Console failure 与 Selection/Fleet/endpoint/Artifact/Manifest/Route record stale 矩阵。既有 `ViewStatePersistence`、`LiveAggregate`、Route Assignment 与 Frozen Sync 继续作为生命周期、cross-job 和 DSP identity 回归。
+
+E.1 Console 调度矩阵覆盖 TargetCount `1/2/6/16/25/50`，另用 100/1000 Target 只做 bookkeeping scale，不创建真实 socket。Permit cap=1 的 50-owner round-robin 覆盖无饥饿；ACK/NAK/retry exhausted/Cancel/Shutdown 覆盖精确释放。两个生产 `MavFtpClient` 经真实 endpoint ingress 路径使用相同 SYSID、sequence/session/offset/opcode，验证不同 Remote IP/port 不串包。并发专项 Release 与 Debug/assert-enabled 均连续 20/20 PASS，完整 Console 回归连续 3/3 PASS。
 
 运行要求：构建 `DroneShowPlatform1Editor Development Win64` 后执行：
 

@@ -5,6 +5,7 @@
 #include "DroneManager.h"
 #include "MissionPreparationWorker.h"
 #include "MissionTransport.h"
+#include "MavFtpWritePermitPool.h"
 
 #include <chrono>
 #include <cstddef>
@@ -28,10 +29,17 @@ struct RouteUploadManagerConfig
     std::uint32_t mavftpRequestRetryCount =
         AppConfigDefaults::MavftpRequestRetryCount;
     std::uint32_t mavftpWriteWindow = AppConfigDefaults::MavftpWriteWindow;
+    std::uint32_t mavftpGlobalWriteOutstandingCap =
+        AppConfigDefaults::MavftpGlobalWriteOutstandingCap;
     std::chrono::milliseconds liveAggregatePublishInterval{ 250 };
     /** Empty in production; permits deterministic offline Manager tests. */
     TestTransportFactory testTransportFactory;
 };
+
+std::uint32_t ComputeEffectiveGlobalWriteOutstandingCap(
+    std::uint32_t configuredCap,
+    std::uint32_t effectiveTargets,
+    std::uint32_t perClientWriteWindow);
 
 /** Single production factory; MAVFTP construction failure never falls back. */
 std::unique_ptr<IMissionTransport> CreateConfiguredMissionTransport(
@@ -53,6 +61,12 @@ struct RouteUploadTargetMetrics
     std::uint64_t missionRequestsReceived = 0;
     std::uint64_t duplicateRequests = 0;
     std::uint64_t retryCount = 0;
+    std::uint64_t writeBlocksSent = 0;
+    std::uint64_t writeBlocksAcked = 0;
+    std::uint64_t permitGrantCount = 0;
+    std::uint64_t permitWaitCount = 0;
+    std::uint32_t configuredWriteWindow = 0;
+    std::uint32_t maxObservedWriteOutstanding = 0;
     std::uint64_t prepareDurationMs = 0;
     std::uint64_t preparationBytesRead = 0;
     std::uint64_t routeFileOpenDurationMs = 0;
@@ -73,7 +87,15 @@ struct RouteUploadTargetMetrics
 struct RouteUploadJobMetrics
 {
     std::size_t targetCount = 0;
+    std::uint32_t requestedMaxConcurrentUploads = 0;
     std::uint32_t effectiveMaxConcurrentUploads = 0;
+    std::uint32_t configuredGlobalWriteOutstandingCap = 0;
+    std::uint32_t effectiveGlobalWriteOutstandingCap = 0;
+    std::uint32_t maxObservedGlobalWriteOutstanding = 0;
+    std::uint64_t writePermitsGranted = 0;
+    std::uint64_t writePermitsReleased = 0;
+    std::uint64_t writePermitWaitCount = 0;
+    std::uint64_t invalidWritePermitReleaseCount = 0;
     std::size_t succeeded = 0;
     std::size_t failed = 0;
     std::size_t cancelled = 0;
@@ -114,6 +136,8 @@ public:
         { return preparationWorker_.GetWorkerThreadCountForTest(); }
     std::size_t GetSocketCountForTest() const { return 0; }
     std::size_t GetTimerCountForTest() const { return 0; }
+    dronegcs::mavftp::IWritePermitPool* GetWritePermitPool()
+        { return &writePermitPool_; }
 	const std::string& GetLastTerminalDiagnosticForTest() const
 		{ return lastTerminalDiagnostic_; }
 	const std::string& GetLastJobSummaryForTest() const { return lastJobSummary_; }
@@ -184,6 +208,7 @@ private:
     DroneManager& droneManager_;
     bool routeUploadEnabled_ = false;
     RouteUploadManagerConfig config_;
+    dronegcs::mavftp::WritePermitPool writePermitPool_;
     bool shuttingDown_ = false;
     MissionPreparationWorker preparationWorker_;
     std::optional<RuntimeJob> activeJob_;

@@ -109,6 +109,11 @@ namespace
             std::to_string(appConfig.mavlinkBindPort) +
             " HeartbeatTimeout=" +
             std::to_string(appConfig.heartbeatTimeoutMs) + "ms");
+        ConsoleUI::AddLog(
+            "MAVFTP: PerClientWriteWindow=" +
+            std::to_string(appConfig.mavftpWriteWindow) +
+            " ConfiguredGlobalWriteOutstandingCap=" +
+            std::to_string(appConfig.mavftpGlobalWriteOutstandingCap));
 
         if (transportConfig != nullptr)
         {
@@ -188,6 +193,7 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
     bool segmentItemsProvidedByCli = false;
     bool terminateTimeoutProvidedByCli = false;
     bool writeWindowProvidedByCli = false;
+    std::optional<int> globalWriteOutstandingCapCli;
     for (int index = 1; index < argc; ++index)
     {
         const std::string argument = argv[index] ? argv[index] : "";
@@ -316,6 +322,18 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
                 return -1;
             }
         }
+        else if (argument == "--mavftp-global-write-outstanding-cap")
+        {
+            std::string value;
+            int parsed = 0;
+            if (!ReadOptionValue("--mavftp-global-write-outstanding-cap",
+                    index, argc, argv, value) || !ParseInteger(value, parsed))
+            {
+                std::cerr << "--mavftp-global-write-outstanding-cap requires an integer value.\n";
+                return -1;
+            }
+            globalWriteOutstandingCapCli = parsed;
+        }
         else if (argument == "--mavftp-terminate-timeout-ms")
         {
             terminateTimeoutProvidedByCli = true;
@@ -375,6 +393,12 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
             << configError
             << "\nCopy gcs-config.ini.example to gcs-config.ini "
                "and review the network settings before running.\n";
+        return -1;
+    }
+    if (!ApplyMavFtpGlobalWriteOutstandingCapCliOverride(
+        appConfig, globalWriteOutstandingCapCli, configError))
+    {
+        std::cerr << configError << '\n';
         return -1;
     }
     std::string hardwareOptionsError;
@@ -544,6 +568,8 @@ int ConsoleGCSApplication::RunProductionMavlink(
     routeUploadConfig.mavftpTerminateTimeoutMs = appConfig.mavftpTerminateTimeoutMs;
     routeUploadConfig.mavftpRequestRetryCount = appConfig.mavftpRequestRetryCount;
     routeUploadConfig.mavftpWriteWindow = appConfig.mavftpWriteWindow;
+    routeUploadConfig.mavftpGlobalWriteOutstandingCap =
+        appConfig.mavftpGlobalWriteOutstandingCap;
     RouteUploadManager routeUploadManager(
         uploadJobAuthority, droneManager, routeUploadConfig);
     DSPGCSUploadJobReceiver uploadJobReceiver;
@@ -572,6 +598,8 @@ int ConsoleGCSApplication::RunProductionMavlink(
     discoveredSessionDefaults.mavFtpWriteWindow = hardwareTestOptions.enabled
         ? hardwareTestOptions.writeWindow
         : appConfig.mavftpWriteWindow;
+    discoveredSessionDefaults.mavFtpWritePermitPool =
+        routeUploadManager.GetWritePermitPool();
     discoveredSessionDefaults.missionUploadServiceEnabled =
         appConfig.routeUploadEnabled;
 

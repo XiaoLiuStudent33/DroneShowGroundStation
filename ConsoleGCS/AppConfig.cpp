@@ -452,6 +452,8 @@ bool AppConfig::Load(
     int mavftpRequestRetryCount =
         static_cast<int>(config.mavftpRequestRetryCount);
     int mavftpWriteWindow = static_cast<int>(config.mavftpWriteWindow);
+    int mavftpGlobalWriteOutstandingCap =
+        static_cast<int>(config.mavftpGlobalWriteOutstandingCap);
     if (!ParseOptionalInteger(
             values,
             "mavftp.segment_items",
@@ -486,6 +488,13 @@ bool AppConfig::Load(
             1,
             16,
             mavftpWriteWindow,
+            error) ||
+        !ParseOptionalInteger(
+            values,
+            "mavftp.global_write_outstanding_cap",
+            1,
+            800,
+            mavftpGlobalWriteOutstandingCap,
             error))
     {
         return false;
@@ -496,6 +505,8 @@ bool AppConfig::Load(
         static_cast<std::uint32_t>(mavftpRequestRetryCount);
     config.mavftpWriteWindow =
         static_cast<std::uint32_t>(mavftpWriteWindow);
+    config.mavftpGlobalWriteOutstandingCap =
+        static_cast<std::uint32_t>(mavftpGlobalWriteOutstandingCap);
 
     constexpr float defaultLimitMeters = 5.0f;
     constexpr float maximumConfigurableLimitMeters = 1000.0f;
@@ -516,4 +527,23 @@ bool AppConfig::Load(
             maximumConfigurableLimitMeters,
             config.hoverAltitudeLimitMeters,
             error);
+}
+
+bool ApplyMavFtpGlobalWriteOutstandingCapCliOverride(
+    AppConfig& config,
+    const std::optional<int> mavftpGlobalWriteOutstandingCap,
+    std::string& error)
+{
+    if (mavftpGlobalWriteOutstandingCap &&
+        (*mavftpGlobalWriteOutstandingCap < 1 ||
+         *mavftpGlobalWriteOutstandingCap > 800))
+    {
+        error = "--mavftp-global-write-outstanding-cap must be in [1,800].";
+        return false;
+    }
+    if (mavftpGlobalWriteOutstandingCap)
+        config.mavftpGlobalWriteOutstandingCap = static_cast<std::uint32_t>(
+            *mavftpGlobalWriteOutstandingCap);
+    error.clear();
+    return true;
 }

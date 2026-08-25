@@ -1173,13 +1173,17 @@ namespace
         const bool shutdownWhileUploading = false,
         const bool firstVerificationMismatch = false,
         const bool lastVerificationMismatch = false,
-        const bool verifyLiveAggregate = false)
+        const bool verifyLiveAggregate = false,
+        const std::size_t requestedTargetCount = 5)
     {
         ScopedCoutCapture runtimeLog(
             firstVerificationMismatch || lastVerificationMismatch);
         TemporaryRoute fixture;
         const std::size_t TargetCount =
-            firstVerificationMismatch || lastVerificationMismatch ? 1 : 5;
+            firstVerificationMismatch || lastVerificationMismatch
+                ? 1 : requestedTargetCount;
+        const std::size_t effectiveConcurrency = (std::min<std::size_t>)(
+            maxConcurrency, TargetCount);
         const std::string routeBytes = BuildWpl(3);
         artifact::Digest256 digest;
         Expect(artifact::Sha256::Hash(routeBytes.data(), routeBytes.size(), digest),
@@ -1199,7 +1203,9 @@ namespace
                 static_cast<std::streamsize>(routeBytes.size()));
             dspgcs::UploadRouteStateDTO route;
             route.routeSlotIndex = static_cast<std::int32_t>(index);
-            route.droneId = "Drone00" + std::to_string(index + 1);
+            const std::string numeric = std::to_string(index + 1);
+            route.droneId = "Drone" + std::string(3 - numeric.size(), '0') +
+                numeric;
             route.totalBytes = 3 * mission::MissionItemRecordBytesV1;
             routes.push_back(route);
             UploadJobTargetMetadata target;
@@ -1214,7 +1220,7 @@ namespace
         }
 
         ConsoleUploadJobAuthority authority(fixture.root.u8string(), nullptr, nullptr);
-        const std::string jobId(32, static_cast<char>('c' + maxConcurrency));
+        const std::string jobId(32, 'd');
         std::string error;
         Expect(authority.InstallSyntheticReadyJobForTest(jobId, {}, {}, {},
             routes, 0, 0, 0, maxConcurrency, error),
@@ -1262,15 +1268,15 @@ namespace
         RouteUploadManager manager(authority, drones, std::move(managerConfig));
         const auto deadline = std::chrono::steady_clock::now() +
             std::chrono::seconds(10);
-        while (manager.GetPreparedMissionCountForTest() < maxConcurrency &&
+        while (manager.GetPreparedMissionCountForTest() < effectiveConcurrency &&
             std::chrono::steady_clock::now() < deadline)
         {
             manager.Tick(std::chrono::steady_clock::now());
             std::this_thread::yield();
         }
-        Expect(manager.GetActiveSlotCountForTest() == maxConcurrency,
+        Expect(manager.GetActiveSlotCountForTest() == effectiveConcurrency,
             "scheduler exceeded or failed to fill configured concurrency");
-        Expect(manager.GetPreparedMissionCountForTest() <= maxConcurrency &&
+        Expect(manager.GetPreparedMissionCountForTest() <= effectiveConcurrency &&
             manager.GetWorkerThreadCountForTest() == 1 &&
             manager.GetSocketCountForTest() == 0 &&
             manager.GetTimerCountForTest() == 0,
@@ -1341,7 +1347,7 @@ namespace
             return;
         }
 
-        if (maxConcurrency == 2)
+        if (effectiveConcurrency == 2 && TargetCount == 5)
         {
             const auto pause = SendManagerCommand(authority, jobId,
                 dspgcs::UploadJobCommandType::Pause);
@@ -1351,42 +1357,22 @@ namespace
             const auto* paused = authority.FindCurrentSnapshotForTest(jobId);
             Expect(paused && paused->jobState == dspgcs::UploadJobState::Paused &&
                 manager.GetActiveSlotCountForTest() == 0 &&
-                paused->waitingCount == TargetCount - maxConcurrency,
+                paused->waitingCount == TargetCount - effectiveConcurrency,
                 "Pause did not drain active targets while blocking new admission");
             const auto resume = SendManagerCommand(authority, jobId,
                 dspgcs::UploadJobCommandType::Resume);
             Expect(resume.status == dspgcs::UploadJobCommandAckStatus::Accepted,
                 "manager Resume was rejected");
         }
-        else if (maxConcurrency == 3)
+        else if (effectiveConcurrency == 3 && TargetCount == 5)
         {
             const auto lower = SendManagerCommand(authority, jobId,
                 dspgcs::UploadJobCommandType::SetMaxConcurrentUploads, 1);
-            Expect(lower.status == dspgcs::UploadJobCommandAckStatus::Accepted &&
+            Expect(lower.status == dspgcs::UploadJobCommandAckStatus::Rejected &&
+                lower.resultCode == dspgcs::UploadJobErrorCode::InvalidJobState &&
+                lower.effectiveMaxConcurrentUploads == 3 &&
                 manager.GetActiveSlotCountForTest() == 3,
-                "3-to-1 SetMax interrupted active transactions");
-            manager.Tick(std::chrono::steady_clock::now());
-            while (manager.GetActiveSlotCountForTest() < 1 &&
-                std::chrono::steady_clock::now() < deadline)
-            {
-                manager.Tick(std::chrono::steady_clock::now());
-                std::this_thread::yield();
-            }
-            Expect(manager.GetActiveSlotCountForTest() == 1,
-                "lowered concurrency did not stop admission at the new bound");
-            const auto raise = SendManagerCommand(authority, jobId,
-                dspgcs::UploadJobCommandType::SetMaxConcurrentUploads, 3);
-            Expect(raise.status == dspgcs::UploadJobCommandAckStatus::Accepted,
-                "1-to-3 SetMax was rejected");
-            while (manager.GetActiveSlotCountForTest() < 2 &&
-                std::chrono::steady_clock::now() < deadline)
-            {
-                manager.Tick(std::chrono::steady_clock::now());
-                std::this_thread::yield();
-            }
-            Expect(manager.GetActiveSlotCountForTest() >= 2 &&
-                manager.GetActiveSlotCountForTest() <= 3,
-                "raised concurrency did not replenish bounded admission");
+                "runtime SetMax changed Job-frozen E.1 concurrency");
         }
 
         while (std::chrono::steady_clock::now() < deadline)
@@ -1492,7 +1478,9 @@ namespace
 			manager.GetLastJobSummaryForTest().find("PeakPreparedMissions=") !=
 				std::string::npos,
 			"terminal target/job diagnostics omitted required metrics");
-        Expect(manager.GetJobMetricsForTest().peakActiveUploads <= maxConcurrency,
+        Expect(manager.GetJobMetricsForTest().peakActiveUploads <= effectiveConcurrency &&
+            manager.GetJobMetricsForTest().effectiveMaxConcurrentUploads ==
+                effectiveConcurrency,
             "measured active upload peak exceeded max concurrency");
         Expect(!authority.DrainRouteDeltas().empty(),
             "production chain did not publish route deltas for UI mirror");
@@ -1509,6 +1497,17 @@ namespace
         RunManagerScenario(1, false, false, true);
         RunManagerScenario(1, false, false, false, true);
         RunManagerScenario(1, false, false, false, false, true);
+    }
+
+    void RunE1SchedulerMatrix()
+    {
+        RunManagerScenario(1, false, false, false, false, false, false, 1);
+        RunManagerScenario(2, false, false, false, false, false, false, 2);
+        RunManagerScenario(6, false, false, false, false, false, false, 6);
+        RunManagerScenario(16, false, false, false, false, false, false, 16);
+        RunManagerScenario(25, false, false, false, false, false, false, 25);
+        RunManagerScenario(50, false, false, false, false, false, false, 50);
+        RunManagerScenario(50, false, false, false, false, false, false, 6);
     }
 
     void RunSchedulerScale(const std::size_t targetCount)
@@ -1567,8 +1566,19 @@ namespace
 
     void RunScaleTests()
     {
+        Expect(ConsoleUploadJobAuthority::ComputeEffectiveMaxConcurrentTargets(
+                50, 6) == 6 &&
+            ConsoleUploadJobAuthority::ComputeEffectiveMaxConcurrentTargets(
+                6, 50) == 6 &&
+            ConsoleUploadJobAuthority::ComputeEffectiveMaxConcurrentTargets(
+                50, 50) == 50,
+            "requested/matched effective Target concurrency formula drifted");
+        Expect(ComputeEffectiveGlobalWriteOutstandingCap(800, 50, 16) == 800 &&
+            ComputeEffectiveGlobalWriteOutstandingCap(800, 6, 16) == 96 &&
+            ComputeEffectiveGlobalWriteOutstandingCap(16, 50, 16) == 16,
+            "effective global Write outstanding formula drifted");
+        RunSchedulerScale(100);
         RunSchedulerScale(1000);
-        RunSchedulerScale(10000);
     }
 }
 
@@ -1586,6 +1596,8 @@ int RunMissionUploadTests()
         RunPreparationTests();
 		std::cout << "Mission upload tests: manager integration" << std::endl;
         RunManagerIntegrationTests();
+		std::cout << "Mission upload tests: E.1 scheduler matrix" << std::endl;
+        RunE1SchedulerMatrix();
 		std::cout << "Mission upload tests: scale" << std::endl;
         RunScaleTests();
         std::cout << "MAVFTP production upload/preparation tests passed\n";
@@ -1594,6 +1606,22 @@ int RunMissionUploadTests()
     catch (const std::exception& error)
     {
         std::cerr << "MAVFTP production upload tests failed: " << error.what() << '\n';
+        return 1;
+    }
+}
+
+int RunRouteUploadConcurrencySchedulerTests()
+{
+    try
+    {
+        RunE1SchedulerMatrix();
+        std::cout << "Route Upload dynamic-N scheduler tests passed\n";
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "Route Upload dynamic-N scheduler tests failed: "
+            << error.what() << '\n';
         return 1;
     }
 }

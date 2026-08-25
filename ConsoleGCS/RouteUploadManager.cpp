@@ -102,6 +102,18 @@ namespace
 	}
 }
 
+std::uint32_t ComputeEffectiveGlobalWriteOutstandingCap(
+    const std::uint32_t configuredCap,
+    const std::uint32_t effectiveTargets,
+    const std::uint32_t perClientWriteWindow)
+{
+    const std::uint64_t aggregateWindow =
+        static_cast<std::uint64_t>(effectiveTargets) *
+        static_cast<std::uint64_t>(perClientWriteWindow);
+    return static_cast<std::uint32_t>((std::min<std::uint64_t>)(
+        configuredCap, aggregateWindow));
+}
+
 std::unique_ptr<IMissionTransport> CreateConfiguredMissionTransport(
     DroneSession& session,
     const RouteUploadManagerConfig& config,
@@ -148,6 +160,7 @@ RouteUploadManager::RouteUploadManager(
     , droneManager_(droneManager)
     , routeUploadEnabled_(config.routeUploadEnabled)
     , config_(std::move(config))
+    , writePermitPool_(config_.mavftpGlobalWriteOutstandingCap)
 {
 }
 
@@ -183,6 +196,7 @@ void RouteUploadManager::Shutdown()
         authority_.FinalizeExecutorShutdown(activeJobId, error);
     }
     activeJob_.reset();
+    writePermitPool_.Reset(config_.mavftpGlobalWriteOutstandingCap);
 }
 
 std::uint64_t RouteUploadManager::ElapsedMs(
@@ -265,9 +279,37 @@ bool RouteUploadManager::AttachJob(
     activeJob_ = std::move(job);
     jobMetrics_ = {};
     jobMetrics_.targetCount = activeJob_->targets.size();
+    jobMetrics_.requestedMaxConcurrentUploads =
+        activeJob_->view.requestedMaxConcurrentUploads;
+    jobMetrics_.effectiveMaxConcurrentUploads =
+        activeJob_->view.effectiveMaxConcurrentUploads;
+    jobMetrics_.configuredGlobalWriteOutstandingCap =
+        config_.mavftpGlobalWriteOutstandingCap;
+    jobMetrics_.effectiveGlobalWriteOutstandingCap =
+        ComputeEffectiveGlobalWriteOutstandingCap(
+            config_.mavftpGlobalWriteOutstandingCap,
+            activeJob_->view.effectiveMaxConcurrentUploads,
+            config_.mavftpWriteWindow);
+    writePermitPool_.Reset(jobMetrics_.effectiveGlobalWriteOutstandingCap);
     targetMetrics_.clear();
 	lastTerminalDiagnostic_.clear();
 	lastJobSummary_.clear();
+    {
+        std::ostringstream log;
+        log << "[RouteUpload] Job scheduler attached UploadJobID="
+            << activeJob_->view.uploadJobId
+            << " Targets=" << jobMetrics_.targetCount
+            << " RequestedMaxConcurrentTargets="
+            << jobMetrics_.requestedMaxConcurrentUploads
+            << " EffectiveMaxConcurrentTargets="
+            << jobMetrics_.effectiveMaxConcurrentUploads
+            << " PerClientWriteWindow=" << config_.mavftpWriteWindow
+            << " ConfiguredGlobalWriteOutstandingCap="
+            << jobMetrics_.configuredGlobalWriteOutstandingCap
+            << " EffectiveGlobalWriteOutstandingCap="
+            << jobMetrics_.effectiveGlobalWriteOutstandingCap;
+        ConsoleUI::AddLog(log.str());
+    }
     return true;
 }
 
@@ -282,6 +324,7 @@ void RouteUploadManager::DetachJob()
         target.prepared.clear();
     }
     activeJob_.reset();
+    writePermitPool_.Reset(config_.mavftpGlobalWriteOutstandingCap);
 }
 
 RouteUploadManager::RuntimeTarget* RouteUploadManager::FindRuntimeTarget(
@@ -595,6 +638,18 @@ void RouteUploadManager::ProcessTransactions(
         target.metrics.verificationDurationMs = tx.verificationDurationMs;
         target.metrics.verificationMismatchDiagnostic =
             target.transport->GetVerificationMismatchDiagnostic();
+        if (mavftpTransport)
+        {
+            const auto& mavftp = mavftpTransport->GetMavFtpMetrics();
+            target.metrics.writeBlocksSent = mavftp.writeBlocksSent;
+            target.metrics.writeBlocksAcked = mavftp.writeBlocksAcked;
+            target.metrics.permitGrantCount = mavftp.permitGrantCount;
+            target.metrics.permitWaitCount = mavftp.permitWaitCount;
+            target.metrics.configuredWriteWindow =
+                mavftp.configuredWriteWindow;
+            target.metrics.maxObservedWriteOutstanding =
+                mavftp.maxObservedOutstanding;
+        }
         const bool succeeded = target.transport->Verify();
         const std::string diagnostic = target.transport->GetSafeDiagnostic();
         if (!succeeded &&
@@ -750,6 +805,13 @@ void RouteUploadManager::PersistTargetTerminal(const RuntimeTarget& target)
 		<< " MissionRequestsReceived=" << metrics.missionRequestsReceived
 		<< " DuplicateRequests=" << metrics.duplicateRequests
 		<< " RetryCount=" << metrics.retryCount
+		<< " ConfiguredWriteWindow=" << metrics.configuredWriteWindow
+		<< " MaxObservedOutstanding="
+		<< metrics.maxObservedWriteOutstanding
+		<< " WriteBlocksSent=" << metrics.writeBlocksSent
+		<< " WriteBlocksAcked=" << metrics.writeBlocksAcked
+		<< " PermitGrants=" << metrics.permitGrantCount
+		<< " PermitWaits=" << metrics.permitWaitCount
 		<< " LogicalBytes=" << target.state.bytesCompleted
 		<< " WireBytesSent=" << metrics.wireBytesSent
 		<< " PrepareDurationMs=" << metrics.prepareDurationMs
@@ -779,6 +841,21 @@ void RouteUploadManager::PersistJobSummary(
 	line << "[RouteUpload] Job terminal summary"
 		<< " Transport=MAVFTP"
 		<< " Targets=" << jobMetrics_.targetCount
+		<< " RequestedMaxConcurrentTargets="
+		<< jobMetrics_.requestedMaxConcurrentUploads
+		<< " EffectiveMaxConcurrentTargets="
+		<< jobMetrics_.effectiveMaxConcurrentUploads
+		<< " ConfiguredGlobalWriteOutstandingCap="
+		<< jobMetrics_.configuredGlobalWriteOutstandingCap
+		<< " EffectiveGlobalWriteOutstandingCap="
+		<< jobMetrics_.effectiveGlobalWriteOutstandingCap
+		<< " MaxObservedGlobalWriteOutstanding="
+		<< jobMetrics_.maxObservedGlobalWriteOutstanding
+		<< " WritePermitsGranted=" << jobMetrics_.writePermitsGranted
+		<< " WritePermitsReleased=" << jobMetrics_.writePermitsReleased
+		<< " WritePermitWaits=" << jobMetrics_.writePermitWaitCount
+		<< " InvalidWritePermitReleases="
+		<< jobMetrics_.invalidWritePermitReleaseCount
 		<< " Succeeded=" << jobMetrics_.succeeded
 		<< " Failed=" << jobMetrics_.failed
 		<< " Cancelled=" << jobMetrics_.cancelled
@@ -827,6 +904,17 @@ void RouteUploadManager::RefreshMetrics(
         jobMetrics_.wireBytesSent += target.metrics.wireBytesSent;
     }
     jobMetrics_.aggregateLogicalThroughput = LogicalThroughput(now);
+    const auto& permitMetrics = writePermitPool_.GetMetrics();
+    jobMetrics_.configuredGlobalWriteOutstandingCap =
+        config_.mavftpGlobalWriteOutstandingCap;
+    jobMetrics_.effectiveGlobalWriteOutstandingCap = permitMetrics.capacity;
+    jobMetrics_.maxObservedGlobalWriteOutstanding =
+        permitMetrics.maxObservedOutstanding;
+    jobMetrics_.writePermitsGranted = permitMetrics.permitsGranted;
+    jobMetrics_.writePermitsReleased = permitMetrics.permitsReleased;
+    jobMetrics_.writePermitWaitCount = permitMetrics.permitWaitCount;
+    jobMetrics_.invalidWritePermitReleaseCount =
+        permitMetrics.invalidReleaseCount;
     jobMetrics_.peakActiveUploads = std::max(jobMetrics_.peakActiveUploads,
         static_cast<std::size_t>(std::count_if(activeJob_->targets.begin(),
             activeJob_->targets.end(), [](const RuntimeTarget& target)
@@ -853,8 +941,19 @@ void RouteUploadManager::Tick(
     }
     activeJob_->view.effectiveMaxConcurrentUploads =
         snapshot->effectiveMaxConcurrentUploads;
-    const std::uint32_t maxConcurrency = std::max<std::uint32_t>(
-        1, snapshot->effectiveMaxConcurrentUploads);
+    const std::uint32_t maxConcurrency =
+        snapshot->effectiveMaxConcurrentUploads;
+    if (maxConcurrency == 0 ||
+        maxConcurrency > activeJob_->targets.size())
+    {
+        ConsoleUI::AddLog(
+            "[RouteUpload] Invalid frozen effective concurrency; Job cannot execute.");
+        return;
+    }
+    writePermitPool_.SetCapacity(ComputeEffectiveGlobalWriteOutstandingCap(
+        config_.mavftpGlobalWriteOutstandingCap,
+        maxConcurrency,
+        config_.mavftpWriteWindow));
     if (snapshot->jobState == dspgcs::UploadJobState::Cancelling)
     {
         PublishLiveAggregate(now, true);

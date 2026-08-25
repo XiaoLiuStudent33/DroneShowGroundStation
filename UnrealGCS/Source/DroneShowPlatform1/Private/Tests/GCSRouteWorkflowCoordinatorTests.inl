@@ -36,7 +36,8 @@ bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
 	{
 		UButton* Button=Upload&&Upload->WidgetTree?Cast<UButton>(Upload->WidgetTree->FindWidget(Name)):nullptr;
 		TestNotNull(*FString::Printf(TEXT("%s resolved"),*Name.ToString()),Button);
-		if(Button) TestFalse(*FString::Printf(TEXT("%s disabled"),*Name.ToString()),Button->GetIsEnabled());
+		if(Button) TestEqual(*FString::Printf(TEXT("%s initial state"),*Name.ToString()),
+			Button->GetIsEnabled(),Name==FName(TEXT("BTN_ApplyMaxConcurrency")));
 	}
 	UEditableTextBox* Concurrency=Upload&&Upload->WidgetTree?Cast<UEditableTextBox>(Upload->WidgetTree->FindWidget(TEXT("EDT_MaxConcurrency"))):nullptr;
 	TestNotNull(TEXT("Concurrency resolved"),Concurrency);
@@ -48,11 +49,21 @@ bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
 		C->RefreshReadOnlyStateForTest();
 		TestEqual(TEXT("Snapshot refresh does not overwrite concurrency draft"),
 			Concurrency->GetText().ToString(),FString(TEXT("37")));
+		C->ClickApplyMaxConcurrencyForTest();
+		TestEqual(TEXT("Apply stores operator concurrency"),
+			C->GetAppliedMaxConcurrentTargetsForTest(),37);
+		Concurrency->SetText(FText::FromString(TEXT("51")));
+		AddExpectedError(TEXT("Maximum concurrency must be in range 1..50."),
+			EAutomationExpectedErrorFlags::Contains,1);
+		C->ClickApplyMaxConcurrencyForTest();
+		TestEqual(TEXT("Invalid Apply preserves previous value"),
+			C->GetAppliedMaxConcurrentTargetsForTest(),37);
 	}
 	UTextBlock* CurrentConcurrency=Upload&&Upload->WidgetTree?Cast<UTextBlock>(Upload->WidgetTree->FindWidget(TEXT("TXT_CurrentMaxConcurrencyValue"))):nullptr;
 	TestNotNull(TEXT("Current concurrency presentation resolved"),CurrentConcurrency);
-	if(CurrentConcurrency) TestEqual(TEXT("No Job authoritative concurrency"),
-		CurrentConcurrency->GetText().ToString(),FString(TEXT("Current: --")));
+	C->RefreshReadOnlyStateForTest();
+	if(CurrentConcurrency) TestEqual(TEXT("Applied concurrency presentation"),
+		CurrentConcurrency->GetText().ToString(),FString(TEXT("Current: 37")));
 	TestEqual(TEXT("Created once"),C->GetWorkflowCreationCountForTest(),1);
 	TestTrue(TEXT("Ticker active"),C->IsRefreshTickerActiveForTest());
 	C->ClickUploadTabForTest();
@@ -62,6 +73,8 @@ bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Close collapses retained widget"),First->GetVisibility(),ESlateVisibility::Collapsed);
 	TestTrue(TEXT("Close keeps refresh ticker active"),C->IsRefreshTickerActiveForTest());
 	TestTrue(TEXT("Closed Show"),C->ShowRouteWorkflow(Error));
+	TestEqual(TEXT("Applied concurrency survives Close/Open"),
+		C->GetAppliedMaxConcurrentTargetsForTest(),37);
 	TestEqual(TEXT("Selected tab survives Close/Open"),C->GetSelectedPageIndexForTest(),1);
 	TestTrue(TEXT("Repeated Show"),C->ShowRouteWorkflow(Error));
 	TestTrue(TEXT("Repeated Show reuses"),C->GetWorkflowWidgetForTest()==First);
@@ -556,7 +569,8 @@ bool FGCSRouteWorkflowFormattingTest::RunTest(const FString& Parameters)
 			TEXT(" 12 "),Concurrency,Error));
 	TestEqual(TEXT("Positive concurrency value"),Concurrency,12);
 	for(const FString& Invalid:{FString(),FString(TEXT("0")),FString(TEXT("-1")),
-		FString(TEXT("1.5")),FString(TEXT("abc")),FString(TEXT("2147483648"))})
+		FString(TEXT("1.5")),FString(TEXT("abc")),FString(TEXT("51")),
+		FString(TEXT("2147483648")),FString(TEXT("999999999999999999999999"))})
 	{
 		TestFalse(*FString::Printf(TEXT("Invalid concurrency rejected: %s"),*Invalid),
 			UGCSRouteWorkflowCoordinator::ParsePositiveConcurrency(
@@ -577,16 +591,19 @@ bool FGCSRouteWorkflowUploadCommandGateTest::RunTest(const FString& Parameters)
 			!Gate.bCancelEnabled&&!Gate.bRetryFailedEnabled&&!Gate.bApplyMaxEnabled;
 	};
 	FGCSRouteUploadCommandGateInputs Inputs;
-	TestTrue(TEXT("No Artifact disables all"),NoneEnabled(
-		UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
-	Inputs.bArtifactReady=true;
-	TestTrue(TEXT("No valid selected-drone mapping disables all"),NoneEnabled(
-		UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
-	Inputs.bAutoStartMappingValid=true;
 	auto Gate=UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs);
-	TestTrue(TEXT("Ready Artifact and selected-drone mapping enable only Start"),
+	TestTrue(TEXT("No Artifact still permits operator Apply"),
+		Gate.bApplyMaxEnabled&&!Gate.bStartEnabled&&!Gate.bPauseEnabled&&
+		!Gate.bResumeEnabled&&!Gate.bCancelEnabled&&!Gate.bRetryFailedEnabled);
+	Inputs.bArtifactReady=true;
+	Gate=UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs);
+	TestTrue(TEXT("No mapping still permits operator Apply"),
+		Gate.bApplyMaxEnabled&&!Gate.bStartEnabled);
+	Inputs.bAutoStartMappingValid=true;
+	Gate=UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs);
+	TestTrue(TEXT("Ready Artifact enables Start and pre-transaction Apply"),
 		Gate.bStartEnabled&&!Gate.bPauseEnabled&&!Gate.bResumeEnabled&&
-		!Gate.bCancelEnabled&&!Gate.bRetryFailedEnabled&&!Gate.bApplyMaxEnabled);
+		!Gate.bCancelEnabled&&!Gate.bRetryFailedEnabled&&Gate.bApplyMaxEnabled);
 	Inputs.bCommandInFlight=true;
 	TestTrue(TEXT("Command in-flight disables all"),NoneEnabled(
 		UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
@@ -606,13 +623,13 @@ bool FGCSRouteWorkflowUploadCommandGateTest::RunTest(const FString& Parameters)
 		Inputs.JobState=static_cast<uint8>(State);
 		Gate=UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs);
 		TestTrue(TEXT("Ready/Running gate"),Gate.bPauseEnabled&&Gate.bCancelEnabled&&
-			Gate.bApplyMaxEnabled&&!Gate.bStartEnabled&&!Gate.bResumeEnabled&&
+			!Gate.bApplyMaxEnabled&&!Gate.bStartEnabled&&!Gate.bResumeEnabled&&
 			!Gate.bRetryFailedEnabled);
 	}
 	Inputs.JobState=static_cast<uint8>(dspgcs::UploadJobState::Paused);
 	Gate=UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs);
 	TestTrue(TEXT("Paused gate"),Gate.bResumeEnabled&&Gate.bCancelEnabled&&
-		Gate.bApplyMaxEnabled&&!Gate.bPauseEnabled&&!Gate.bStartEnabled);
+		!Gate.bApplyMaxEnabled&&!Gate.bPauseEnabled&&!Gate.bStartEnabled);
 	Inputs.JobState=static_cast<uint8>(dspgcs::UploadJobState::Failed);
 	Inputs.FailedCount=0;
 	Gate=UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs);
@@ -625,8 +642,10 @@ bool FGCSRouteWorkflowUploadCommandGateTest::RunTest(const FString& Parameters)
 		dspgcs::UploadJobState::Cancelled})
 	{
 		Inputs.JobState=static_cast<uint8>(State);
-		TestTrue(TEXT("Terminal state disables all"),NoneEnabled(
-			UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs)));
+		Gate=UGCSRouteWorkflowCoordinator::ComputeUploadCommandGate(Inputs);
+		TestTrue(TEXT("Terminal state permits next-Job Apply only"),
+			Gate.bApplyMaxEnabled&&!Gate.bStartEnabled&&!Gate.bPauseEnabled&&
+			!Gate.bResumeEnabled&&!Gate.bCancelEnabled&&!Gate.bRetryFailedEnabled);
 	}
 	Inputs.bHasExecutableJob=false;
 	Inputs.JobState=0;
@@ -1054,6 +1073,7 @@ bool FGCSRouteWorkflowAutoStartExactlyOnceTest::RunTest(const FString& Parameter
 {
 	(void)Parameters;
 	UGCSRouteWorkflowCoordinator* C=NewObject<UGCSRouteWorkflowCoordinator>();
+	C->SetAppliedMaxConcurrentTargetsForTest(6);
 	FGCSRouteAutoStartSnapshot Base;
 	Base.SelectedDroneIDs={TEXT("Drone001"),TEXT("Drone002"),TEXT("Drone010")};
 	Base.FleetSessionID=TEXT("fleet-a"); Base.FleetRevision=7;
@@ -1080,7 +1100,7 @@ bool FGCSRouteWorkflowAutoStartExactlyOnceTest::RunTest(const FString& Parameter
 	Hooks.StartSync=[&SyncCalls,&Observation](FGCSRouteAutoStartSnapshot& S,FString&){++SyncCalls;S.SyncTransactionID=TEXT("sync-a");S.AssignmentDigest=FString::ChrN(64,TEXT('d'));Observation.TransactionID=S.SyncTransactionID;Observation.FleetSessionID=S.FleetSessionID;Observation.AssignmentAuthoritySessionID=S.AssignmentAuthoritySessionID;Observation.AssignmentRevision=S.AssignmentRevision;Observation.AssignmentDigest=S.AssignmentDigest;return true;};
 	Hooks.ObserveSync=[&Observation](){return Observation;};
 	Hooks.ValidateSnapshot=[](const FGCSRouteAutoStartSnapshot&,FString&){return true;};
-	Hooks.StartJob=[&StartCalls](int32 Maximum,FString& OutID,FString&){++StartCalls;OutID=TEXT("job-a");return Maximum==1;};
+	Hooks.StartJob=[&StartCalls](int32 Maximum,FString& OutID,FString&){++StartCalls;OutID=TEXT("job-a");return Maximum==6;};
 	C->SetAutoStartTestHooks(MoveTemp(Hooks));
 	FString Error;
 	TestTrue(TEXT("Begin automatic transaction"),C->StartAutoStartForTest(Error));
@@ -1095,6 +1115,8 @@ bool FGCSRouteWorkflowAutoStartExactlyOnceTest::RunTest(const FString& Parameter
 	TestEqual(TEXT("Completed state"),C->GetAutoStartStateForTest(),EGCSRouteAutoStartState::Completed);
 	TestTrue(TEXT("Start dispatched flag"),C->GetAutoStartSnapshotForTest().bJobStartDispatched);
 	TestEqual(TEXT("Three selected targets preserved"),C->GetAutoStartSnapshotForTest().Targets.Num(),3);
+	TestEqual(TEXT("Applied concurrency frozen into AutoStart"),
+		C->GetAutoStartSnapshotForTest().MaxConcurrentTargets,6);
 	Observation.TransactionID=TEXT("late-job-a-sync");
 	C->TickRefreshForTest();
 	TestEqual(TEXT("Late cross-transaction Accepted cannot restart"),StartCalls,1);

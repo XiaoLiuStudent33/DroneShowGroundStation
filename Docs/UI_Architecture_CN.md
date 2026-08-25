@@ -174,11 +174,11 @@ Slider使用0..1归一化；用户scrub时暂停，结束后不自动恢复。�
 - Start、Pause、Resume、Cancel、Retry Failed、Apply Max Concurrency。
 - Start 自动执行 canonical DroneID 映射、Working Assignment、Freeze、Console Sync 与 exactly-once Job Start；正常 UI 不要求先运行 `BindExplicit`。
 - 映射预览来自 Manifest Route Record，显示 `DroneID -> Slot -> route basename`；不从 Niagara、`M_DroneIdLabel`、SYSID 或屏幕排序取 Authority。
-- E.0 多 Target Job 的实际并发固定为 `1`，UI 不允许用更大值静默启动。
+- `EDT_MaxConcurrency`（`UEditableTextBox`）、`BTN_ApplyMaxConcurrency`（`UButton`）与 `TXT_CurrentMaxConcurrencyValue`（`UTextBlock`）承载 E.1 操作员并发 Authority。Apply 严格接受 `1..50` 整数；失败保留上次 Applied 值并不创建 Frozen/Job。Start 快照 Applied 值，运行中修改只影响下一 Job；AutoStart/Freeze/Sync/非终态 Job 期间禁止 Apply。
 - Waiting、Preparing、Uploading、RetryWaiting、Succeeded、Failed、Cancelled 统计与总进度。
 - command gate、safe diagnostic 与 stale binding rejection 展示。
 - Workflow 关闭只隐藏 View；AutoStart 在隐藏期间继续接收/推进，重新打开不会重复 Freeze/Sync/Start。
 
 UI command 通过 `UDSPGCSUploadJobSubsystem` 发送 DSP-GCS Upload Job protocol，不直接调用 MAVLink 或 `RouteUploadManager`。
 
-ConsoleGCS 继续 headless，不创建第二套正式 Operator UI。E.1 真并发调度与 E.2 多机硬件验证尚未完成；Console 重启后的 DroneID 发现顺序风险留给 E.3。
+ConsoleGCS 继续 headless，不创建第二套正式 Operator UI。E.1 软件 Gate 已完成，E.2 多机硬件验证尚未完成；Console 重启后的 DroneID 发现顺序风险留给 E.3。

@@ -28,7 +28,8 @@ Waypoint Generation                IMPLEMENTED
 Waypoint Validation                IMPLEMENTED
 Artifact Freeze / READY            IMPLEMENTED
 Frozen Assignment DSP              IMPLEMENTED
-Selected-Drone Auto Assignment     IMPLEMENTED (E.0, SERIAL TARGETS)
+Selected-Drone Auto Assignment     IMPLEMENTED (E.0)
+Dynamic-N MAVFTP Scheduling        SOFTWARE GATE PASS (E.1)
 DSP-GCS Upload Job                 IMPLEMENTED
 Console Artifact Consumer          IMPLEMENTED
 Console RouteUploadManager         IMPLEMENTED
@@ -139,7 +140,9 @@ ConsoleUploadJobAuthority
 
 `RouteUploadManager` 已实现 preparation bound、max active uploads、per-route lifecycle、cancel/retry、failure isolation、progress、metrics 与 terminal summary。
 
-E.0 可由一次 Start 创建 N 个 Targets，但传给生产 Job 的 `MaxConcurrentTargets` 固定为 `1`；E.1 全局 outstanding cap 和 E.2 多机硬件验证完成前不开放并行飞控发送。
+E.1 的操作员并发 Authority 是现有 UE 输入框与 Apply 按钮。Applied 值合法范围 `1..50`，同一 runtime session 内跨 View 重开保留；Load Preview 不重置。AutoStart/Freeze/Sync/非终态 Job 期间禁止 Apply。Start 在事务入口冻结 Applied 值并写入现有 `Upload Start DTO.MaxConcurrentTargets`；Console 不 clamp、不回退，也不使用独立 Deployment INI 覆盖，非法值拒绝整个 Job。生产有效并发为 `min(DTO.MaxConcurrentTargets, MatchedTargetCount)`。
+
+`RouteUploadManager` 使用动态 Target 容器与准入队列；终态 Target 释放准入位后自动启动后续 Target。所有 `DroneSession` 继续共享单一 MAVLink sender/socket，且每 Session 只有一个 endpoint-bound `MavFtpClient`。每 Client `write_window=16` 与 Target 并发上限是两个不同维度；共享公平 permit pool 的全局 cap 合法范围 `1..800`、默认 `16`，有效值为 `min(ConfiguredGlobalCap, EffectiveMaxConcurrentTargets * PerClientWriteWindow)`。
 
 当前 `RouteUploadManager::StartPrepared` 的 production factory 只创建 `MAVFTPMissionTransport`，并借用 Session 已有 Client。构造或运行失败会明确失败，不会切换协议。
 

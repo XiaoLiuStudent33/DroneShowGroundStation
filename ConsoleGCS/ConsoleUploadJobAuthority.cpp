@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <iomanip>
+#include <limits>
 #include <random>
 #include <sstream>
 #include <unordered_set>
@@ -67,6 +68,19 @@ ConsoleUploadJobAuthority::ConsoleUploadJobAuthority(
     , artifactConsumer_(artifactConsumer)
     , frozenAssignmentStore_(frozenAssignmentStore)
 {
+}
+
+std::uint32_t ConsoleUploadJobAuthority::ComputeEffectiveMaxConcurrentTargets(
+    const std::uint32_t requested,
+    const std::size_t matchedTargetCount)
+{
+    if (requested == 0 || matchedTargetCount == 0)
+        return 0;
+    return std::min<std::uint32_t>({
+        requested,
+        static_cast<std::uint32_t>(std::min<std::size_t>(
+            matchedTargetCount,
+            std::numeric_limits<std::uint32_t>::max())) });
 }
 
 std::int64_t ConsoleUploadJobAuthority::UtcNowMs()
@@ -225,6 +239,13 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
                 : Reject(command, dspgcs::UploadJobErrorCode::JobIdCollision,
                     "UploadJobID is already pending with different authorities.");
         }
+        else if (command.requestedMaxConcurrentUploads == 0 ||
+            command.requestedMaxConcurrentUploads > 50)
+        {
+            acknowledgement = Reject(command,
+                dspgcs::UploadJobErrorCode::InvalidMaxConcurrency,
+                "Requested MaxConcurrentUploads must be in range 1..50.");
+        }
         else if (!artifactConsumer_ || !frozenAssignmentStore_)
         {
             acknowledgement = Reject(command,
@@ -280,7 +301,9 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
                     pending.snapshot.snapshotToken = MakeCanonicalId();
                     pending.snapshot.updatedAtUtcMs = UtcNowMs();
                     pending.snapshot.effectiveMaxConcurrentUploads =
-                        command.requestedMaxConcurrentUploads;
+                        ComputeEffectiveMaxConcurrentTargets(
+                            command.requestedMaxConcurrentUploads,
+                            frozen->matchedMappings.size());
                     pending.createdAt = std::chrono::steady_clock::now();
                     pending.idempotencyKey = idempotencyKey;
                     pending.command = command;
@@ -397,11 +420,9 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
             }
             break;
         case dspgcs::UploadJobCommandType::SetMaxConcurrentUploads:
-            if (job->snapshot.jobState == dspgcs::UploadJobState::Completed ||
-                job->snapshot.jobState == dspgcs::UploadJobState::Cancelled)
-                accepted = false;
-            else job->snapshot.effectiveMaxConcurrentUploads =
-                command.requestedMaxConcurrentUploads;
+            // E.1 freezes concurrency into Start. A later UI edit is for the
+            // next Job and cannot mutate an in-flight Job transaction.
+            accepted = false;
             break;
         default:
             accepted = false;
@@ -687,6 +708,8 @@ void ConsoleUploadJobAuthority::CompletePendingStart(
     job.currentDirectoryIdentity = result.snapshot->currentDirectoryIdentity;
     job.artifactLease = std::move(lease);
     job.createdAt = pending.createdAt;
+    job.requestedMaxConcurrentUploads =
+        pending.command.requestedMaxConcurrentUploads;
     RecalculateAggregate(job);
 
     const std::uint64_t revision = job.snapshot.jobRevision;
@@ -1114,6 +1137,7 @@ ConsoleUploadJobAuthority::GetExecutionView(
     view.createdAt = job.createdAt;
     view.artifactBinding = job.snapshot.artifactBinding;
     view.frozenBinding = job.snapshot.frozenAssignmentBinding;
+    view.requestedMaxConcurrentUploads = job.requestedMaxConcurrentUploads;
     view.effectiveMaxConcurrentUploads =
         job.snapshot.effectiveMaxConcurrentUploads;
     view.artifactSnapshot = job.artifactSnapshot;
@@ -1345,7 +1369,11 @@ bool ConsoleUploadJobAuthority::InstallSyntheticReadyJobForTest(
     job.snapshot.vacantCount = vacantCount;
     job.snapshot.spareCount = spareCount;
     job.snapshot.excludedCount = excludedCount;
-    job.snapshot.effectiveMaxConcurrentUploads = maxConcurrentUploads;
+    job.snapshot.effectiveMaxConcurrentUploads =
+        ComputeEffectiveMaxConcurrentTargets(
+            maxConcurrentUploads,
+            routes.size());
+    job.requestedMaxConcurrentUploads = maxConcurrentUploads;
     std::sort(routes.begin(), routes.end(),
         [](const auto& left, const auto& right)
         { return left.routeSlotIndex < right.routeSlotIndex; });

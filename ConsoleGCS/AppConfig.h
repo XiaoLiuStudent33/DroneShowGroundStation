@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace AppConfigDefaults
@@ -23,6 +24,7 @@ namespace AppConfigDefaults
     inline constexpr int MavftpTerminateTimeoutMs = 2500;
     inline constexpr std::uint32_t MavftpRequestRetryCount = 3U;
     inline constexpr std::uint32_t MavftpWriteWindow = 16U;
+    inline constexpr std::uint32_t MavftpGlobalWriteOutstandingCap = 16U;
 
 }
 
@@ -58,6 +60,8 @@ struct AppConfig
         AppConfigDefaults::MavftpRequestRetryCount;
     std::uint32_t mavftpWriteWindow =
         AppConfigDefaults::MavftpWriteWindow;
+    std::uint32_t mavftpGlobalWriteOutstandingCap =
+        AppConfigDefaults::MavftpGlobalWriteOutstandingCap;
 
     int heartbeatTimeoutMs = AppConfigDefaults::HeartbeatTimeoutMs;
     float takeoffAltitudeLimitMeters = 5.0f;
@@ -68,3 +72,9 @@ struct AppConfig
         AppConfig& config,
         std::string& error);
 };
+
+/** Applies explicit production CLI values after INI load (CLI > INI > default). */
+bool ApplyMavFtpGlobalWriteOutstandingCapCliOverride(
+    AppConfig& config,
+    std::optional<int> mavftpGlobalWriteOutstandingCap,
+    std::string& error);

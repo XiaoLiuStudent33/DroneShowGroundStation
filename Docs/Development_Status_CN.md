@@ -32,6 +32,7 @@ Route Upload 阶段：
 | Phase 2I-C.3.E.0 Selected Drone 自动分配与 Start 事务 | IMPLEMENTED |
 | Phase 2I-C.3.E.0.1 Console Render Integrity | IMPLEMENTED |
 | Phase 2I-C.3.E.0.2 Console Status Colors / Fleet Select-All | IMPLEMENTED |
+| Phase 2I-C.3.E.1 Dynamic-N MAVFTP Concurrency / Isolation | SOFTWARE GATE PASS；E.2 HARDWARE PENDING |
 | MAVFTP 9100/4000 三段生产上传与最终验证 | DONE |
 | MissionTransport abstraction | DONE |
 
@@ -74,13 +75,12 @@ Phase 2I-C.3.E.0 — Automatic Selected-Drone Assignment and Start Transaction
 - MAVFTP 参数、Quick Test、retry/timeout、逐段日志与 metrics 的生产接线。
 - 真实飞控 9100/4000 三段 `CLEAR + NO_CLEAR` 与 Count/Home/First/Last 验证。
 - 正常 UI Start 已不依赖手工 `RouteAssignment.BindExplicit`；该 Cmd 只保留诊断用途。
-- E.0 支持一个 Job 的多 Target，但 `MaxConcurrentTargets` 安全冻结为 `1`。
+- E.1 已取消独立 Deployment Target cap：UE 已 Apply 的 `1..50` 值在 Start 时冻结并进入现有 DTO；Console 严格拒绝非法值，实际准入取 DTO 与 matched targets 的最小值。
 - E.0.1 已冻结 Console 单一 Renderer Authority；真实 Console 为 Dashboard，Pipe/File/Tee/CI 为 Linear，业务线程不再直接参与物理绘制。
 - 自动事务在 Console Accepted 后重新校验 Selection/Fleet/endpoint/Artifact/Manifest/Route record，并且每个事务最多发送一次 Start。
 
 ## 3. NOT STARTED
 
-- E.1 全局 outstanding cap 与多 Target 真并发上传。
 - E.2 多机硬件规模验证与调度冻结。
 
 ## 4. DEFERRED
@@ -127,9 +127,9 @@ Full ConsoleGCSTests = PASS
 --console-render-tests = PASS (连续 20/20)
 ```
 
-E.0.1 完整 Console 回归连续 3/3 PASS；有界队列压力、长行、短行覆盖、Resize、compact viewport、单 Writer 和 active-producer Shutdown 均由 Fake Console 专项覆盖。E.1 多 Target 真并发尚未开始。
+E.1 Console Release Build PASS；动态 N 覆盖 `1/2/6/16/25/50`，公平 permit 专项连续 20/20 PASS，Debug/assert-enabled 专项连续 20/20 PASS，完整 Console 回归连续 3/3 PASS。Endpoint ingress 隔离 Fixture 使用相同 SYSID 和相同 ACK identity、不同 Remote endpoint，验证 ACK 不串包。该软件证据不替代 E.2 真实多机硬件验收。
 
-UE Development/DebugGame Editor Build 均为 PASS；E.0 AutoStart 专项 6/6 PASS，Route Assignment + Frozen Sync + DSP Upload Job + Route Workflow 合并回归 164/164 PASS。本轮没有运行真实飞控上传。
+UE Development/DebugGame Editor Build 均为 PASS；`DroneGCS.Data.DSPGCSUploadJob` 3/3、`DroneGCS.UI.RouteWorkflow` 17/17 PASS，覆盖 Applied 并发、AutoStart 快照、View persistence 与 stale gate。本轮没有运行真实飞控上传。
 
 当前 Artifact 样本位于 `UnrealGCS/Saved/RouteArtifacts/Current/manifest.json`：Schema 2、9100 frames、1000 RouteSlots、1000 route records；`Saved` 样本不是应提交的 Production 源码。
 

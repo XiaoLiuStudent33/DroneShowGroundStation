@@ -101,6 +101,7 @@ bool DroneSession::Start()
             std::chrono::milliseconds(config.mavFtpTerminateTimeoutMs);
         clientConfig.maximumRetries = config.mavFtpRequestRetryCount;
         clientConfig.writeWindow = config.mavFtpWriteWindow;
+        clientConfig.writePermitPool = config.mavFtpWritePermitPool;
         mavFtpClient = std::make_unique<dronegcs::mavftp::Client>(
             *this, peer, clientConfig);
     }

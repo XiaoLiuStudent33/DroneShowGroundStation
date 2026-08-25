@@ -34,6 +34,7 @@ struct UploadJobExecutionView
     std::chrono::steady_clock::time_point createdAt{};
     dspgcs::UploadArtifactBindingDTO artifactBinding;
     dspgcs::UploadFrozenAssignmentBindingDTO frozenBinding;
+    std::uint32_t requestedMaxConcurrentUploads = 0;
     std::uint32_t effectiveMaxConcurrentUploads = 0;
     std::shared_ptr<const AcceptedRouteArtifactV2> artifactSnapshot;
     std::shared_ptr<const FrozenAssignmentAcceptedSnapshot> frozenSnapshot;
@@ -52,6 +53,10 @@ public:
         std::string workspaceRoot,
         ConsoleArtifactConsumerV2* artifactConsumer,
         FrozenAssignmentStore* frozenAssignmentStore);
+
+    static std::uint32_t ComputeEffectiveMaxConcurrentTargets(
+        std::uint32_t requested,
+        std::size_t matchedTargetCount);
 
     dspgcs::UploadJobCommandAckDTO HandleCommand(
         const std::string& clientSessionId,
@@ -148,6 +153,7 @@ private:
         RouteArtifactV2CurrentDirectoryIdentity currentDirectoryIdentity;
         std::unique_ptr<dronegcs::route_artifact::ArtifactReadLease> artifactLease;
         std::chrono::steady_clock::time_point createdAt{};
+        std::uint32_t requestedMaxConcurrentUploads = 0;
     };
 
     struct PendingStart

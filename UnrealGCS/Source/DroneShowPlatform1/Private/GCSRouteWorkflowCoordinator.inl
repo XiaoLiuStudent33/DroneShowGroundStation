@@ -399,7 +399,8 @@ bool UGCSRouteWorkflowCoordinator::BindWorkflowWidgets(UUserWidget* Workflow, FS
 	WorkflowWidgets = MoveTemp(WorkflowMap);
 	RouteConvertWidgetRef = Convert; RouteUploadWidgetRef = Upload;
 	ClearRouteListModel();
-	SetEdit(UploadWidgets, TEXT("EDT_MaxConcurrency"), TEXT("1"));
+	SetEdit(UploadWidgets, TEXT("EDT_MaxConcurrency"),
+		FString::FromInt(AppliedMaxConcurrentTargets));
 	ApplyReadOnlyControlState();
 	BindCommandControls();
 	bBindingValid = true; return true;
@@ -806,18 +807,6 @@ void UGCSRouteWorkflowCoordinator::HandleStartUploadClicked()
 	if (!IsInGameThread() || !GameInstanceRef.IsValid()) return;
 	if (!ComputeUploadCommandGate(GatherUploadCommandGateInputs()).bStartEnabled) return;
 	FString Error;
-	int32 RequestedMaximum = 1;
-	if (GCSRouteWorkflowPrivate::Get<UEditableTextBox>(
-		UploadWidgets, TEXT("EDT_MaxConcurrency")) &&
-		(!ReadConcurrencyDraft(RequestedMaximum, Error) || RequestedMaximum != 1))
-	{
-		if (Error.IsEmpty())
-		{
-			Error = TEXT("E.0 safety freeze requires maximum concurrency to be exactly 1.");
-		}
-		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
-		return;
-	}
 	if (!BeginAutoStartTransaction(Error))
 	{
 		if (Error.IsEmpty()) Error = TEXT("Automatic upload start was rejected.");
@@ -977,6 +966,7 @@ bool UGCSRouteWorkflowCoordinator::BeginAutoStartTransaction(FString& OutError)
 
 	FGCSRouteAutoStartSnapshot Candidate;
 	if (!CaptureAutoStartSnapshot(Candidate, OutError)) return false;
+	Candidate.MaxConcurrentTargets = AppliedMaxConcurrentTargets;
 #if WITH_DEV_AUTOMATION_TESTS
 	const bool bUsingAutoStartTestHooks = static_cast<bool>(AutoStartTestHooks.CaptureSnapshot);
 #else
@@ -1131,8 +1121,9 @@ bool UGCSRouteWorkflowCoordinator::BeginAutoStartTransaction(FString& OutError)
 
 	AutoStartState = EGCSRouteAutoStartState::SyncingConsole;
 	UE_LOG(LogGCSRouteWorkflow, Display,
-		TEXT("[ROUTE_AUTO_START] Transaction=%s State=SyncingConsole Targets=%d MaxConcurrentTargets=1"),
-		*AutoStartSnapshot.TransactionID, AutoStartSnapshot.Targets.Num());
+		TEXT("[ROUTE_AUTO_START] Transaction=%s State=SyncingConsole Targets=%d MaxConcurrentTargets=%d"),
+		*AutoStartSnapshot.TransactionID, AutoStartSnapshot.Targets.Num(),
+		AutoStartSnapshot.MaxConcurrentTargets);
 	AdvanceAutoStartTransaction();
 	return AutoStartState != EGCSRouteAutoStartState::Failed &&
 		AutoStartState != EGCSRouteAutoStartState::CancelledAsStale;
@@ -1168,6 +1159,7 @@ bool UGCSRouteWorkflowCoordinator::ValidateAutoStartSnapshotStillCurrent(FString
 	FGCSRouteAutoStartSnapshot Current;
 	if (!CaptureAutoStartSnapshot(Current, OutError)) return false;
 	if (Current.SelectedDroneIDs != AutoStartSnapshot.SelectedDroneIDs ||
+		AppliedMaxConcurrentTargets != AutoStartSnapshot.MaxConcurrentTargets ||
 		Current.FleetSessionID != AutoStartSnapshot.FleetSessionID ||
 		Current.FleetRevision != AutoStartSnapshot.FleetRevision ||
 		Current.ArtifactSetID != AutoStartSnapshot.ArtifactSetID ||
@@ -1266,14 +1258,16 @@ void UGCSRouteWorkflowCoordinator::AdvanceAutoStartTransaction()
 #if WITH_DEV_AUTOMATION_TESTS
 	if (AutoStartTestHooks.StartJob)
 	{
-		bStarted = AutoStartTestHooks.StartJob(1, UploadJobID, Error);
+		bStarted = AutoStartTestHooks.StartJob(
+			AutoStartSnapshot.MaxConcurrentTargets, UploadJobID, Error);
 	}
 	else
 #endif
 	{
 		UDSPGCSUploadJobSubsystem* Upload =
 			GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
-		bStarted = Upload && Upload->StartUploadJobFromCurrentAuthorities(1, UploadJobID, Error);
+		bStarted = Upload && Upload->StartUploadJobFromCurrentAuthorities(
+			AutoStartSnapshot.MaxConcurrentTargets, UploadJobID, Error);
 	}
 	if (!bStarted)
 	{
@@ -1284,8 +1278,9 @@ void UGCSRouteWorkflowCoordinator::AdvanceAutoStartTransaction()
 	AutoStartSnapshot.bJobStartDispatched = true;
 	FinishAutoStart(EGCSRouteAutoStartState::Completed, FString());
 	UE_LOG(LogGCSRouteWorkflow, Display,
-		TEXT("[ROUTE_AUTO_START] Transaction=%s State=Completed UploadJobID=%s Targets=%d MaxConcurrentTargets=1"),
-		*AutoStartSnapshot.TransactionID, *UploadJobID, AutoStartSnapshot.Targets.Num());
+		TEXT("[ROUTE_AUTO_START] Transaction=%s State=Completed UploadJobID=%s Targets=%d MaxConcurrentTargets=%d"),
+		*AutoStartSnapshot.TransactionID, *UploadJobID,
+		AutoStartSnapshot.Targets.Num(), AutoStartSnapshot.MaxConcurrentTargets);
 }
 
 void UGCSRouteWorkflowCoordinator::FinishAutoStart(
@@ -1438,21 +1433,8 @@ void UGCSRouteWorkflowCoordinator::HandleApplyMaxConcurrencyClicked()
 		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
 		return;
 	}
-	if (Maximum != 1)
-	{
-		SetCommandError(
-			EGCSRouteWorkflowCommandErrorCategory::Upload,
-			TEXT("E.0 safety freeze does not allow concurrency greater than 1."));
-		return;
-	}
-	UDSPGCSUploadJobSubsystem* Upload =
-		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
-	if (!Upload || !Upload->SetMaxConcurrentUploads(Maximum, Error))
-	{
-		if (Error.IsEmpty()) Error = TEXT("Maximum concurrency command was rejected.");
-		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
-	}
-	else ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload);
+	AppliedMaxConcurrentTargets = Maximum;
+	ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload);
 	RefreshReadOnlyState();
 }
 
@@ -1610,7 +1592,9 @@ void UGCSRouteWorkflowCoordinator::UpdateUploadCommandControlState()
 	{
 		Button->SetIsEnabled(Gate.bStartEnabled);
 		Button->SetToolTipText(FText::FromString(
-			Gate.bStartEnabled ? TEXT("Automatic selected-drone assignment; E.0 concurrency = 1.")
+			Gate.bStartEnabled ? FString::Printf(
+				TEXT("Automatic selected-drone assignment; applied concurrency = %d."),
+				AppliedMaxConcurrentTargets)
 				: Gate.StartBlockedReason));
 	}
 	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_PauseUpload")))
@@ -1757,7 +1741,7 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 		JobPresentation += TEXT(" / ") + CommandStatus.LastSafeDiagnostic.Left(320);
 	}
 	SetText(UploadWidgets,TEXT("TXT_UploadJobStateValue"),JobPresentation);
-	const uint64 Total=Job?Job->totalBytes:0,Done=Job?Job->bytesCompleted:0; const double UR=ComputeProgressRatio(Done,Total); SetText(UploadWidgets,TEXT("TXT_UploadThroughputValue"),FormatThroughput(Job?Job->throughputBytesPerSecond:0)); SetText(UploadWidgets,TEXT("TXT_UploadBytesValue"),FormatLogicalByteProgress(Done,Total)); SetText(UploadWidgets,TEXT("TXT_UploadElapsedValue"),FormatElapsedMilliseconds(Job?Job->elapsedMs:0)); if(UProgressBar* Bar=Get<UProgressBar>(UploadWidgets,TEXT("PROGRESS_Upload"))) Bar->SetPercent(UR); SetText(UploadWidgets,TEXT("TXT_UploadPercent"),FormatPercent(UR)); SetText(UploadWidgets,TEXT("TXT_CurrentMaxConcurrencyValue"),Job?FString::Printf(TEXT("Current: %u"),Job->effectiveMaxConcurrentUploads):(AutoStartState!=EGCSRouteAutoStartState::Idle?TEXT("E.0 Start: 1"):TEXT("Current: --")));
+	const uint64 Total=Job?Job->totalBytes:0,Done=Job?Job->bytesCompleted:0; const double UR=ComputeProgressRatio(Done,Total); SetText(UploadWidgets,TEXT("TXT_UploadThroughputValue"),FormatThroughput(Job?Job->throughputBytesPerSecond:0)); SetText(UploadWidgets,TEXT("TXT_UploadBytesValue"),FormatLogicalByteProgress(Done,Total)); SetText(UploadWidgets,TEXT("TXT_UploadElapsedValue"),FormatElapsedMilliseconds(Job?Job->elapsedMs:0)); if(UProgressBar* Bar=Get<UProgressBar>(UploadWidgets,TEXT("PROGRESS_Upload"))) Bar->SetPercent(UR); SetText(UploadWidgets,TEXT("TXT_UploadPercent"),FormatPercent(UR)); SetText(UploadWidgets,TEXT("TXT_CurrentMaxConcurrencyValue"),FString::Printf(TEXT("Current: %d"),AppliedMaxConcurrentTargets));
 	RefreshArtifactIdentity();
 	SyncRouteListModel();
 	RefreshVisibleRouteRows();
@@ -2291,6 +2275,11 @@ bool UGCSRouteWorkflowCoordinator::ParsePositiveConcurrency(
 		OutError = TEXT("Maximum concurrency must be greater than zero.");
 		return false;
 	}
+	if (Value > 50)
+	{
+		OutError = TEXT("Maximum concurrency must be in range 1..50.");
+		return false;
+	}
 	OutValue = static_cast<int32>(Value);
 	OutError.Reset();
 	return true;
@@ -2304,6 +2293,7 @@ FGCSRouteUploadCommandGate UGCSRouteWorkflowCoordinator::ComputeUploadCommandGat
 	if (Inputs.bCommandInFlight) return Gate;
 	if (!Inputs.bHasActiveJobBinding && !Inputs.bHasExecutableJob)
 	{
+		Gate.bApplyMaxEnabled = !Inputs.bAutoStartInFlight;
 		Gate.bStartEnabled =
 			Inputs.bArtifactReady && Inputs.bAutoStartMappingValid &&
 			!Inputs.bAutoStartInFlight;
@@ -2317,16 +2307,18 @@ FGCSRouteUploadCommandGate UGCSRouteWorkflowCoordinator::ComputeUploadCommandGat
 	case dspgcs::UploadJobState::Running:
 		Gate.bPauseEnabled = true;
 		Gate.bCancelEnabled = true;
-		Gate.bApplyMaxEnabled = true;
 		break;
 	case dspgcs::UploadJobState::Paused:
 		Gate.bResumeEnabled = true;
 		Gate.bCancelEnabled = true;
-		Gate.bApplyMaxEnabled = true;
 		break;
 	case dspgcs::UploadJobState::Failed:
 		Gate.bCancelEnabled = true;
 		Gate.bRetryFailedEnabled = Inputs.FailedCount > 0;
+		Gate.bApplyMaxEnabled = true;
+		break;
+	case dspgcs::UploadJobState::Completed:
+	case dspgcs::UploadJobState::Cancelled:
 		Gate.bApplyMaxEnabled = true;
 		break;
 	default:

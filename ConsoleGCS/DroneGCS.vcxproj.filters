@@ -206,6 +206,9 @@
     <ClInclude Include="MAVFTPMissionTransport.h">
       <Filter>Protocol</Filter>
     </ClInclude>
+    <ClInclude Include="MavFtpWritePermitPool.h">
+      <Filter>Protocol</Filter>
+    </ClInclude>
     <ClInclude Include="MAVFTPMissionHardwareTest.h">
       <Filter>Protocol</Filter>
     </ClInclude>
