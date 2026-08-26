@@ -61,6 +61,8 @@ struct RouteUploadTargetMetrics
     std::uint64_t missionRequestsReceived = 0;
     std::uint64_t duplicateRequests = 0;
     std::uint64_t retryCount = 0;
+    std::uint64_t duplicateAcks = 0;
+    std::uint64_t staleOrMismatchedAcks = 0;
     std::uint64_t writeBlocksSent = 0;
     std::uint64_t writeBlocksAcked = 0;
     std::uint64_t permitGrantCount = 0;
@@ -75,7 +77,9 @@ struct RouteUploadTargetMetrics
     std::uint64_t hashFinalizeDurationMs = 0;
     std::uint64_t acceptedToTargetStartMs = 0;
     std::uint64_t uploadDurationMs = 0;
+    std::uint64_t commitDurationMs = 0;
     std::uint64_t verificationDurationMs = 0;
+    std::uint64_t segmentCount = 0;
     std::uint64_t totalDurationMs = 0;
     std::string result;
     std::string terminalPhase;
@@ -95,6 +99,7 @@ struct RouteUploadJobMetrics
     std::uint64_t writePermitsGranted = 0;
     std::uint64_t writePermitsReleased = 0;
     std::uint64_t writePermitWaitCount = 0;
+    std::uint64_t writePermitWaitDurationMs = 0;
     std::uint64_t invalidWritePermitReleaseCount = 0;
     std::size_t succeeded = 0;
     std::size_t failed = 0;
@@ -105,6 +110,11 @@ struct RouteUploadJobMetrics
     std::uint64_t aggregateLogicalThroughput = 0;
     std::size_t peakActiveUploads = 0;
     std::size_t peakPreparedMissions = 0;
+    std::uint64_t retryCount = 0;
+    std::uint64_t timeoutCount = 0;
+    std::uint64_t staleOrMismatchedAcks = 0;
+    std::uint64_t duplicateAcks = 0;
+    std::uint64_t droppedLogCount = 0;
 };
 
 /** Process-level scheduler/executor; ConsoleUploadJobAuthority remains authoritative. */

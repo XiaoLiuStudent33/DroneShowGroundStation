@@ -252,7 +252,8 @@ namespace
         const FrozenAssignmentAcceptedSnapshot& frozen,
         const std::string& jobId = Id('1'),
         const std::string& commandId = Id('2'),
-        const std::uint32_t concurrency = 8)
+        const std::uint32_t concurrency = 8,
+        const ConsoleUploadJobAuthority* authority = nullptr)
     {
         dspgcs::UploadJobCommandDTO command;
         command.clientCommandId = commandId;
@@ -270,6 +271,20 @@ namespace
             frozen.identity.assignmentRevision;
         command.frozenAssignmentBinding.assignmentDigest =
             frozen.canonicalPayloadDigest;
+        if (authority)
+        {
+            const auto& config = authority->GetRuntimeConfigForTest();
+            command.runtimeConfigBinding.authoritySessionId =
+                config.authoritySessionId;
+            command.runtimeConfigBinding.configRevision = config.configRevision;
+            command.runtimeConfigBinding.configDigest = config.configDigest;
+        }
+        else
+        {
+            command.runtimeConfigBinding.authoritySessionId = Id('a');
+            command.runtimeConfigBinding.configRevision = 1;
+            command.runtimeConfigBinding.configDigest.fill(0x5a);
+        }
         return command;
     }
 
@@ -280,6 +295,106 @@ namespace
         std::string error;
         Expect(dspgcs::EncodeUploadJobCommand(command, bytes, error), error);
         return bytes;
+    }
+
+    std::vector<std::uint8_t> EncodeRuntimeRequest(
+        const dspgcs::MavFtpRuntimeConfigRequestDTO& request)
+    {
+        std::vector<std::uint8_t> bytes;
+        std::string error;
+        Expect(dspgcs::EncodeMavFtpRuntimeConfigRequest(request, bytes, error), error);
+        return bytes;
+    }
+
+    void VerifyRuntimeConfigProtocolAndAuthority()
+    {
+        TempRoot root("runtime-config");
+        ConsoleMavFtpBootConfig boot;
+        boot.globalWriteOutstandingCap = 16;
+        ConsoleUploadJobAuthority authority(
+            root.root.u8string(), nullptr, nullptr, boot);
+        const auto initial = authority.BuildRuntimeConfigSnapshot(Id('1'));
+        std::vector<std::uint8_t> encoded;
+        std::string error;
+        Expect(dspgcs::EncodeMavFtpRuntimeConfigSnapshot(initial, encoded, error), error);
+        dspgcs::MavFtpRuntimeConfigSnapshotDTO decodedSnapshot;
+        Expect(dspgcs::DecodeMavFtpRuntimeConfigSnapshot(
+            encoded, decodedSnapshot, error) &&
+            decodedSnapshot.configDigest == initial.configDigest &&
+            decodedSnapshot.runtimeAcceptedGlobalWriteCap == 16,
+            "Runtime Config Snapshot round trip drifted");
+
+        std::uint64_t expectedRevision = initial.configRevision;
+        std::uint32_t capIndex = 0;
+        for (const std::uint32_t cap : { 1U, 16U, 64U, 800U })
+        {
+            dspgcs::MavFtpRuntimeConfigRequestDTO apply;
+            apply.clientRequestId = Id(static_cast<char>('2' + capIndex++));
+            apply.authoritySessionId = initial.authoritySessionId;
+            apply.expectedConfigRevision = expectedRevision;
+            apply.operation = dspgcs::MavFtpRuntimeConfigOperation::Apply;
+            apply.candidateGlobalWriteOutstandingCap = cap;
+            const auto payload = EncodeRuntimeRequest(apply);
+            const auto ack = authority.HandleRuntimeConfigRequest(
+                "runtime-client", apply, payload);
+            Expect(ack.status == dspgcs::MavFtpRuntimeConfigAckStatus::Accepted &&
+                ack.resultCode == dspgcs::MavFtpRuntimeConfigErrorCode::None &&
+                authority.GetRuntimeConfigForTest().runtimeAcceptedGlobalWriteCap == cap,
+                "Runtime Config valid cap was rejected");
+            ++expectedRevision;
+
+            std::vector<std::uint8_t> ackBytes;
+            dspgcs::MavFtpRuntimeConfigAckDTO decodedAck;
+            Expect(dspgcs::EncodeMavFtpRuntimeConfigAck(ack, ackBytes, error) &&
+                dspgcs::DecodeMavFtpRuntimeConfigAck(ackBytes, decodedAck, error) &&
+                decodedAck.authoritativeRevision == ack.authoritativeRevision,
+                "Runtime Config ACK round trip drifted");
+            const auto replay = authority.HandleRuntimeConfigRequest(
+                "runtime-client", apply, payload);
+            Expect(replay.status ==
+                dspgcs::MavFtpRuntimeConfigAckStatus::DuplicateReplayed &&
+                replay.authoritativeRevision == ack.authoritativeRevision &&
+                replay.configDigest == ack.configDigest,
+                "Runtime Config duplicate did not replay the same result");
+        }
+
+        for (const std::uint32_t invalid : { 0U, 801U, UINT32_MAX })
+        {
+            dspgcs::MavFtpRuntimeConfigRequestDTO request;
+            request.clientRequestId = Id('a');
+            request.authoritySessionId = initial.authoritySessionId;
+            request.expectedConfigRevision = expectedRevision;
+            request.operation = dspgcs::MavFtpRuntimeConfigOperation::Apply;
+            request.candidateGlobalWriteOutstandingCap = invalid;
+            Expect(!dspgcs::ValidateMavFtpRuntimeConfigRequest(request, error),
+                "Runtime Config invalid/overflowing cap passed validation");
+        }
+
+        dspgcs::MavFtpRuntimeConfigRequestDTO stale;
+        stale.clientRequestId = Id('b');
+        stale.authoritySessionId = initial.authoritySessionId;
+        stale.expectedConfigRevision = expectedRevision - 1;
+        stale.operation = dspgcs::MavFtpRuntimeConfigOperation::Apply;
+        stale.candidateGlobalWriteOutstandingCap = 64;
+        Expect(authority.HandleRuntimeConfigRequest(
+            "runtime-client", stale, EncodeRuntimeRequest(stale)).resultCode ==
+                dspgcs::MavFtpRuntimeConfigErrorCode::StaleRevision,
+            "Runtime Config stale revision was not rejected");
+
+        auto cross = stale;
+        cross.clientRequestId = Id('c');
+        cross.authoritySessionId = Id('f');
+        cross.expectedConfigRevision = expectedRevision;
+        Expect(authority.HandleRuntimeConfigRequest(
+            "runtime-client", cross, EncodeRuntimeRequest(cross)).resultCode ==
+                dspgcs::MavFtpRuntimeConfigErrorCode::AuthoritySessionMismatch,
+            "Runtime Config cross-session Apply was not rejected");
+
+        ConsoleUploadJobAuthority restarted(root.root.u8string(), nullptr, nullptr, boot);
+        Expect(restarted.GetRuntimeConfigForTest().authoritySessionId !=
+            authority.GetRuntimeConfigForTest().authoritySessionId &&
+            restarted.GetRuntimeConfigForTest().configRevision == 1,
+            "Console restart did not create a new Runtime Config authority session");
     }
 
     dspgcs::UploadJobSnapshotDTO WaitForStart(
@@ -324,13 +439,15 @@ namespace
         std::string error;
         dspgcs::UploadJobCommandDTO decoded;
         Expect(dspgcs::DecodeUploadJobCommand(encoded, decoded, error), error);
-        Expect(decoded.payloadSchemaVersion == 2 &&
+        Expect(decoded.payloadSchemaVersion == dspgcs::UploadJobSchemaVersion &&
             dspgcs::UploadArtifactBindingEqual(
                 decoded.artifactBinding, command.artifactBinding) &&
             dspgcs::UploadFrozenAssignmentBindingEqual(
                 decoded.frozenAssignmentBinding,
-                command.frozenAssignmentBinding),
-            "schema2 command round trip changed a binding");
+                command.frozenAssignmentBinding) &&
+            dspgcs::UploadRuntimeConfigBindingEqual(
+                decoded.runtimeConfigBinding, command.runtimeConfigBinding),
+            "schema3 command round trip changed a binding");
 
         auto invalid = command;
         invalid.artifactBinding.artifactSetDigest.fill(0);
@@ -373,6 +490,17 @@ namespace
             static_cast<std::uint16_t>(
                 dspgcs::UploadJobMessageTypes::RouteStateDelta) == 14,
             "Upload Job message type values changed");
+        Expect(DSPGCSUploadJobReceiver::IsIngressMessageType(
+                dspgcs::UploadJobMessageTypes::Command) &&
+            DSPGCSUploadJobReceiver::IsIngressMessageType(
+                dspgcs::UploadJobMessageTypes::SnapshotRequest) &&
+            DSPGCSUploadJobReceiver::IsIngressMessageType(
+                dspgcs::MavFtpRuntimeConfigMessageTypes::Request) &&
+            !DSPGCSUploadJobReceiver::IsIngressMessageType(
+                dspgcs::MavFtpRuntimeConfigMessageTypes::Ack) &&
+            !DSPGCSUploadJobReceiver::IsIngressMessageType(
+                dspgcs::MavFtpRuntimeConfigMessageTypes::Snapshot),
+            "Console ingress did not route Runtime Config Request exclusively");
     }
 
     dspgcs::UploadJobSnapshotDTO RunStart(
@@ -388,7 +516,8 @@ namespace
         ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
         ConsoleUploadJobAuthority authority(
             fixture.workspace->root.u8string(), &consumer, &store);
-        const auto start = StartCommand(fixture, *frozen, jobId, commandId);
+        const auto start = StartCommand(
+            fixture, *frozen, jobId, commandId, 8, &authority);
         const auto acknowledgement = authority.HandleCommand(
             "client", start, EncodeCommand(start));
         Expect(acknowledgement.status ==
@@ -413,6 +542,70 @@ namespace
         return outcome;
     }
 
+    void VerifyJobFrozenRuntimeConfig()
+    {
+        auto fixture = MakeArtifact("job-frozen-config", 1, 2);
+        FrozenAssignmentStore store;
+        const auto frozen = AcceptFrozen(store, MakeFrozen(fixture));
+        ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
+        ConsoleMavFtpBootConfig boot;
+        boot.globalWriteOutstandingCap = 16;
+        ConsoleUploadJobAuthority authority(
+            fixture.workspace->root.u8string(), &consumer, &store, boot);
+
+        const auto configA = authority.GetRuntimeConfigForTest();
+        auto startA = StartCommand(
+            fixture, *frozen, Id('1'), Id('2'), 1, &authority);
+        Expect(authority.HandleCommand(
+            "frozen-client", startA, EncodeCommand(startA)).status ==
+                dspgcs::UploadJobCommandAckStatus::Accepted,
+            "Job A did not accept Config A identity");
+        const auto readyA = WaitForStart(authority, startA.uploadJobId);
+        Expect(readyA.frozenMavFtpConfig.globalWriteOutstandingCap == 16 &&
+            readyA.frozenMavFtpConfig.identity.configDigest == configA.configDigest,
+            "Job A did not freeze Config A");
+
+        dspgcs::MavFtpRuntimeConfigRequestDTO apply;
+        apply.clientRequestId = Id('3');
+        apply.authoritySessionId = configA.authoritySessionId;
+        apply.expectedConfigRevision = configA.configRevision;
+        apply.operation = dspgcs::MavFtpRuntimeConfigOperation::Apply;
+        apply.candidateGlobalWriteOutstandingCap = 64;
+        Expect(authority.HandleRuntimeConfigRequest(
+            "frozen-client", apply, EncodeRuntimeRequest(apply)).status ==
+                dspgcs::MavFtpRuntimeConfigAckStatus::Accepted,
+            "Config B Apply failed");
+        const auto configB = authority.GetRuntimeConfigForTest();
+        const auto stillA = authority.FindCurrentSnapshotForTest(startA.uploadJobId);
+        Expect(stillA &&
+            stillA->frozenMavFtpConfig.globalWriteOutstandingCap == 16 &&
+            stillA->frozenMavFtpConfig.identity.configDigest == configA.configDigest,
+            "Config B mutated running Job A");
+
+        auto staleStart = StartCommand(
+            fixture, *frozen, Id('4'), Id('5'), 1, &authority);
+        staleStart.runtimeConfigBinding.authoritySessionId = configA.authoritySessionId;
+        staleStart.runtimeConfigBinding.configRevision = configA.configRevision;
+        staleStart.runtimeConfigBinding.configDigest = configA.configDigest;
+        Expect(authority.HandleCommand(
+            "frozen-client", staleStart, EncodeCommand(staleStart)).resultCode ==
+                dspgcs::UploadJobErrorCode::RuntimeConfigStale,
+            "Start/Apply race did not reject stale Config A identity");
+
+        auto startB = StartCommand(
+            fixture, *frozen, Id('6'), Id('7'), 1, &authority);
+        Expect(authority.HandleCommand(
+            "frozen-client", startB, EncodeCommand(startB)).status ==
+                dspgcs::UploadJobCommandAckStatus::Accepted,
+            "Job B did not accept Config B identity");
+        const auto readyB = WaitForStart(authority, startB.uploadJobId);
+        Expect(readyB.frozenMavFtpConfig.globalWriteOutstandingCap == 64 &&
+            readyB.frozenMavFtpConfig.identity.configRevision ==
+                configB.configRevision &&
+            readyB.frozenMavFtpConfig.identity.configDigest == configB.configDigest,
+            "Job B did not freeze Config B as one complete value-copy");
+    }
+
     void VerifyCompatibilityGate()
     {
         {
@@ -424,7 +617,8 @@ namespace
             ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
             ConsoleUploadJobAuthority authority(
                 fixture.workspace->root.u8string(), &consumer, &store);
-            const auto start = StartCommand(fixture, *accepted);
+            const auto start = StartCommand(
+                fixture, *accepted, Id('1'), Id('2'), 8, &authority);
             const auto payload = EncodeCommand(start);
             const auto first = authority.HandleCommand("client", start, payload);
             const auto duplicate = authority.HandleCommand("client", start, payload);
@@ -470,7 +664,8 @@ namespace
             ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
             ConsoleUploadJobAuthority authority(
                 fixture.workspace->root.u8string(), &consumer, &store);
-            const auto start = StartCommand(fixture, frozen, Id('1'), Id('2'));
+            const auto start = StartCommand(
+                fixture, frozen, Id('1'), Id('2'), 8, &authority);
             Expect(authority.HandleCommand("client", start,
                 EncodeCommand(start)).resultCode ==
                     dspgcs::UploadJobErrorCode::FleetSessionStale,
@@ -484,7 +679,8 @@ namespace
             ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
             ConsoleUploadJobAuthority authority(
                 fixture.workspace->root.u8string(), &consumer, &store);
-            const auto start = StartCommand(fixture, frozen, Id('3'), Id('4'));
+            const auto start = StartCommand(
+                fixture, frozen, Id('3'), Id('4'), 8, &authority);
             Expect(authority.HandleCommand("client", start,
                 EncodeCommand(start)).resultCode ==
                     dspgcs::UploadJobErrorCode::FrozenAssignmentMissing,
@@ -497,7 +693,8 @@ namespace
             ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
             ConsoleUploadJobAuthority authority(
                 fixture.workspace->root.u8string(), &consumer, &store);
-            auto start = StartCommand(fixture, *frozen, Id('5'), Id('6'));
+            auto start = StartCommand(
+                fixture, *frozen, Id('5'), Id('6'), 8, &authority);
             start.frozenAssignmentBinding.assignmentDigest[0] ^= 1;
             Expect(authority.HandleCommand("client", start,
                 EncodeCommand(start)).resultCode ==
@@ -511,7 +708,8 @@ namespace
             ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
             ConsoleUploadJobAuthority authority(
                 fixture.workspace->root.u8string(), &consumer, &store);
-            auto start = StartCommand(fixture, *frozen, Id('7'), Id('8'));
+            auto start = StartCommand(
+                fixture, *frozen, Id('7'), Id('8'), 8, &authority);
             start.artifactBinding.artifactSetDigest[0] ^= 1;
             authority.HandleCommand("client", start, EncodeCommand(start));
             const auto outcome = WaitForStart(authority, start.uploadJobId);
@@ -571,7 +769,8 @@ namespace
             ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
             ConsoleUploadJobAuthority authority(
                 fixture.workspace->root.u8string(), &consumer, &store);
-            const auto start = StartCommand(fixture, *accepted, Id('c'), Id('d'));
+            const auto start = StartCommand(
+                fixture, *accepted, Id('c'), Id('d'), 8, &authority);
             authority.HandleCommand("client", start, EncodeCommand(start));
             const auto ready = WaitForStart(authority, start.uploadJobId);
             Expect(ready.resultCode == dspgcs::UploadJobErrorCode::None &&
@@ -590,7 +789,8 @@ namespace
         ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
         ConsoleUploadJobAuthority authority(
             fixture.workspace->root.u8string(), &consumer, &store);
-        const auto start = StartCommand(fixture, *frozen, Id('1'), Id('2'));
+        const auto start = StartCommand(
+            fixture, *frozen, Id('1'), Id('2'), 8, &authority);
         authority.HandleCommand("client", start, EncodeCommand(start));
         WaitForConsumerAccepted(consumer);
         auto mutableAccepted = std::const_pointer_cast<AcceptedRouteArtifactV2>(
@@ -612,7 +812,8 @@ namespace
             ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
             ConsoleUploadJobAuthority authority(
                 fixture.workspace->root.u8string(), &consumer, &store);
-            const auto start = StartCommand(fixture, *frozenA, Id('3'), Id('4'));
+            const auto start = StartCommand(
+                fixture, *frozenA, Id('3'), Id('4'), 8, &authority);
             authority.HandleCommand("client", start, EncodeCommand(start));
             auto frozenB = MakeFrozen(
                 fixture, 0, 0, 0, 0, 0x62, "authority-b", 1);
@@ -632,7 +833,8 @@ namespace
             ConsoleArtifactConsumerV2 consumer(fixtureA.workspace->root.u8string());
             ConsoleUploadJobAuthority authority(
                 fixtureA.workspace->root.u8string(), &consumer, &store);
-            const auto start = StartCommand(fixtureA, *frozen, Id('5'), Id('6'));
+            const auto start = StartCommand(
+                fixtureA, *frozen, Id('5'), Id('6'), 8, &authority);
             authority.HandleCommand("client", start, EncodeCommand(start));
             WaitForConsumerAccepted(consumer);
             ReplaceCurrent(fixtureA, fixtureB);
@@ -652,7 +854,8 @@ namespace
             ConsoleArtifactConsumerV2 consumer(fixtureA.workspace->root.u8string());
             ConsoleUploadJobAuthority authority(
                 fixtureA.workspace->root.u8string(), &consumer, &store);
-            const auto start = StartCommand(fixtureA, *frozenA, Id('7'), Id('8'));
+            const auto start = StartCommand(
+                fixtureA, *frozenA, Id('7'), Id('8'), 8, &authority);
             authority.HandleCommand("client", start, EncodeCommand(start));
             const auto ready = WaitForStart(authority, start.uploadJobId);
             Expect(ready.jobState == dspgcs::UploadJobState::Ready,
@@ -723,7 +926,7 @@ namespace
                 fixture.workspace->root.u8string(), &consumer, &store);
             const auto start = StartCommand(
                 fixture, *frozen, Id(item.first == 1 ? '1' : '3'),
-                Id(item.first == 1 ? '2' : '4'));
+                Id(item.first == 1 ? '2' : '4'), 8, &authority);
             authority.HandleCommand("client", start, EncodeCommand(start));
             const auto ready = WaitForStart(
                 authority, start.uploadJobId, std::chrono::seconds(120));
@@ -779,7 +982,8 @@ namespace
         ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
         ConsoleUploadJobAuthority authority(
             fixture.workspace->root.u8string(), &consumer, &store);
-        const auto start = StartCommand(fixture, *frozen, Id('9'), Id('a'));
+        const auto start = StartCommand(
+            fixture, *frozen, Id('9'), Id('a'), 8, &authority);
         authority.HandleCommand("client", start, EncodeCommand(start));
         auto snapshot = WaitForStart(authority, start.uploadJobId);
         Expect(!TryGateOnAnotherThread(fixture.workspace->root),
@@ -915,7 +1119,8 @@ namespace
                 idleCancelFixture.workspace->root.u8string(),
                 &idleCancelConsumer, &idleCancelStore);
             const auto idleStart = StartCommand(
-                idleCancelFixture, *idleCancelFrozen, Id('5'), Id('6'));
+                idleCancelFixture, *idleCancelFrozen, Id('5'), Id('6'), 8,
+                &idleCancelAuthority);
             idleCancelAuthority.HandleCommand(
                 "client", idleStart, EncodeCommand(idleStart));
             const auto idleReady = WaitForStart(
@@ -946,7 +1151,8 @@ namespace
                 completedFixture.workspace->root.u8string(),
                 &completedConsumer, &completedStore);
             const auto completedStart = StartCommand(
-                completedFixture, *completedFrozen, Id('1'), Id('2'));
+                completedFixture, *completedFrozen, Id('1'), Id('2'), 8,
+                &completedAuthority);
             completedAuthority.HandleCommand(
                 "client", completedStart, EncodeCommand(completedStart));
             WaitForStart(completedAuthority, completedStart.uploadJobId);
@@ -970,7 +1176,8 @@ namespace
                 destroyFixture.workspace->root.u8string(),
                 &destroyConsumer, &destroyStore);
             const auto destroyStart = StartCommand(
-                destroyFixture, *destroyFrozen, Id('3'), Id('4'));
+                destroyFixture, *destroyFrozen, Id('3'), Id('4'), 8,
+                &destroyAuthority);
             destroyAuthority.HandleCommand(
                 "client", destroyStart, EncodeCommand(destroyStart));
             WaitForStart(destroyAuthority, destroyStart.uploadJobId);
@@ -999,7 +1206,8 @@ namespace
                     shutdownFixture.workspace->root.u8string(),
                     &shutdownConsumer, &shutdownStore);
                 const auto shutdownStart = StartCommand(
-                    shutdownFixture, *shutdownFrozen, Id('7'), Id('8'));
+                    shutdownFixture, *shutdownFrozen, Id('7'), Id('8'), 8,
+                    &shutdownAuthority);
                 shutdownAuthority.HandleCommand(
                     "client", shutdownStart, EncodeCommand(shutdownStart));
                 const auto shutdownReady = WaitForStart(
@@ -1040,7 +1248,8 @@ namespace
         ConsoleUploadJobAuthority authority(
             fixture.workspace->root.u8string(), &consumer, &store);
         const auto start = StartCommand(
-            fixture, *frozen, Id(idCharacter), Id(idCharacter + 1), 32);
+            fixture, *frozen, Id(idCharacter), Id(idCharacter + 1), 32,
+            &authority);
         const auto started = std::chrono::steady_clock::now();
         authority.HandleCommand("scale-client", start, EncodeCommand(start));
         const auto snapshot = WaitForStart(
@@ -1238,7 +1447,8 @@ namespace
         ConsoleArtifactConsumerV2 consumer(fixture.workspace->root.u8string());
         ConsoleUploadJobAuthority authority(
             fixture.workspace->root.u8string(), &consumer, &store);
-        const auto start = StartCommand(fixture, *frozen, Id('c'), Id('d'));
+        const auto start = StartCommand(
+            fixture, *frozen, Id('c'), Id('d'), 8, &authority);
         const auto acknowledgement = authority.HandleCommand(
             "selected-client", start, EncodeCommand(start));
         Expect(acknowledgement.status ==
@@ -1269,7 +1479,8 @@ namespace
         ConsoleUploadJobAuthority authority(
             fixture.workspace->root.u8string(), &consumer, &store);
 
-        auto zero = StartCommand(fixture, *frozen, Id('1'), Id('2'), 0);
+        auto zero = StartCommand(
+            fixture, *frozen, Id('1'), Id('2'), 0, &authority);
         auto acknowledgement = authority.HandleCommand("zero", zero, {});
         Expect(acknowledgement.status ==
                 dspgcs::UploadJobCommandAckStatus::Rejected &&
@@ -1278,7 +1489,8 @@ namespace
             authority.GetPendingStartCount() == 0,
             "Console accepted Start concurrency zero or began validation");
 
-        auto over = StartCommand(fixture, *frozen, Id('3'), Id('4'), 51);
+        auto over = StartCommand(
+            fixture, *frozen, Id('3'), Id('4'), 51, &authority);
         acknowledgement = authority.HandleCommand("over", over, {});
         Expect(acknowledgement.status ==
                 dspgcs::UploadJobCommandAckStatus::Rejected &&
@@ -1288,7 +1500,7 @@ namespace
             "Console accepted Start concurrency above 50");
 
         auto overflow = StartCommand(
-            fixture, *frozen, Id('5'), Id('6'), UINT32_MAX);
+            fixture, *frozen, Id('5'), Id('6'), UINT32_MAX, &authority);
         acknowledgement = authority.HandleCommand("overflow", overflow, {});
         Expect(acknowledgement.status ==
                 dspgcs::UploadJobCommandAckStatus::Rejected &&
@@ -1298,7 +1510,7 @@ namespace
             "Console accepted an overflowing Start concurrency");
 
         const auto valid = StartCommand(
-            fixture, *frozen, Id('7'), Id('8'), 50);
+            fixture, *frozen, Id('7'), Id('8'), 50, &authority);
         acknowledgement = authority.HandleCommand(
             "valid", valid, EncodeCommand(valid));
         Expect(acknowledgement.status ==
@@ -1319,6 +1531,8 @@ int RunDSPUploadJobProtocolTests()
 {
     try
     {
+        VerifyRuntimeConfigProtocolAndAuthority();
+        VerifyJobFrozenRuntimeConfig();
         VerifyWireContract();
         VerifyCompatibilityGate();
         VerifyMissingRouteRecord();
@@ -1328,12 +1542,28 @@ int RunDSPUploadJobProtocolTests()
         VerifyScaleAndSnapshotDelta();
         VerifySingleMatchedTargetBoundsThousandRouteArtifact();
         VerifyE1ConcurrencyAuthority();
-        std::cout << "DSP Upload Job schema2 dual-binding tests passed\n";
+        std::cout << "DSP Upload Job schema3 triple-binding tests passed\n";
         return 0;
     }
     catch (const std::exception& error)
     {
-        std::cerr << "DSP Upload Job schema2 tests failed: "
+        std::cerr << "DSP Upload Job schema3 tests failed: "
+            << error.what() << '\n';
+        return 1;
+    }
+}
+
+int RunMavFtpRuntimeConfigTests()
+{
+    try
+    {
+        VerifyRuntimeConfigProtocolAndAuthority();
+        std::cout << "MAVFTP Runtime Config protocol/authority tests passed\n";
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "MAVFTP Runtime Config tests failed: "
             << error.what() << '\n';
         return 1;
     }

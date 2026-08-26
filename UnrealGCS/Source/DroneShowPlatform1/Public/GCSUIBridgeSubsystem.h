@@ -19,6 +19,7 @@ class APlayerController;
 class UGCSDroneRowView;
 class UGCSRouteWorkflowCoordinator;
 class UEditableTextBox;
+class UEditableText;
 class USlider;
 class UTextBlock;
 class UUserWidget;
@@ -79,6 +80,36 @@ public:
 	void ToggleFleetSelectAllForTest() { HandleFleetSelectAllClicked(); }
 	void RefreshFleetSelectAllForTest() { RefreshFleetSelectAll(); }
 	void RebindFleetPanelButtonsForTest() { BindFleetPanelButtons(); }
+	void BindUploadDashboardForTest(UUserWidget* MainWidget, UUserWidget* RightToolbar);
+	void SetUploadDashboardFactoryForTest(TFunction<UUserWidget*()> Factory);
+	void ToggleUploadDashboardForTest() { HandleUploadDashboardToggleClicked(); }
+	void ResetUploadDashboardForTest() { ResetUploadDashboard(); }
+	UUserWidget* GetUploadDashboardForTest() const { return UploadDashboardWidget; }
+	UButton* GetUploadDashboardToggleButtonForTest() const
+	{
+		return UploadDashboardToggleButton.Get();
+	}
+	bool IsUploadDashboardToggleBoundForTest() const;
+	bool IsUploadDashboardVisibleForTest() const { return bUploadDashboardVisible; }
+	int32 GetUploadDashboardToggleCountForTest() const
+	{
+		return UploadDashboardToggleCountForTest;
+	}
+	void RefreshUploadDashboardForTest() { RefreshUploadDashboardUI(); }
+	void AutoCapUploadDashboardForTest() { HandleUploadDashboardAutoCapClicked(); }
+	void RestoreUploadDashboardForTest() { HandleUploadDashboardRestoreClicked(); }
+	int32 GetUploadDashboardDraftGlobalCapForTest() const
+	{
+		return UploadDashboardDraftGlobalCap;
+	}
+	bool IsUploadDashboardDraftDirtyForTest() const
+	{
+		return bUploadDashboardDraftDirty;
+	}
+	FString GetUploadDashboardTuningStatusForTest() const
+	{
+		return UploadDashboardTuningStatus;
+	}
 	TArray<FString> GetEligibleOnlineCommandDroneIDsForTest() const
 	{
 		return BuildEligibleOnlineCommandDroneIDs();
@@ -258,6 +289,21 @@ private:
 	UFUNCTION()
 	void HandleTelemetryLinkStateChanged();
 
+	UFUNCTION()
+	void HandleUploadDashboardToggleClicked();
+
+	UFUNCTION()
+	void HandleUploadDashboardGlobalCapTextChanged(const FText& Text);
+
+	UFUNCTION()
+	void HandleUploadDashboardApplyClicked();
+
+	UFUNCTION()
+	void HandleUploadDashboardAutoCapClicked();
+
+	UFUNCTION()
+	void HandleUploadDashboardRestoreClicked();
+
 	UButton* FindButton(const FName Name) const;
 	UButton* FindFleetButton(const FName Name) const;
 	UButton* FindToolbarButton(const FName Name) const;
@@ -347,6 +393,19 @@ private:
 	void ApplyNavigationVisibility();
 	void ApplyNavigationPageVisibility();
 	UUserWidget* CreateNavigationPage(const TCHAR* ClassPath) const;
+	void BindUploadDashboardControls();
+	void UnbindUploadDashboardControls();
+	bool CreateUploadDashboardIfNeeded();
+	bool AttachUploadDashboardToMainLayout();
+	void ApplyUploadDashboardVisibility();
+	void ResetUploadDashboard();
+	void BindUploadDashboardDataControls();
+	void UnbindUploadDashboardDataControls();
+	void TickUploadDashboardUI(float DeltaSeconds);
+	void RefreshUploadDashboardUI();
+	bool GetUploadDashboardTargetCount(int32& OutTargetCount) const;
+	bool IsUploadDashboardMutationLocked() const;
+	void SetUploadDashboardStatus(const FString& Status, const FString& Diagnostic = {});
 
 	TWeakObjectPtr<UUserWidget> MainWidgetRef;
 	UPROPERTY()
@@ -358,6 +417,20 @@ private:
 	TWeakObjectPtr<UUserWidget> RightToolbarWidget;
 	TWeakObjectPtr<UUserWidget> RightPanelWidget;
 	TWeakObjectPtr<UUserWidget> PlaybackWidget;
+	TWeakObjectPtr<UButton> UploadDashboardToggleButton;
+	TWeakObjectPtr<UButton> UploadDashboardApplyButton;
+	TWeakObjectPtr<UButton> UploadDashboardAutoCapButton;
+	TWeakObjectPtr<UButton> UploadDashboardRestoreButton;
+	TWeakObjectPtr<UWidget> UploadDashboardWriteWindowInput;
+	TWeakObjectPtr<UWidget> UploadDashboardGlobalCapInput;
+	TWeakObjectPtr<UWidget> UploadDashboardSegmentItemsInput;
+	TWeakObjectPtr<UWidget> UploadDashboardRequestTimeoutInput;
+	TWeakObjectPtr<UWidget> UploadDashboardTerminateTimeoutInput;
+	TWeakObjectPtr<UWidget> UploadDashboardRetryCountInput;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UUserWidget> UploadDashboardWidget;
+
 	TWeakObjectPtr<UUserWidget> RouteImportWidget;
 	TWeakObjectPtr<UButton> RouteImportButton;
 	TWeakObjectPtr<UButton> RouteImportCloseButton;
@@ -414,6 +487,17 @@ private:
 	FVector TopDownLocalNorth = -FVector::YAxisVector;
 	FVector TopDownLocalUp = FVector::ZAxisVector;
 	bool bTopDownGeographicBasisActive = false;
+	bool bUploadDashboardVisible = false;
+	bool bUploadDashboardDataBound = false;
+	bool bUploadDashboardDraftDirty = false;
+	bool bUploadDashboardApplyPending = false;
+	bool bUpdatingUploadDashboardDraft = false;
+	int32 UploadDashboardDraftGlobalCap = 0;
+	uint64 UploadDashboardObservedConfigRevision = 0;
+	FString UploadDashboardObservedAuthoritySessionID;
+	FString UploadDashboardTuningStatus = TEXT("NOT CONNECTED");
+	FString UploadDashboardTuningDiagnostic;
+	float UploadDashboardRefreshAccumulator = 0.0f;
 	TWeakObjectPtr<ACameraActor> TopDownOrthographicCamera;
 	TWeakObjectPtr<AActor> PreviousTopDownViewTarget;
 	TWeakObjectPtr<APlayerController> TopDownPlayerController;
@@ -426,6 +510,11 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UGCSRouteWorkflowCoordinator> RouteWorkflowCoordinator;
 
+#if WITH_DEV_AUTOMATION_TESTS
+	TFunction<UUserWidget*()> UploadDashboardFactoryForTest;
+	int32 UploadDashboardToggleCountForTest = 0;
+#endif
+
 	int32 FleetPageOffset = 0;
 	static constexpr int32 FleetPageSize = 5;
 	static constexpr float MarqueeDragThresholdPixels = 5.0f;
@@ -433,5 +522,6 @@ private:
 	static constexpr float TopDownMinOrthoWidthFactor = 0.03f;
 	static constexpr float TopDownMaxOrthoWidthFactor = 8.0f;
 	static constexpr float RouteUIRefreshIntervalSeconds = 0.1f;
+	static constexpr float UploadDashboardRefreshIntervalSeconds = 0.2f;
 	float HoverAltitudeMeters = 5.0f;
 };

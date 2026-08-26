@@ -286,7 +286,13 @@ namespace
         VerifySegmentBoundaryCase(10, 4, { 4, 4, 3 });
         VerifySegmentBoundaryCase(3999, 4000, { 4000 });
         VerifySegmentBoundaryCase(4000, 4000, { 4000, 1 });
+		VerifySegmentBoundaryCase(7999, 4000, { 4000, 4000 });
+		VerifySegmentBoundaryCase(8000, 4000, { 4000, 4000, 1 });
         VerifySegmentBoundaryCase(9100, 4000, { 4000, 4000, 1101 });
+		VerifySegmentBoundaryCase(11999, 4000, { 4000, 4000, 4000 });
+		VerifySegmentBoundaryCase(12000, 4000, { 4000, 4000, 4000, 1 });
+		VerifySegmentBoundaryCase(16000, 4000,
+			{ 4000, 4000, 4000, 4000, 1 });
     }
 
     void VerifyMaximumBoundary()

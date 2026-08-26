@@ -38,6 +38,46 @@ namespace
 		return Result;
 	}
 
+	dspgcs::MavFtpRuntimeConfigSnapshotDTO RuntimeConfigSnapshot()
+	{
+		dspgcs::MavFtpRuntimeConfigSnapshotDTO Result;
+		Result.authoritySessionId = Id('c');
+		Result.configRevision = 1;
+		Result.bootDefaultGlobalWriteCap = 16;
+		Result.runtimeAcceptedGlobalWriteCap = 64;
+		Result.writeWindow = 16;
+		Result.writePayload = dspgcs::MavFtpRuntimeConfigWirePayloadBytes;
+		Result.segmentItems = 4000;
+		Result.requestTimeoutMs = 750;
+		Result.terminateTimeoutMs = 2500;
+		Result.retryCount = 3;
+		std::string Error;
+		dspgcs::ComputeMavFtpRuntimeConfigDigest(
+			Result, Result.configDigest, Error);
+		return Result;
+	}
+
+	dspgcs::UploadJobFrozenMavFtpConfigDTO FrozenMavFtpConfig()
+	{
+		const auto Runtime = RuntimeConfigSnapshot();
+		dspgcs::UploadJobFrozenMavFtpConfigDTO Result;
+		Result.identity.authoritySessionId = Runtime.authoritySessionId;
+		Result.identity.configRevision = Runtime.configRevision;
+		Result.identity.configDigest = Runtime.configDigest;
+		Result.globalWriteOutstandingCap = Runtime.runtimeAcceptedGlobalWriteCap;
+		Result.writeWindow = Runtime.writeWindow;
+		Result.writePayload = Runtime.writePayload;
+		Result.segmentItems = Runtime.segmentItems;
+		Result.requestTimeoutMs = Runtime.requestTimeoutMs;
+		Result.terminateTimeoutMs = Runtime.terminateTimeoutMs;
+		Result.retryCount = Runtime.retryCount;
+		Result.requestedMaxConcurrentTargets = 2;
+		Result.effectiveMaxConcurrentTargets = 2;
+		Result.requiredGlobalWriteOutstandingCap = 32;
+		Result.effectiveGlobalWriteOutstandingCap = 32;
+		return Result;
+	}
+
 	dspgcs::UploadStableSourceDTO StableSource()
 	{
 		dspgcs::UploadStableSourceDTO Result;
@@ -65,6 +105,7 @@ namespace
 		Result.waitingCount = 2;
 		Result.totalBytes = 200;
 		Result.effectiveMaxConcurrentUploads = 2;
+		Result.frozenMavFtpConfig = FrozenMavFtpConfig();
 		return Result;
 	}
 
@@ -339,9 +380,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FDSPGCSUploadJobClientHardeningTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	auto Configure = [](UDSPGCSUploadJobSubsystem* Client,
+		auto Configure = [](UDSPGCSUploadJobSubsystem* Client,
 		TArray<std::vector<std::uint8_t>>& SentFrames)
 	{
+		Client->SetMavFtpRuntimeConfigForTest(RuntimeConfigSnapshot());
 		Client->StartAuthorityCaptureForTest = [](
 			dspgcs::UploadArtifactBindingDTO& OutArtifact,
 			dspgcs::UploadFrozenAssignmentBindingDTO& OutFrozen,
@@ -668,9 +710,16 @@ bool FDSPGCSUploadJobClientHardeningTest::RunTest(const FString& Parameters)
 		RefreshedTerminal->throughputBytesPerSecond == 22652);
 	TestTrue(TEXT("Completed Job explicitly prepares NoJob state"),
 		ValidationClient->PrepareForNewUploadJob(Error));
+	// TickClient correctly marks the mirror disconnected when this fixture has no
+	// production telemetry provider. Simulate the next authoritative reconnect
+	// snapshot before starting Job C.
+	ValidationClient->SetMavFtpRuntimeConfigForTest(RuntimeConfigSnapshot());
 	const FString CompletedJobID = JobID;
-	TestTrue(TEXT("Job C Start after Completed explicit rebind"),
-		ValidationClient->StartUploadJobFromCurrentAuthorities(6, JobID, Error));
+	const bool bJobCStarted =
+		ValidationClient->StartUploadJobFromCurrentAuthorities(6, JobID, Error);
+	TestTrue(*FString::Printf(
+		TEXT("Job C Start after Completed explicit rebind: %s"), *Error),
+		bJobCStarted);
 	TestNotEqual(TEXT("New Job ID differs from completed Job"), JobID, CompletedJobID);
 	return true;
 }

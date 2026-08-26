@@ -117,6 +117,26 @@ struct FDSPGCSUploadJobIncomingFrame
 	std::vector<std::uint8_t> Payload;
 };
 
+enum class EDSPGCSMavFtpRuntimeConfigState : uint8
+{
+	Loading,
+	Connected,
+	Disconnected,
+	Stale
+};
+
+struct FDSPGCSMavFtpRuntimeConfigStatus
+{
+	EDSPGCSMavFtpRuntimeConfigState State =
+		EDSPGCSMavFtpRuntimeConfigState::Loading;
+	bool bHasSnapshot = false;
+	bool bRequestInFlight = false;
+	bool bLastApplyAccepted = false;
+	bool bLastApplyRejected = false;
+	bool bLastAckDuplicate = false;
+	FString LastSafeDiagnostic;
+};
+
 /** UE protocol client and read-only mirror; Console remains Job authority. */
 UCLASS()
 class DRONESHOWPLATFORM1_API UDSPGCSUploadJobSubsystem final
@@ -134,6 +154,21 @@ public:
 		int32 RequestedMaxConcurrentUploads,
 		FString& OutUploadJobID,
 		FString& OutError);
+	bool StartUploadJobFromCurrentAuthorities(
+		int32 RequestedMaxConcurrentUploads,
+		const dspgcs::UploadRuntimeConfigBindingDTO& ExpectedRuntimeConfig,
+		FString& OutUploadJobID,
+		FString& OutError);
+
+	bool RequestMavFtpRuntimeConfigSnapshot(FString& OutError);
+	bool ApplyMavFtpRuntimeGlobalCap(int32 CandidateCap, FString& OutError);
+	bool CaptureMavFtpRuntimeConfigBinding(
+		dspgcs::UploadRuntimeConfigBindingDTO& OutBinding,
+		FString& OutError) const;
+	const dspgcs::MavFtpRuntimeConfigSnapshotDTO*
+		GetMavFtpRuntimeConfigSnapshot() const
+		{ return bHasRuntimeConfigSnapshot ? &RuntimeConfigSnapshot : nullptr; }
+	FDSPGCSMavFtpRuntimeConfigStatus GetMavFtpRuntimeConfigStatus() const;
 
 	/** Explicit terminal/error-to-NoJob transition. Never attaches an unknown Console Job. */
 	UFUNCTION(BlueprintCallable, Category = "DSP-GCS|Upload Job")
@@ -151,6 +186,18 @@ public:
 		const FString& AssignmentAuthoritySessionID,
 		int64 AssignmentRevision,
 		const FString& AssignmentDigestHex,
+		int32 RequestedMaxConcurrentUploads,
+		FString& OutUploadJobID,
+		FString& OutError);
+	bool StartUploadJobWithRuntimeConfig(
+		const FString& RequestedUploadJobID,
+		const FString& ArtifactSetID,
+		const FString& ArtifactSetDigestHex,
+		const FString& FleetSessionID,
+		const FString& AssignmentAuthoritySessionID,
+		int64 AssignmentRevision,
+		const FString& AssignmentDigestHex,
+		const dspgcs::UploadRuntimeConfigBindingDTO& RuntimeConfigBinding,
 		int32 RequestedMaxConcurrentUploads,
 		FString& OutUploadJobID,
 		FString& OutError);
@@ -178,6 +225,16 @@ public:
 	const FDSPGCSUploadJobStateMirror& GetStateMirror() const { return Mirror; }
 
 #if WITH_DEV_AUTOMATION_TESTS
+	void SetMavFtpRuntimeConfigForTest(
+		const dspgcs::MavFtpRuntimeConfigSnapshotDTO& Snapshot,
+		EDSPGCSMavFtpRuntimeConfigState State =
+			EDSPGCSMavFtpRuntimeConfigState::Connected)
+	{
+		RuntimeConfigSnapshot = Snapshot;
+		bHasRuntimeConfigSnapshot = true;
+		RuntimeConfigState = State;
+		bRuntimeConfigRequestInFlight = false;
+	}
 	void BindUploadJobForTest(const std::string& UploadJobID)
 	{
 		ActiveJobID = UploadJobID;
@@ -198,6 +255,10 @@ private:
 		dspgcs::UploadArtifactBindingDTO& OutArtifactBinding,
 		dspgcs::UploadFrozenAssignmentBindingDTO& OutFrozenBinding,
 		FString& OutError);
+	bool SendMavFtpRuntimeConfigRequest(
+		dspgcs::MavFtpRuntimeConfigRequestDTO Request,
+		FString& OutError);
+	void ClearPendingMavFtpRuntimeConfigRequest();
 	bool SendSimpleCommand(
 		dspgcs::UploadJobCommandType CommandType,
 		std::uint32_t RequestedConcurrency,
@@ -234,6 +295,12 @@ private:
 	FTSTicker::FDelegateHandle TickHandle;
 	std::vector<std::uint8_t> PendingCommandFrame;
 	std::vector<std::uint8_t> PendingSnapshotRequestFrame;
+	std::vector<std::uint8_t> PendingRuntimeConfigRequestFrame;
+	std::string PendingRuntimeConfigRequestID;
+	std::string PendingRuntimeConfigExpectedAuthoritySessionID;
+	dspgcs::MavFtpRuntimeConfigOperation PendingRuntimeConfigOperation =
+		dspgcs::MavFtpRuntimeConfigOperation::Get;
+	dspgcs::MavFtpRuntimeConfigSnapshotDTO RuntimeConfigSnapshot;
 	std::string PendingSnapshotRequestID;
 	dspgcs::UploadJobSnapshotRequestKind PendingSnapshotRequestKind =
 		dspgcs::UploadJobSnapshotRequestKind::Aggregate;
@@ -246,6 +313,16 @@ private:
 	int32 PendingAttemptCount = 0;
 	int32 PendingSnapshotAttemptCount = 0;
 	int32 TerminalAggregateRefreshAttemptCount = 0;
+	int32 PendingRuntimeConfigAttemptCount = 0;
+	double RuntimeConfigRetryAtSeconds = 0.0;
+	bool bRuntimeConfigRequestInFlight = false;
+	bool bHasRuntimeConfigSnapshot = false;
+	bool bLastRuntimeConfigApplyAccepted = false;
+	bool bLastRuntimeConfigApplyRejected = false;
+	bool bLastRuntimeConfigAckDuplicate = false;
+	FString LastRuntimeConfigDiagnostic;
+	EDSPGCSMavFtpRuntimeConfigState RuntimeConfigState =
+		EDSPGCSMavFtpRuntimeConfigState::Loading;
 	bool bSnapshotRequestInFlight = false;
 	bool bAggregateRefreshRequired = false;
 	bool bCommandInFlight = false;

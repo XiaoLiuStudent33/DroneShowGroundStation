@@ -9,6 +9,7 @@
 #include <limits>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_set>
 
 namespace
@@ -39,7 +40,10 @@ namespace
                 snapshot.artifactBinding, command.artifactBinding) &&
             dspgcs::UploadFrozenAssignmentBindingEqual(
                 snapshot.frozenAssignmentBinding,
-                command.frozenAssignmentBinding);
+                command.frozenAssignmentBinding) &&
+            dspgcs::UploadRuntimeConfigBindingEqual(
+                snapshot.frozenMavFtpConfig.identity,
+                command.runtimeConfigBinding);
     }
 
     bool IsTerminalJobState(const dspgcs::UploadJobState state)
@@ -63,11 +67,30 @@ namespace
 ConsoleUploadJobAuthority::ConsoleUploadJobAuthority(
     std::string workspaceRoot,
     ConsoleArtifactConsumerV2* artifactConsumer,
-    FrozenAssignmentStore* frozenAssignmentStore)
+    FrozenAssignmentStore* frozenAssignmentStore,
+    const ConsoleMavFtpBootConfig mavFtpBootConfig)
     : workspaceRoot_(std::move(workspaceRoot))
     , artifactConsumer_(artifactConsumer)
     , frozenAssignmentStore_(frozenAssignmentStore)
 {
+    runtimeConfig_.authoritySessionId = MakeCanonicalId();
+    runtimeConfig_.configRevision = 1;
+    runtimeConfig_.bootDefaultGlobalWriteCap =
+        mavFtpBootConfig.globalWriteOutstandingCap;
+    runtimeConfig_.runtimeAcceptedGlobalWriteCap =
+        mavFtpBootConfig.globalWriteOutstandingCap;
+    runtimeConfig_.writeWindow = mavFtpBootConfig.writeWindow;
+    runtimeConfig_.writePayload = dspgcs::MavFtpRuntimeConfigWirePayloadBytes;
+    runtimeConfig_.segmentItems = mavFtpBootConfig.segmentItems;
+    runtimeConfig_.requestTimeoutMs = mavFtpBootConfig.requestTimeoutMs;
+    runtimeConfig_.terminateTimeoutMs = mavFtpBootConfig.terminateTimeoutMs;
+    runtimeConfig_.retryCount = mavFtpBootConfig.retryCount;
+    runtimeConfig_.activationState =
+        dspgcs::MavFtpRuntimeConfigActivationState::BootDefaults;
+    std::string digestError;
+    if (!dspgcs::ComputeMavFtpRuntimeConfigDigest(
+            runtimeConfig_, runtimeConfig_.configDigest, digestError))
+        throw std::runtime_error(digestError);
 }
 
 std::uint32_t ConsoleUploadJobAuthority::ComputeEffectiveMaxConcurrentTargets(
@@ -96,6 +119,148 @@ std::string ConsoleUploadJobAuthority::MakeCanonicalId()
     stream << std::hex << std::setfill('0')
         << std::setw(16) << generator() << std::setw(16) << generator();
     return stream.str();
+}
+
+dspgcs::UploadJobFrozenMavFtpConfigDTO
+ConsoleUploadJobAuthority::FreezeMavFtpConfig(
+    const dspgcs::MavFtpRuntimeConfigSnapshotDTO& runtimeConfig,
+    const std::uint32_t requestedMaxConcurrentTargets,
+    const std::uint32_t effectiveMaxConcurrentTargets)
+{
+    dspgcs::UploadJobFrozenMavFtpConfigDTO result;
+    result.identity.authoritySessionId = runtimeConfig.authoritySessionId;
+    result.identity.configRevision = runtimeConfig.configRevision;
+    result.identity.configDigest = runtimeConfig.configDigest;
+    result.globalWriteOutstandingCap =
+        runtimeConfig.runtimeAcceptedGlobalWriteCap;
+    result.writeWindow = runtimeConfig.writeWindow;
+    result.writePayload = runtimeConfig.writePayload;
+    result.segmentItems = runtimeConfig.segmentItems;
+    result.requestTimeoutMs = runtimeConfig.requestTimeoutMs;
+    result.terminateTimeoutMs = runtimeConfig.terminateTimeoutMs;
+    result.retryCount = runtimeConfig.retryCount;
+    result.requestedMaxConcurrentTargets = requestedMaxConcurrentTargets;
+    result.effectiveMaxConcurrentTargets = effectiveMaxConcurrentTargets;
+    result.requiredGlobalWriteOutstandingCap =
+        static_cast<std::uint32_t>((std::min<std::uint64_t>)(
+            static_cast<std::uint64_t>(effectiveMaxConcurrentTargets) *
+                runtimeConfig.writeWindow,
+            dspgcs::MavFtpRuntimeConfigMaximumGlobalCap));
+    result.effectiveGlobalWriteOutstandingCap = (std::min)(
+        result.globalWriteOutstandingCap,
+        result.requiredGlobalWriteOutstandingCap);
+    return result;
+}
+
+dspgcs::MavFtpRuntimeConfigSnapshotDTO
+ConsoleUploadJobAuthority::BuildRuntimeConfigSnapshot(
+    const std::string& clientRequestId) const
+{
+    auto result = runtimeConfig_;
+    result.clientRequestId = clientRequestId;
+    return result;
+}
+
+dspgcs::MavFtpRuntimeConfigAckDTO
+ConsoleUploadJobAuthority::HandleRuntimeConfigRequest(
+    const std::string& clientSessionId,
+    const dspgcs::MavFtpRuntimeConfigRequestDTO& request,
+    const std::vector<std::uint8_t>& canonicalRequestPayload)
+{
+    const std::string key = clientSessionId + ":" + request.clientRequestId;
+    const auto existing = runtimeConfigIdempotency_.find(key);
+    if (existing != runtimeConfigIdempotency_.end())
+    {
+        auto replay = existing->second.acknowledgement;
+        if (existing->second.canonicalPayload == canonicalRequestPayload)
+            replay.status = dspgcs::MavFtpRuntimeConfigAckStatus::DuplicateReplayed;
+        else
+        {
+            replay.status = dspgcs::MavFtpRuntimeConfigAckStatus::Rejected;
+            replay.resultCode =
+                dspgcs::MavFtpRuntimeConfigErrorCode::IdempotencyConflict;
+            replay.safeDiagnostic =
+                "ClientRequestID was reused with a different payload.";
+        }
+        return replay;
+    }
+
+    dspgcs::MavFtpRuntimeConfigAckDTO acknowledgement;
+    acknowledgement.clientRequestId = request.clientRequestId;
+    acknowledgement.authoritySessionId = runtimeConfig_.authoritySessionId;
+    acknowledgement.authoritativeRevision = runtimeConfig_.configRevision;
+    acknowledgement.configDigest = runtimeConfig_.configDigest;
+    acknowledgement.status = dspgcs::MavFtpRuntimeConfigAckStatus::Rejected;
+
+    std::string validationError;
+    if (!dspgcs::ValidateMavFtpRuntimeConfigRequest(request, validationError))
+    {
+        acknowledgement.resultCode =
+            dspgcs::MavFtpRuntimeConfigErrorCode::InvalidRequest;
+        acknowledgement.safeDiagnostic = validationError;
+    }
+    else if (request.operation == dspgcs::MavFtpRuntimeConfigOperation::Get)
+    {
+        acknowledgement.status = dspgcs::MavFtpRuntimeConfigAckStatus::Accepted;
+        acknowledgement.resultCode = dspgcs::MavFtpRuntimeConfigErrorCode::None;
+    }
+    else if (request.authoritySessionId != runtimeConfig_.authoritySessionId)
+    {
+        acknowledgement.resultCode =
+            dspgcs::MavFtpRuntimeConfigErrorCode::AuthoritySessionMismatch;
+        acknowledgement.safeDiagnostic = "Runtime Config Authority session is stale.";
+    }
+    else if (request.expectedConfigRevision != runtimeConfig_.configRevision)
+    {
+        acknowledgement.resultCode =
+            dspgcs::MavFtpRuntimeConfigErrorCode::StaleRevision;
+        acknowledgement.safeDiagnostic = "ExpectedConfigRevision is stale.";
+    }
+    else
+    {
+        auto candidate = runtimeConfig_;
+        candidate.clientRequestId.clear();
+        candidate.runtimeAcceptedGlobalWriteCap =
+            request.candidateGlobalWriteOutstandingCap;
+        candidate.activationState =
+            dspgcs::MavFtpRuntimeConfigActivationState::RuntimeAccepted;
+        ++candidate.configRevision;
+        if (!dspgcs::ComputeMavFtpRuntimeConfigDigest(
+                candidate, candidate.configDigest, validationError))
+        {
+            acknowledgement.resultCode =
+                dspgcs::MavFtpRuntimeConfigErrorCode::InternalError;
+            acknowledgement.safeDiagnostic = "Runtime Config digest failed.";
+        }
+        else
+        {
+            runtimeConfig_ = candidate;
+            acknowledgement.status =
+                dspgcs::MavFtpRuntimeConfigAckStatus::Accepted;
+            acknowledgement.resultCode =
+                dspgcs::MavFtpRuntimeConfigErrorCode::None;
+            acknowledgement.authoritativeRevision = runtimeConfig_.configRevision;
+            acknowledgement.configDigest = runtimeConfig_.configDigest;
+            ConsoleUI::AddLog(
+                "RuntimeConfig",
+                "MAVFTP Runtime Config applied AuthoritySessionID=" +
+                    runtimeConfig_.authoritySessionId + " ConfigRevision=" +
+                    std::to_string(runtimeConfig_.configRevision) +
+                    " GlobalWriteOutstandingCap=" +
+                    std::to_string(runtimeConfig_.runtimeAcceptedGlobalWriteCap));
+        }
+    }
+
+    while (runtimeConfigIdempotency_.size() >= MaxIdempotencyEntries &&
+        !runtimeConfigIdempotencyOrder_.empty())
+    {
+        runtimeConfigIdempotency_.erase(runtimeConfigIdempotencyOrder_.front());
+        runtimeConfigIdempotencyOrder_.pop_front();
+    }
+    runtimeConfigIdempotency_.emplace(key, RuntimeConfigIdempotencyRecord{
+        canonicalRequestPayload, acknowledgement });
+    runtimeConfigIdempotencyOrder_.push_back(key);
+    return acknowledgement;
 }
 
 bool ConsoleUploadJobAuthority::SameFrozenBinding(
@@ -246,6 +411,27 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
                 dspgcs::UploadJobErrorCode::InvalidMaxConcurrency,
                 "Requested MaxConcurrentUploads must be in range 1..50.");
         }
+        else if (command.runtimeConfigBinding.authoritySessionId !=
+            runtimeConfig_.authoritySessionId)
+        {
+            acknowledgement = Reject(command,
+                dspgcs::UploadJobErrorCode::RuntimeConfigIdentityMismatch,
+                "Start Runtime Config AuthoritySessionID is stale.");
+        }
+        else if (command.runtimeConfigBinding.configRevision !=
+            runtimeConfig_.configRevision)
+        {
+            acknowledgement = Reject(command,
+                dspgcs::UploadJobErrorCode::RuntimeConfigStale,
+                "Start Runtime Config revision is stale.");
+        }
+        else if (command.runtimeConfigBinding.configDigest !=
+            runtimeConfig_.configDigest)
+        {
+            acknowledgement = Reject(command,
+                dspgcs::UploadJobErrorCode::RuntimeConfigIdentityMismatch,
+                "Start Runtime Config digest does not match Console Authority.");
+        }
         else if (!artifactConsumer_ || !frozenAssignmentStore_)
         {
             acknowledgement = Reject(command,
@@ -304,6 +490,10 @@ dspgcs::UploadJobCommandAckDTO ConsoleUploadJobAuthority::HandleCommand(
                         ComputeEffectiveMaxConcurrentTargets(
                             command.requestedMaxConcurrentUploads,
                             frozen->matchedMappings.size());
+                    pending.snapshot.frozenMavFtpConfig = FreezeMavFtpConfig(
+                        runtimeConfig_,
+                        command.requestedMaxConcurrentUploads,
+                        pending.snapshot.effectiveMaxConcurrentUploads);
                     pending.createdAt = std::chrono::steady_clock::now();
                     pending.idempotencyKey = idempotencyKey;
                     pending.command = command;
@@ -800,11 +990,23 @@ void ConsoleUploadJobAuthority::RecalculateAggregate(Job& job)
     snapshot.retryWaitingCount = snapshot.succeededCount = snapshot.failedCount = 0;
     snapshot.cancelledCount = 0;
     snapshot.totalBytes = snapshot.bytesCompleted = 0;
+    snapshot.artifactMissionItemsTotal = 0;
+    snapshot.plannedSegmentCountTotal = 0;
     for (const auto& target : job.targets)
     {
         const auto& route = target.state;
         snapshot.totalBytes += route.totalBytes;
         snapshot.bytesCompleted += route.bytesCompleted;
+        snapshot.artifactMissionItemsTotal += target.metadata.missionItemCount;
+        if (target.metadata.missionItemCount != 0 &&
+            snapshot.frozenMavFtpConfig.segmentItems != 0)
+        {
+            const std::uint64_t wireItems =
+                static_cast<std::uint64_t>(target.metadata.missionItemCount) + 1;
+            snapshot.plannedSegmentCountTotal +=
+                (wireItems + snapshot.frozenMavFtpConfig.segmentItems - 1) /
+                snapshot.frozenMavFtpConfig.segmentItems;
+        }
         switch (route.state)
         {
         case dspgcs::UploadRouteState::Waiting: ++snapshot.waitingCount; break;
@@ -1140,6 +1342,7 @@ ConsoleUploadJobAuthority::GetExecutionView(
     view.requestedMaxConcurrentUploads = job.requestedMaxConcurrentUploads;
     view.effectiveMaxConcurrentUploads =
         job.snapshot.effectiveMaxConcurrentUploads;
+    view.frozenMavFtpConfig = job.snapshot.frozenMavFtpConfig;
     view.artifactSnapshot = job.artifactSnapshot;
     view.frozenSnapshot = job.frozenSnapshot;
     view.currentDirectoryIdentity = job.currentDirectoryIdentity;
@@ -1374,6 +1577,10 @@ bool ConsoleUploadJobAuthority::InstallSyntheticReadyJobForTest(
             maxConcurrentUploads,
             routes.size());
     job.requestedMaxConcurrentUploads = maxConcurrentUploads;
+    job.snapshot.frozenMavFtpConfig = FreezeMavFtpConfig(
+        runtimeConfig_,
+        maxConcurrentUploads,
+        job.snapshot.effectiveMaxConcurrentUploads);
     std::sort(routes.begin(), routes.end(),
         [](const auto& left, const auto& right)
         { return left.routeSlotIndex < right.routeSlotIndex; });
@@ -1427,6 +1634,7 @@ bool ConsoleUploadJobAuthority::InstallSyntheticExecutionBindingForTest(
     job->frozenSnapshot =
         std::make_shared<const FrozenAssignmentAcceptedSnapshot>();
     job->currentDirectoryIdentity = job->artifactSnapshot->currentDirectoryIdentity;
+    RecalculateAggregate(*job);
     error.clear();
     return true;
 }

@@ -52,6 +52,9 @@ struct FGCSRouteAutoStartSnapshot
 	FString AssignmentAuthoritySessionID;
 	int64 AssignmentRevision = 0;
 	FString AssignmentDigest;
+	FString ConfigAuthoritySessionID;
+	int64 ConfigRevision = 0;
+	FString ConfigDigest;
 	FString SyncTransactionID;
 	bool bJobStartAttempted = false;
 	bool bJobStartDispatched = false;
@@ -199,6 +202,11 @@ public:
 	void Shutdown();
 	bool ShowRouteWorkflow(FString& OutError);
 	bool IsCommandSelectionMutationBlocked() const;
+	/** Operator-applied Route Upload concurrency; captured by the next AutoStart Job. */
+	int32 GetAppliedMaxConcurrentTargets() const
+	{
+		return AppliedMaxConcurrentTargets;
+	}
 
 	static double ComputeProgressRatio(uint64 Completed, uint64 Total);
 	static FString FormatByteCount(uint64 Bytes);

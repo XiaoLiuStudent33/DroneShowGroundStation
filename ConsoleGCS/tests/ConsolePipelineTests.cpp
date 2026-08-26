@@ -41,6 +41,7 @@ int RunRouteMissionCodecTests();
 int RunMissionFtpCompilerTests();
 int RunRouteMissionBenchmarks(int argc, char** argv);
 int RunDSPUploadJobProtocolTests();
+int RunMavFtpRuntimeConfigTests();
 int RunMavFtpProbeTests();
 int RunMAVFTPMissionWriterTests();
 int RunMAVFTPWritePermitConcurrencyTests();
@@ -1665,6 +1666,10 @@ int main(const int argc, char** argv)
     if (argc > 1 && std::string(argv[1]) == "--upload-job-tests")
     {
         return RunDSPUploadJobProtocolTests();
+    }
+    if (argc > 1 && std::string(argv[1]) == "--runtime-config-tests")
+    {
+        return RunMavFtpRuntimeConfigTests();
     }
     if (argc > 1 && std::string(argv[1]) == "--mavftp-probe-tests")
     {

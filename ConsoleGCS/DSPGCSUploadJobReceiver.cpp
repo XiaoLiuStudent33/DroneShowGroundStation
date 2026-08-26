@@ -1,6 +1,7 @@
 #include "DSPGCSUploadJobReceiver.h"
 
 #include "DSPGCSUploadJobProtocol.h"
+#include "DSPGCSMavFtpRuntimeConfigProtocol.h"
 
 void DSPGCSUploadJobReceiver::EnqueueFrame(dspgcs::TransportFrame frame)
 {
@@ -17,7 +18,9 @@ DSPGCSUploadJobProcessStats DSPGCSUploadJobReceiver::ProcessPending(
     ConsoleUploadJobAuthority& authority,
     const AckSender& sendAck,
     const SnapshotSender& sendSnapshot,
-    const PageSender& sendPage)
+    const PageSender& sendPage,
+    const RuntimeConfigAckSender& sendRuntimeConfigAck,
+    const RuntimeConfigSnapshotSender& sendRuntimeConfigSnapshot)
 {
     std::vector<dspgcs::TransportFrame> frames;
     {
@@ -31,9 +34,30 @@ DSPGCSUploadJobProcessStats DSPGCSUploadJobReceiver::ProcessPending(
         dspgcs::MessageEnvelope envelope;
         std::vector<std::uint8_t> payload;
         if (!dspgcs::DecodeEnvelope(frame.bytes, envelope, payload) ||
-            !dspgcs::IsUploadJobMessageType(envelope.messageType))
+            (!dspgcs::IsUploadJobMessageType(envelope.messageType) &&
+             !dspgcs::IsMavFtpRuntimeConfigMessageType(envelope.messageType)))
         {
             ++stats.framesRejected;
+            continue;
+        }
+        if (envelope.messageType ==
+            dspgcs::MavFtpRuntimeConfigMessageTypes::Request)
+        {
+            dspgcs::MavFtpRuntimeConfigRequestDTO request;
+            std::string error;
+            if (!dspgcs::DecodeMavFtpRuntimeConfigRequest(payload, request, error))
+            {
+                ++stats.framesRejected;
+                continue;
+            }
+            const auto acknowledgement = authority.HandleRuntimeConfigRequest(
+                envelope.sessionId, request, payload);
+            if (sendRuntimeConfigAck && sendRuntimeConfigAck(acknowledgement))
+                ++stats.acknowledgementsSent;
+            const auto snapshot = authority.BuildRuntimeConfigSnapshot(
+                request.clientRequestId);
+            if (sendRuntimeConfigSnapshot && sendRuntimeConfigSnapshot(snapshot))
+                ++stats.snapshotsSent;
             continue;
         }
         if (envelope.messageType == dspgcs::UploadJobMessageTypes::Command)

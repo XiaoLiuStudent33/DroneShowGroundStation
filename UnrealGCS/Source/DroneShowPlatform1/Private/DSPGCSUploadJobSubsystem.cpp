@@ -123,6 +123,10 @@ void UDSPGCSUploadJobSubsystem::Deinitialize()
 	Mirror.Reset();
 	PendingCommandFrame.clear();
 	ClearPendingSnapshotRequest();
+	ClearPendingMavFtpRuntimeConfigRequest();
+	bHasRuntimeConfigSnapshot = false;
+	RuntimeConfigSnapshot = {};
+	RuntimeConfigState = EDSPGCSMavFtpRuntimeConfigState::Disconnected;
 	bAggregateRefreshRequired = false;
 	TerminalAggregateRefreshAttemptCount = 0;
 	ActiveJobID.clear();
@@ -242,6 +246,25 @@ bool UDSPGCSUploadJobSubsystem::StartUploadJobFromCurrentAuthorities(
 	FString& OutUploadJobID,
 	FString& OutError)
 {
+	dspgcs::UploadRuntimeConfigBindingDTO RuntimeConfigBinding;
+	if (!CaptureMavFtpRuntimeConfigBinding(RuntimeConfigBinding, OutError))
+	{
+		SetLocalCommandFailure(dspgcs::UploadJobCommandType::Start, OutError);
+		return false;
+	}
+	return StartUploadJobFromCurrentAuthorities(
+		RequestedMaxConcurrentUploads,
+		RuntimeConfigBinding,
+		OutUploadJobID,
+		OutError);
+}
+
+bool UDSPGCSUploadJobSubsystem::StartUploadJobFromCurrentAuthorities(
+	const int32 RequestedMaxConcurrentUploads,
+	const dspgcs::UploadRuntimeConfigBindingDTO& ExpectedRuntimeConfig,
+	FString& OutUploadJobID,
+	FString& OutError)
+{
 	check(IsInGameThread());
 	OutUploadJobID.Reset();
 	if (RequestedMaxConcurrentUploads < 1 ||
@@ -271,13 +294,13 @@ bool UDSPGCSUploadJobSubsystem::StartUploadJobFromCurrentAuthorities(
 		SetLocalCommandFailure(dspgcs::UploadJobCommandType::Start, OutError);
 		return false;
 	}
-	return StartUploadJob(
+	return StartUploadJobWithRuntimeConfig(
 		FString(), UploadJobFromUtf8(ArtifactBinding.artifactSetId),
 		UploadJobDigestToHex(ArtifactBinding.artifactSetDigest),
 		UploadJobFromUtf8(FrozenBinding.fleetSessionId),
 		UploadJobFromUtf8(FrozenBinding.assignmentAuthoritySessionId),
 		static_cast<int64>(FrozenBinding.assignmentRevision),
-		UploadJobDigestToHex(FrozenBinding.assignmentDigest),
+		UploadJobDigestToHex(FrozenBinding.assignmentDigest), ExpectedRuntimeConfig,
 		RequestedMaxConcurrentUploads, OutUploadJobID, OutError);
 }
 
@@ -289,6 +312,32 @@ bool UDSPGCSUploadJobSubsystem::StartUploadJob(
 	const FString& AssignmentAuthoritySessionID,
 	const int64 AssignmentRevision,
 	const FString& AssignmentDigestHex,
+	const int32 RequestedMaxConcurrentUploads,
+	FString& OutUploadJobID,
+	FString& OutError)
+{
+	dspgcs::UploadRuntimeConfigBindingDTO RuntimeConfigBinding;
+	if (!CaptureMavFtpRuntimeConfigBinding(RuntimeConfigBinding, OutError))
+	{
+		SetLocalCommandFailure(dspgcs::UploadJobCommandType::Start, OutError);
+		return false;
+	}
+	return StartUploadJobWithRuntimeConfig(
+		RequestedUploadJobID, ArtifactSetID, ArtifactSetDigestHex,
+		FleetSessionID, AssignmentAuthoritySessionID, AssignmentRevision,
+		AssignmentDigestHex, RuntimeConfigBinding, RequestedMaxConcurrentUploads,
+		OutUploadJobID, OutError);
+}
+
+bool UDSPGCSUploadJobSubsystem::StartUploadJobWithRuntimeConfig(
+	const FString& RequestedUploadJobID,
+	const FString& ArtifactSetID,
+	const FString& ArtifactSetDigestHex,
+	const FString& FleetSessionID,
+	const FString& AssignmentAuthoritySessionID,
+	const int64 AssignmentRevision,
+	const FString& AssignmentDigestHex,
+	const dspgcs::UploadRuntimeConfigBindingDTO& RuntimeConfigBinding,
 	const int32 RequestedMaxConcurrentUploads,
 	FString& OutUploadJobID,
 	FString& OutError)
@@ -323,6 +372,7 @@ bool UDSPGCSUploadJobSubsystem::StartUploadJob(
 		UploadJobToUtf8(AssignmentAuthoritySessionID);
 	Command.frozenAssignmentBinding.assignmentRevision = AssignmentRevision > 0
 		? static_cast<std::uint64_t>(AssignmentRevision) : 0;
+	Command.runtimeConfigBinding = RuntimeConfigBinding;
 	if (!ParseDigestHex(ArtifactSetDigestHex,
 			Command.artifactBinding.artifactSetDigest) ||
 		!ParseDigestHex(AssignmentDigestHex,
@@ -547,6 +597,129 @@ void UDSPGCSUploadJobSubsystem::ClearPendingSnapshotRequest()
 	bSnapshotRequestInFlight = false;
 }
 
+void UDSPGCSUploadJobSubsystem::ClearPendingMavFtpRuntimeConfigRequest()
+{
+	PendingRuntimeConfigRequestFrame.clear();
+	PendingRuntimeConfigRequestID.clear();
+	PendingRuntimeConfigExpectedAuthoritySessionID.clear();
+	PendingRuntimeConfigAttemptCount = 0;
+	bRuntimeConfigRequestInFlight = false;
+}
+
+bool UDSPGCSUploadJobSubsystem::CaptureMavFtpRuntimeConfigBinding(
+	dspgcs::UploadRuntimeConfigBindingDTO& OutBinding,
+	FString& OutError) const
+{
+	if (!bHasRuntimeConfigSnapshot ||
+		RuntimeConfigState != EDSPGCSMavFtpRuntimeConfigState::Connected)
+	{
+		OutError = TEXT("Console MAVFTP Runtime Config is not connected.");
+		return false;
+	}
+	OutBinding.authoritySessionId = RuntimeConfigSnapshot.authoritySessionId;
+	OutBinding.configRevision = RuntimeConfigSnapshot.configRevision;
+	OutBinding.configDigest = RuntimeConfigSnapshot.configDigest;
+	OutError.Reset();
+	return true;
+}
+
+FDSPGCSMavFtpRuntimeConfigStatus
+UDSPGCSUploadJobSubsystem::GetMavFtpRuntimeConfigStatus() const
+{
+	FDSPGCSMavFtpRuntimeConfigStatus Result;
+	Result.State = RuntimeConfigState;
+	Result.bHasSnapshot = bHasRuntimeConfigSnapshot;
+	Result.bRequestInFlight = bRuntimeConfigRequestInFlight;
+	Result.bLastApplyAccepted = bLastRuntimeConfigApplyAccepted;
+	Result.bLastApplyRejected = bLastRuntimeConfigApplyRejected;
+	Result.bLastAckDuplicate = bLastRuntimeConfigAckDuplicate;
+	Result.LastSafeDiagnostic = LastRuntimeConfigDiagnostic;
+	return Result;
+}
+
+bool UDSPGCSUploadJobSubsystem::SendMavFtpRuntimeConfigRequest(
+	dspgcs::MavFtpRuntimeConfigRequestDTO Request,
+	FString& OutError)
+{
+	if (bRuntimeConfigRequestInFlight)
+	{
+		OutError = TEXT("A MAVFTP Runtime Config request is already in flight.");
+		return false;
+	}
+	std::vector<std::uint8_t> Payload;
+	std::string Error;
+	if (!dspgcs::EncodeMavFtpRuntimeConfigRequest(Request, Payload, Error))
+	{
+		OutError = UploadJobFromUtf8(Error);
+		return false;
+	}
+	std::vector<std::uint8_t> Frame;
+	if (!SendPayload(dspgcs::MavFtpRuntimeConfigMessageTypes::Request,
+			Request.clientRequestId, Payload, &Frame, OutError))
+	{
+		RuntimeConfigState = EDSPGCSMavFtpRuntimeConfigState::Disconnected;
+		return false;
+	}
+	PendingRuntimeConfigRequestFrame = MoveTemp(Frame);
+	PendingRuntimeConfigRequestID = Request.clientRequestId;
+	PendingRuntimeConfigExpectedAuthoritySessionID = Request.authoritySessionId;
+	PendingRuntimeConfigOperation = Request.operation;
+	PendingRuntimeConfigAttemptCount = 1;
+	bRuntimeConfigRequestInFlight = true;
+	RuntimeConfigRetryAtSeconds = FPlatformTime::Seconds() +
+		SnapshotRequestRetrySeconds;
+	if (Request.operation == dspgcs::MavFtpRuntimeConfigOperation::Get)
+		RuntimeConfigState = EDSPGCSMavFtpRuntimeConfigState::Loading;
+	OutError.Reset();
+	return true;
+}
+
+bool UDSPGCSUploadJobSubsystem::RequestMavFtpRuntimeConfigSnapshot(
+	FString& OutError)
+{
+	check(IsInGameThread());
+	dspgcs::MavFtpRuntimeConfigRequestDTO Request;
+	Request.clientRequestId = MakeCanonicalID();
+	Request.operation = dspgcs::MavFtpRuntimeConfigOperation::Get;
+	return SendMavFtpRuntimeConfigRequest(MoveTemp(Request), OutError);
+}
+
+bool UDSPGCSUploadJobSubsystem::ApplyMavFtpRuntimeGlobalCap(
+	const int32 CandidateCap,
+	FString& OutError)
+{
+	check(IsInGameThread());
+	if (CandidateCap < 1 || CandidateCap > 800)
+	{
+		OutError = TEXT("Global Write Outstanding Cap must be in range 1..800.");
+		return false;
+	}
+	if (!bHasRuntimeConfigSnapshot ||
+		RuntimeConfigState != EDSPGCSMavFtpRuntimeConfigState::Connected)
+	{
+		OutError = TEXT("Console MAVFTP Runtime Config snapshot is unavailable.");
+		return false;
+	}
+	const auto* Job = Mirror.GetSnapshot();
+	if (bCommandInFlight || (Job && !IsTerminalJobState(Job->jobState)))
+	{
+		OutError = TEXT("Runtime Config is job-locked while an Upload Job is active.");
+		return false;
+	}
+	dspgcs::MavFtpRuntimeConfigRequestDTO Request;
+	Request.clientRequestId = MakeCanonicalID();
+	Request.authoritySessionId = RuntimeConfigSnapshot.authoritySessionId;
+	Request.expectedConfigRevision = RuntimeConfigSnapshot.configRevision;
+	Request.operation = dspgcs::MavFtpRuntimeConfigOperation::Apply;
+	Request.candidateGlobalWriteOutstandingCap =
+		static_cast<std::uint32_t>(CandidateCap);
+	bLastRuntimeConfigApplyAccepted = false;
+	bLastRuntimeConfigApplyRejected = false;
+	bLastRuntimeConfigAckDuplicate = false;
+	LastRuntimeConfigDiagnostic.Reset();
+	return SendMavFtpRuntimeConfigRequest(MoveTemp(Request), OutError);
+}
+
 bool UDSPGCSUploadJobSubsystem::RequestAuthoritativeSnapshot(FString& OutError)
 {
 	check(IsInGameThread());
@@ -621,7 +794,62 @@ void UDSPGCSUploadJobSubsystem::ProcessIncoming()
 	while (IncomingFrames.Dequeue(Frame))
 	{
 		std::string Error;
-		if (Frame.Envelope.messageType == dspgcs::UploadJobMessageTypes::CommandAck)
+		if (Frame.Envelope.messageType ==
+			dspgcs::MavFtpRuntimeConfigMessageTypes::Ack)
+		{
+			dspgcs::MavFtpRuntimeConfigAckDTO Ack;
+			if (dspgcs::DecodeMavFtpRuntimeConfigAck(Frame.Payload, Ack, Error) &&
+				Ack.clientRequestId == PendingRuntimeConfigRequestID &&
+				(PendingRuntimeConfigExpectedAuthoritySessionID.empty() ||
+				 Ack.authoritySessionId ==
+					PendingRuntimeConfigExpectedAuthoritySessionID))
+			{
+				bLastRuntimeConfigAckDuplicate = Ack.status ==
+					dspgcs::MavFtpRuntimeConfigAckStatus::DuplicateReplayed;
+				bLastRuntimeConfigApplyAccepted =
+					PendingRuntimeConfigOperation ==
+						dspgcs::MavFtpRuntimeConfigOperation::Apply &&
+					(Ack.status == dspgcs::MavFtpRuntimeConfigAckStatus::Accepted ||
+					 Ack.status == dspgcs::MavFtpRuntimeConfigAckStatus::DuplicateReplayed) &&
+					Ack.resultCode == dspgcs::MavFtpRuntimeConfigErrorCode::None;
+				bLastRuntimeConfigApplyRejected =
+					PendingRuntimeConfigOperation ==
+						dspgcs::MavFtpRuntimeConfigOperation::Apply &&
+					!bLastRuntimeConfigApplyAccepted;
+				LastRuntimeConfigDiagnostic =
+					UploadJobFromUtf8(Ack.safeDiagnostic).Left(512);
+				if (bLastRuntimeConfigApplyRejected)
+					RuntimeConfigState =
+						EDSPGCSMavFtpRuntimeConfigState::Stale;
+			}
+		}
+		else if (Frame.Envelope.messageType ==
+			dspgcs::MavFtpRuntimeConfigMessageTypes::Snapshot)
+		{
+			dspgcs::MavFtpRuntimeConfigSnapshotDTO Snapshot;
+			if (dspgcs::DecodeMavFtpRuntimeConfigSnapshot(
+					Frame.Payload, Snapshot, Error) &&
+				Snapshot.clientRequestId == PendingRuntimeConfigRequestID &&
+				(PendingRuntimeConfigExpectedAuthoritySessionID.empty() ||
+				 Snapshot.authoritySessionId ==
+					PendingRuntimeConfigExpectedAuthoritySessionID))
+			{
+				const bool bSameSession = bHasRuntimeConfigSnapshot &&
+					RuntimeConfigSnapshot.authoritySessionId ==
+						Snapshot.authoritySessionId;
+				if (!bSameSession || Snapshot.configRevision >=
+					RuntimeConfigSnapshot.configRevision)
+				{
+					RuntimeConfigSnapshot = Snapshot;
+					RuntimeConfigSnapshot.clientRequestId.clear();
+					bHasRuntimeConfigSnapshot = true;
+					RuntimeConfigState =
+						EDSPGCSMavFtpRuntimeConfigState::Connected;
+					ClearPendingMavFtpRuntimeConfigRequest();
+				}
+			}
+		}
+		else if (Frame.Envelope.messageType == dspgcs::UploadJobMessageTypes::CommandAck)
 		{
 			dspgcs::UploadJobCommandAckDTO Ack;
 			if (dspgcs::DecodeUploadJobCommandAck(Frame.Payload, Ack, Error) &&
@@ -754,6 +982,43 @@ bool UDSPGCSUploadJobSubsystem::TickClient(float DeltaSeconds)
 	(void)DeltaSeconds;
 	ProcessIncoming();
 	const double Now = FPlatformTime::Seconds();
+	auto* RuntimeProvider = ProviderRef.Get();
+	const bool bRuntimeTransportConnected = RuntimeProvider &&
+		RuntimeProvider->IsTelemetryLinkConnected();
+	if (!bRuntimeTransportConnected)
+	{
+		RuntimeConfigState = EDSPGCSMavFtpRuntimeConfigState::Disconnected;
+		if (bRuntimeConfigRequestInFlight)
+			ClearPendingMavFtpRuntimeConfigRequest();
+		RuntimeConfigRetryAtSeconds = Now + SnapshotRequestRetrySeconds;
+	}
+	else if (!PendingRuntimeConfigRequestFrame.empty() &&
+		Now >= RuntimeConfigRetryAtSeconds)
+	{
+		if (PendingRuntimeConfigAttemptCount >= MaxSnapshotRequestAttempts)
+		{
+			ClearPendingMavFtpRuntimeConfigRequest();
+			RuntimeConfigState = bHasRuntimeConfigSnapshot
+				? EDSPGCSMavFtpRuntimeConfigState::Stale
+				: EDSPGCSMavFtpRuntimeConfigState::Disconnected;
+			LastRuntimeConfigDiagnostic =
+				TEXT("MAVFTP Runtime Config request timed out.");
+			RuntimeConfigRetryAtSeconds = Now + SnapshotRequestRetrySeconds;
+		}
+		else
+		{
+			RuntimeProvider->SendFrame(PendingRuntimeConfigRequestFrame);
+			++PendingRuntimeConfigAttemptCount;
+			RuntimeConfigRetryAtSeconds = Now + SnapshotRequestRetrySeconds;
+		}
+	}
+	else if (!bRuntimeConfigRequestInFlight &&
+		RuntimeConfigState != EDSPGCSMavFtpRuntimeConfigState::Connected &&
+		Now >= RuntimeConfigRetryAtSeconds)
+	{
+		FString Ignored;
+		RequestMavFtpRuntimeConfigSnapshot(Ignored);
+	}
 	if (bAggregateRefreshRequired && !bSnapshotRequestInFlight &&
 		!ActiveJobID.empty() && TerminalAggregateRefreshAttemptCount <
 			MaxTerminalAggregateRefreshAttempts)

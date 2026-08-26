@@ -557,10 +557,21 @@ int ConsoleGCSApplication::RunProductionMavlink(
     DSPGCSFrozenAssignmentReceiver frozenAssignmentReceiver;
     FrozenAssignmentStore frozenAssignmentStore;
     ConsoleArtifactConsumerV2 artifactConsumer(appConfig.artifactWorkspaceRoot);
+    ConsoleMavFtpBootConfig mavFtpBootConfig;
+    mavFtpBootConfig.globalWriteOutstandingCap =
+        appConfig.mavftpGlobalWriteOutstandingCap;
+    mavFtpBootConfig.writeWindow = appConfig.mavftpWriteWindow;
+    mavFtpBootConfig.segmentItems = appConfig.mavftpSegmentItems;
+    mavFtpBootConfig.requestTimeoutMs = static_cast<std::uint32_t>(
+        appConfig.mavftpRequestTimeoutMs);
+    mavFtpBootConfig.terminateTimeoutMs = static_cast<std::uint32_t>(
+        appConfig.mavftpTerminateTimeoutMs);
+    mavFtpBootConfig.retryCount = appConfig.mavftpRequestRetryCount;
     ConsoleUploadJobAuthority uploadJobAuthority(
         appConfig.artifactWorkspaceRoot,
         &artifactConsumer,
-        &frozenAssignmentStore);
+        &frozenAssignmentStore,
+        mavFtpBootConfig);
     RouteUploadManagerConfig routeUploadConfig;
     routeUploadConfig.routeUploadEnabled = appConfig.routeUploadEnabled;
     routeUploadConfig.mavftpSegmentItems = appConfig.mavftpSegmentItems;
@@ -640,7 +651,8 @@ int ConsoleGCSApplication::RunProductionMavlink(
                     frozenAssignmentReceiver.EnqueueFrame(std::move(frame));
                     return;
                 }
-                if (dspgcs::IsUploadJobMessageType(envelope.messageType))
+                if (DSPGCSUploadJobReceiver::IsIngressMessageType(
+                        envelope.messageType))
                 {
                     uploadJobReceiver.EnqueueFrame(std::move(frame));
                 }
@@ -843,6 +855,17 @@ int ConsoleGCSApplication::RunProductionMavlink(
                     const dspgcs::UploadJobRouteStatePageDTO& page)
                 {
                     return telemetryProvider.SendUploadJobRouteStatePage(page);
+                },
+                [&telemetryProvider](
+                    const dspgcs::MavFtpRuntimeConfigAckDTO& acknowledgement)
+                {
+                    return telemetryProvider.SendMavFtpRuntimeConfigAck(
+                        acknowledgement);
+                },
+                [&telemetryProvider](
+                    const dspgcs::MavFtpRuntimeConfigSnapshotDTO& snapshot)
+                {
+                    return telemetryProvider.SendMavFtpRuntimeConfigSnapshot(snapshot);
                 });
             routeUploadManager.Tick(now);
             for (const auto& delta : uploadJobAuthority.DrainRouteDeltas())

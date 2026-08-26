@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -1097,6 +1098,86 @@ namespace
                     : "Cancel leaked or double-released Write permits");
         }
     }
+
+    void TestFiftyTargetSeventyTwoThousandAckStress()
+    {
+        constexpr std::size_t TargetCount = 50;
+        constexpr std::size_t BlocksPerTarget = 1450;
+        constexpr std::size_t ExpectedWriteAcks = TargetCount * BlocksPerTarget;
+        ftp::WritePermitPool globalPool(800);
+        ftp::ClientConfig config;
+        config.writeWindow = 16;
+        config.maximumRetries = 3;
+        config.writePermitPool = &globalPool;
+        std::array<std::unique_ptr<FakeWire>, TargetCount> wires;
+        std::array<std::unique_ptr<ftp::Client>, TargetCount> clients;
+        std::array<std::size_t, TargetCount> cursors{};
+        std::array<bool, TargetCount> completed{};
+        std::string error;
+        const auto started = std::chrono::steady_clock::now();
+        for (std::size_t index = 0; index < TargetCount; ++index)
+        {
+            wires[index] = std::make_unique<FakeWire>();
+            clients[index] = std::make_unique<ftp::Client>(
+                *wires[index], TestPeer(), config);
+            Expect(clients[index]->StartWriteFile("@MISSION/mission.dat",
+                Bytes(BlocksPerTarget * ftp::MaximumDataBytes), error),
+                "50-Target ACK stress could not start a Client");
+        }
+        for (std::size_t index = 0; index < TargetCount; ++index)
+        {
+            wires[index]->Ack(*clients[index], wires[index]->Decode(0), 101);
+            cursors[index] = 1;
+        }
+        Expect(globalPool.GetMetrics().outstanding == 800,
+            "50-Target ACK stress did not fill GlobalCap 800");
+
+        std::size_t writeAcks = 0;
+        std::size_t completedCount = 0;
+        while (completedCount < TargetCount)
+        {
+            bool progressed = false;
+            for (std::size_t index = 0; index < TargetCount; ++index)
+            {
+                if (completed[index] || cursors[index] >= wires[index]->sent.size())
+                    continue;
+                const ftp::Payload request = wires[index]->Decode(cursors[index]++);
+                if (request.opcode == ftp::Opcode::WriteFile)
+                {
+                    wires[index]->Ack(*clients[index], request, 101);
+                    ++writeAcks;
+                }
+                else if (request.opcode == ftp::Opcode::TerminateSession)
+                {
+                    wires[index]->Ack(*clients[index], request, 101);
+                    const auto result = clients[index]->ConsumeResult();
+                    Expect(result && result->success &&
+                        result->writeBlocksAcked == BlocksPerTarget,
+                        "50-Target ACK stress Client did not complete exactly once");
+                    completed[index] = true;
+                    ++completedCount;
+                }
+                progressed = true;
+            }
+            Expect(progressed,
+                "50-Target ACK stress scheduler stopped before completion");
+        }
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        const auto metrics = globalPool.GetMetrics();
+        Expect(writeAcks == ExpectedWriteAcks &&
+            metrics.maxObservedOutstanding == 800 &&
+            metrics.outstanding == 0 &&
+            metrics.permitsGranted == metrics.permitsReleased &&
+            metrics.invalidReleaseCount == 0 &&
+            globalPool.GetRegisteredOwnerCount() == 0,
+            "72,500 ACK stress violated completion or bounded GlobalCap metrics");
+        std::cout << "MAVFTP ACK stress PASS Targets=50 WriteWindow=16 "
+            << "GlobalCap=800 WriteAcks=" << writeAcks
+            << " MaxOutstanding=" << metrics.maxObservedOutstanding
+            << " ElapsedMs=" << elapsedMs
+            << " InfoLogsPerAck=0 DspEventsPerAck=0\n";
+    }
 }
 
 int RunMAVFTPMissionWriterTests()
@@ -1118,6 +1199,7 @@ int RunMAVFTPMissionWriterTests()
         TestSingleBlockRetryAndWindowNakFailure();
         TestWindowBoundariesExhaustionShutdownAndMetricBound();
         TestDynamicNWritePermitFairnessAndLifetime();
+        TestFiftyTargetSeventyTwoThousandAckStress();
         std::cout << "MAVFTP Mission writer core tests passed\n";
         return 0;
     }
@@ -1134,6 +1216,7 @@ int RunMAVFTPWritePermitConcurrencyTests()
     try
     {
         TestDynamicNWritePermitFairnessAndLifetime();
+        TestFiftyTargetSeventyTwoThousandAckStress();
         std::cout << "MAVFTP dynamic-N Write permit tests passed\n";
         return 0;
     }

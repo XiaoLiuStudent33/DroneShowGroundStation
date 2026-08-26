@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DSPGCSMavFtpRuntimeConfigProtocol.h"
 #include "DSPGCSProtocol.h"
 
 #include <algorithm>
@@ -12,7 +13,7 @@
 
 namespace dspgcs
 {
-    inline constexpr std::uint16_t UploadJobSchemaVersion = 2;
+    inline constexpr std::uint16_t UploadJobSchemaVersion = 3;
     inline constexpr std::size_t UploadJobCanonicalIdBytes = 32;
     inline constexpr std::size_t UploadJobDigestBytes = 32;
     inline constexpr std::size_t UploadJobMaxSafeDiagnosticBytes = 512;
@@ -116,7 +117,10 @@ namespace dspgcs
         InvalidMapping = 25,
         RouteRecordMissing = 26,
         FleetSessionStale = 27,
-        LeaseAcquireFailed = 28
+        LeaseAcquireFailed = 28,
+        RuntimeConfigUnavailable = 29,
+        RuntimeConfigIdentityMismatch = 30,
+        RuntimeConfigStale = 31
     };
 
     enum class RouteUploadErrorCode : std::uint16_t
@@ -156,6 +160,30 @@ namespace dspgcs
         std::uint32_t routeSlotCount = 0;
     };
 
+    struct UploadRuntimeConfigBindingDTO
+    {
+        std::string authoritySessionId;
+        std::uint64_t configRevision = 0;
+        MavFtpRuntimeConfigDigest configDigest{};
+    };
+
+    /** Immutable value-copy captured atomically by Start and consumed by execution. */
+    struct UploadJobFrozenMavFtpConfigDTO
+    {
+        UploadRuntimeConfigBindingDTO identity;
+        std::uint32_t globalWriteOutstandingCap = 0;
+        std::uint32_t writeWindow = 0;
+        std::uint32_t writePayload = MavFtpRuntimeConfigWirePayloadBytes;
+        std::uint32_t segmentItems = 0;
+        std::uint32_t requestTimeoutMs = 0;
+        std::uint32_t terminateTimeoutMs = 0;
+        std::uint32_t retryCount = 0;
+        std::uint32_t requestedMaxConcurrentTargets = 0;
+        std::uint32_t effectiveMaxConcurrentTargets = 0;
+        std::uint32_t requiredGlobalWriteOutstandingCap = 0;
+        std::uint32_t effectiveGlobalWriteOutstandingCap = 0;
+    };
+
     struct UploadJobFailureDTO
     {
         UploadJobErrorCode jobErrorCode = UploadJobErrorCode::None;
@@ -177,6 +205,7 @@ namespace dspgcs
         std::uint32_t requestedMaxConcurrentUploads = 0;
         UploadArtifactBindingDTO artifactBinding;
         UploadFrozenAssignmentBindingDTO frozenAssignmentBinding;
+        UploadRuntimeConfigBindingDTO runtimeConfigBinding;
     };
 
     struct UploadJobCommandAckDTO
@@ -234,10 +263,15 @@ namespace dspgcs
         std::uint32_t cancelledCount = 0;
         std::uint64_t totalBytes = 0;
         std::uint64_t bytesCompleted = 0;
+        /** Sum across matched Targets; Artifact Mission Items exclude Reserved Home. */
+        std::uint64_t artifactMissionItemsTotal = 0;
+        /** Sum of actual Console-planned MAVFTP segment counts across matched Targets. */
+        std::uint64_t plannedSegmentCountTotal = 0;
         std::uint64_t throughputBytesPerSecond = 0;
         std::uint32_t throughputWindowMs = 0;
         std::uint64_t elapsedMs = 0;
         std::uint32_t effectiveMaxConcurrentUploads = 0;
+        UploadJobFrozenMavFtpConfigDTO frozenMavFtpConfig;
         UploadJobFailureDTO firstFailure;
     };
 
@@ -429,6 +463,98 @@ namespace dspgcs
             writer.U32(value.routeSlotCount);
         }
 
+        inline void RuntimeConfigBinding(
+            detail::Writer& writer,
+            const UploadRuntimeConfigBindingDTO& value)
+        {
+            writer.String(value.authoritySessionId);
+            writer.U64(value.configRevision);
+            Digest(writer, value.configDigest);
+        }
+
+        inline bool RuntimeConfigBinding(
+            detail::Reader& reader,
+            UploadRuntimeConfigBindingDTO& value)
+        {
+            return reader.String(value.authoritySessionId) &&
+                reader.U64(value.configRevision) && Digest(reader, value.configDigest);
+        }
+
+        inline bool ValidateRuntimeConfigBinding(
+            const UploadRuntimeConfigBindingDTO& value,
+            std::string& error)
+        {
+            if (!IsCanonicalMavFtpRuntimeConfigId(value.authoritySessionId) ||
+                value.configRevision == 0 || !DigestIsSet(value.configDigest))
+                return Fail(error, "Runtime Config binding is incomplete.");
+            return true;
+        }
+
+        inline void FrozenMavFtpConfig(
+            detail::Writer& writer,
+            const UploadJobFrozenMavFtpConfigDTO& value)
+        {
+            RuntimeConfigBinding(writer, value.identity);
+            writer.U32(value.globalWriteOutstandingCap);
+            writer.U32(value.writeWindow);
+            writer.U32(value.writePayload);
+            writer.U32(value.segmentItems);
+            writer.U32(value.requestTimeoutMs);
+            writer.U32(value.terminateTimeoutMs);
+            writer.U32(value.retryCount);
+            writer.U32(value.requestedMaxConcurrentTargets);
+            writer.U32(value.effectiveMaxConcurrentTargets);
+            writer.U32(value.requiredGlobalWriteOutstandingCap);
+            writer.U32(value.effectiveGlobalWriteOutstandingCap);
+        }
+
+        inline bool FrozenMavFtpConfig(
+            detail::Reader& reader,
+            UploadJobFrozenMavFtpConfigDTO& value)
+        {
+            return RuntimeConfigBinding(reader, value.identity) &&
+                reader.U32(value.globalWriteOutstandingCap) &&
+                reader.U32(value.writeWindow) && reader.U32(value.writePayload) &&
+                reader.U32(value.segmentItems) && reader.U32(value.requestTimeoutMs) &&
+                reader.U32(value.terminateTimeoutMs) && reader.U32(value.retryCount) &&
+                reader.U32(value.requestedMaxConcurrentTargets) &&
+                reader.U32(value.effectiveMaxConcurrentTargets) &&
+                reader.U32(value.requiredGlobalWriteOutstandingCap) &&
+                reader.U32(value.effectiveGlobalWriteOutstandingCap);
+        }
+
+        inline bool ValidateFrozenMavFtpConfig(
+            const UploadJobFrozenMavFtpConfigDTO& value,
+            std::string& error)
+        {
+            if (!ValidateRuntimeConfigBinding(value.identity, error) ||
+                value.globalWriteOutstandingCap < 1 ||
+                value.globalWriteOutstandingCap > 800 ||
+                value.writeWindow < 1 || value.writeWindow > 16 ||
+                value.writePayload != MavFtpRuntimeConfigWirePayloadBytes ||
+                value.segmentItems < 1 || value.segmentItems > 65535 ||
+                value.requestTimeoutMs < 100 || value.requestTimeoutMs > 60000 ||
+                value.terminateTimeoutMs < 100 || value.terminateTimeoutMs > 60000 ||
+                value.retryCount > 10 ||
+                value.requestedMaxConcurrentTargets < 1 ||
+                value.requestedMaxConcurrentTargets > 50 ||
+                value.effectiveMaxConcurrentTargets < 1 ||
+                value.effectiveMaxConcurrentTargets >
+                    value.requestedMaxConcurrentTargets)
+                return Fail(error, "Frozen MAVFTP Job Config is invalid.");
+            const std::uint64_t aggregateWindow =
+                static_cast<std::uint64_t>(value.effectiveMaxConcurrentTargets) *
+                value.writeWindow;
+            const std::uint32_t required = static_cast<std::uint32_t>(
+                (std::min<std::uint64_t>)(aggregateWindow, 800));
+            const std::uint32_t effective =
+                (std::min)(value.globalWriteOutstandingCap, required);
+            if (value.requiredGlobalWriteOutstandingCap != required ||
+                value.effectiveGlobalWriteOutstandingCap != effective)
+                return Fail(error, "Frozen MAVFTP Job cap derivation is invalid.");
+            return true;
+        }
+
         inline bool StableSource(
             detail::Reader& reader,
             UploadStableSourceDTO& value)
@@ -516,7 +642,8 @@ namespace dspgcs
         {
             if (value.expectedJobRevision != 0 || value.requestedMaxConcurrentUploads == 0 ||
                 !ValidateArtifactBinding(value.artifactBinding, error) ||
-                !ValidateFrozenBinding(value.frozenAssignmentBinding, error))
+                !ValidateFrozenBinding(value.frozenAssignmentBinding, error) ||
+                !ValidateRuntimeConfigBinding(value.runtimeConfigBinding, error))
                 return false;
         }
         else
@@ -544,6 +671,7 @@ namespace dspgcs
         writer.U64(value.expectedJobRevision); writer.U32(value.requestedMaxConcurrentUploads);
         upload_job_detail::ArtifactBinding(writer, value.artifactBinding);
         upload_job_detail::FrozenBinding(writer, value.frozenAssignmentBinding);
+        upload_job_detail::RuntimeConfigBinding(writer, value.runtimeConfigBinding);
         output = writer.Take(); return true;
     }
     inline bool DecodeUploadJobCommand(const std::vector<std::uint8_t>& input,
@@ -556,6 +684,7 @@ namespace dspgcs
             !reader.U32(value.requestedMaxConcurrentUploads) ||
             !upload_job_detail::ArtifactBinding(reader, value.artifactBinding) ||
             !upload_job_detail::FrozenBinding(reader, value.frozenAssignmentBinding) ||
+            !upload_job_detail::RuntimeConfigBinding(reader, value.runtimeConfigBinding) ||
             !reader.Done())
             return upload_job_detail::Fail(error, "Malformed Upload Job command payload.");
         value.commandType = static_cast<UploadJobCommandType>(type);
@@ -658,6 +787,7 @@ namespace dspgcs
             (!errorSnapshot && (!IsCanonicalUploadJobId(value.snapshotToken) ||
              !ValidateArtifactBinding(value.artifactBinding, error) ||
              !ValidateFrozenBinding(value.frozenAssignmentBinding, error) ||
+             !ValidateFrozenMavFtpConfig(value.frozenMavFtpConfig, error) ||
              (!validatingSnapshot && !ValidateStableSource(value.stableSource, error)) ||
              !ValidArtifactGate(value.artifactGateState) || !ValidJobState(value.jobState) ||
              value.jobRevision == 0 || value.snapshotSequence == 0 ||
@@ -686,9 +816,14 @@ namespace dspgcs
         writer.U32(value.uploadingCount); writer.U32(value.retryWaitingCount);
         writer.U32(value.succeededCount); writer.U32(value.failedCount);
         writer.U32(value.cancelledCount); writer.U64(value.totalBytes);
-        writer.U64(value.bytesCompleted); writer.U64(value.throughputBytesPerSecond);
+        writer.U64(value.bytesCompleted);
+        writer.U64(value.artifactMissionItemsTotal);
+        writer.U64(value.plannedSegmentCountTotal);
+        writer.U64(value.throughputBytesPerSecond);
         writer.U32(value.throughputWindowMs); writer.U64(value.elapsedMs);
-        writer.U32(value.effectiveMaxConcurrentUploads); Failure(writer, value.firstFailure);
+        writer.U32(value.effectiveMaxConcurrentUploads);
+        FrozenMavFtpConfig(writer, value.frozenMavFtpConfig);
+        Failure(writer, value.firstFailure);
         output = writer.Take(); return true;
     }
     inline bool DecodeUploadJobSnapshot(const std::vector<std::uint8_t>& input,
@@ -711,10 +846,14 @@ namespace dspgcs
             !reader.U32(value.uploadingCount) || !reader.U32(value.retryWaitingCount) ||
             !reader.U32(value.succeededCount) || !reader.U32(value.failedCount) ||
             !reader.U32(value.cancelledCount) || !reader.U64(value.totalBytes) ||
-            !reader.U64(value.bytesCompleted) || !reader.U64(value.throughputBytesPerSecond) ||
-            !reader.U32(value.throughputWindowMs) || !reader.U64(value.elapsedMs) ||
-            !reader.U32(value.effectiveMaxConcurrentUploads) ||
-            !upload_job_detail::Failure(reader, value.firstFailure) || !reader.Done())
+            !reader.U64(value.bytesCompleted) ||
+            !reader.U64(value.artifactMissionItemsTotal) ||
+            !reader.U64(value.plannedSegmentCountTotal) ||
+            !reader.U64(value.throughputBytesPerSecond) ||
+             !reader.U32(value.throughputWindowMs) || !reader.U64(value.elapsedMs) ||
+             !reader.U32(value.effectiveMaxConcurrentUploads) ||
+             !upload_job_detail::FrozenMavFtpConfig(reader, value.frozenMavFtpConfig) ||
+             !upload_job_detail::Failure(reader, value.firstFailure) || !reader.Done())
             return upload_job_detail::Fail(error, "Malformed Upload Job aggregate snapshot.");
         value.artifactGateState = static_cast<UploadArtifactGateState>(gate);
         value.jobState = static_cast<UploadJobState>(state);
@@ -824,5 +963,14 @@ namespace dspgcs
             left.normalizedShowOriginLongitudeE7 ==
                 right.normalizedShowOriginLongitudeE7 &&
             left.routeSlotCount == right.routeSlotCount;
+    }
+
+    inline bool UploadRuntimeConfigBindingEqual(
+        const UploadRuntimeConfigBindingDTO& left,
+        const UploadRuntimeConfigBindingDTO& right)
+    {
+        return left.authoritySessionId == right.authoritySessionId &&
+            left.configRevision == right.configRevision &&
+            left.configDigest == right.configDigest;
     }
 }

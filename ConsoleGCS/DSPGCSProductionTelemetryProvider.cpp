@@ -346,6 +346,29 @@ bool DSPGCSProductionTelemetryProvider::SendUploadJobRouteStateDelta(
             delta.uploadJobId, std::move(payload));
 }
 
+bool DSPGCSProductionTelemetryProvider::SendMavFtpRuntimeConfigAck(
+    const dspgcs::MavFtpRuntimeConfigAckDTO& acknowledgement)
+{
+    std::vector<std::uint8_t> payload;
+    std::string error;
+    return dspgcs::EncodeMavFtpRuntimeConfigAck(
+            acknowledgement, payload, error) &&
+        SendUploadJobPayload(dspgcs::MavFtpRuntimeConfigMessageTypes::Ack,
+            acknowledgement.clientRequestId, std::move(payload));
+}
+
+bool DSPGCSProductionTelemetryProvider::SendMavFtpRuntimeConfigSnapshot(
+    const dspgcs::MavFtpRuntimeConfigSnapshotDTO& snapshot)
+{
+    std::vector<std::uint8_t> payload;
+    std::string error;
+    return dspgcs::EncodeMavFtpRuntimeConfigSnapshot(snapshot, payload, error) &&
+        SendUploadJobPayload(dspgcs::MavFtpRuntimeConfigMessageTypes::Snapshot,
+            snapshot.clientRequestId.empty()
+                ? snapshot.authoritySessionId : snapshot.clientRequestId,
+            std::move(payload));
+}
+
 const std::string&
 DSPGCSProductionTelemetryProvider::GetCurrentFleetSessionID() const
 {

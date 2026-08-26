@@ -45,6 +45,10 @@ public:
         const dspgcs::UploadJobRouteStatePageDTO& page);
     bool SendUploadJobRouteStateDelta(
         const dspgcs::UploadJobRouteStateDeltaDTO& delta);
+    bool SendMavFtpRuntimeConfigAck(
+        const dspgcs::MavFtpRuntimeConfigAckDTO& acknowledgement);
+    bool SendMavFtpRuntimeConfigSnapshot(
+        const dspgcs::MavFtpRuntimeConfigSnapshotDTO& snapshot);
     const std::string& GetCurrentFleetSessionID() const;
     bool IsRunning() const;
 

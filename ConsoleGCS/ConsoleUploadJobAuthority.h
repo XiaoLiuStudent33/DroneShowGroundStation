@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ConsoleArtifactConsumerV2.h"
+#include "AppConfig.h"
 #include "DSPGCSUploadJobProtocol.h"
 #include "FrozenAssignmentStore.h"
 #include "RouteArtifactReadLease.h"
@@ -36,11 +37,23 @@ struct UploadJobExecutionView
     dspgcs::UploadFrozenAssignmentBindingDTO frozenBinding;
     std::uint32_t requestedMaxConcurrentUploads = 0;
     std::uint32_t effectiveMaxConcurrentUploads = 0;
+    dspgcs::UploadJobFrozenMavFtpConfigDTO frozenMavFtpConfig;
     std::shared_ptr<const AcceptedRouteArtifactV2> artifactSnapshot;
     std::shared_ptr<const FrozenAssignmentAcceptedSnapshot> frozenSnapshot;
     RouteArtifactV2CurrentDirectoryIdentity currentDirectoryIdentity;
     const dronegcs::route_artifact::ArtifactReadLease* artifactReadLease = nullptr;
     std::vector<UploadJobTargetMetadata> targets;
+};
+
+struct ConsoleMavFtpBootConfig
+{
+    std::uint32_t globalWriteOutstandingCap =
+        AppConfigDefaults::MavftpGlobalWriteOutstandingCap;
+    std::uint32_t writeWindow = AppConfigDefaults::MavftpWriteWindow;
+    std::uint32_t segmentItems = AppConfigDefaults::MavftpSegmentItems;
+    std::uint32_t requestTimeoutMs = AppConfigDefaults::MavftpRequestTimeoutMs;
+    std::uint32_t terminateTimeoutMs = AppConfigDefaults::MavftpTerminateTimeoutMs;
+    std::uint32_t retryCount = AppConfigDefaults::MavftpRequestRetryCount;
 };
 
 class ConsoleUploadJobAuthority final
@@ -52,7 +65,8 @@ public:
     ConsoleUploadJobAuthority(
         std::string workspaceRoot,
         ConsoleArtifactConsumerV2* artifactConsumer,
-        FrozenAssignmentStore* frozenAssignmentStore);
+        FrozenAssignmentStore* frozenAssignmentStore,
+        ConsoleMavFtpBootConfig mavFtpBootConfig = {});
 
     static std::uint32_t ComputeEffectiveMaxConcurrentTargets(
         std::uint32_t requested,
@@ -62,6 +76,15 @@ public:
         const std::string& clientSessionId,
         const dspgcs::UploadJobCommandDTO& command,
         const std::vector<std::uint8_t>& canonicalCommandPayload);
+
+    dspgcs::MavFtpRuntimeConfigAckDTO HandleRuntimeConfigRequest(
+        const std::string& clientSessionId,
+        const dspgcs::MavFtpRuntimeConfigRequestDTO& request,
+        const std::vector<std::uint8_t>& canonicalRequestPayload);
+    dspgcs::MavFtpRuntimeConfigSnapshotDTO BuildRuntimeConfigSnapshot(
+        const std::string& clientRequestId = {}) const;
+    const dspgcs::MavFtpRuntimeConfigSnapshotDTO& GetRuntimeConfigForTest() const
+        { return runtimeConfig_; }
 
     void Tick();
 
@@ -181,6 +204,12 @@ private:
         dspgcs::UploadJobCommandAckDTO acknowledgement;
     };
 
+    struct RuntimeConfigIdempotencyRecord
+    {
+        std::vector<std::uint8_t> canonicalPayload;
+        dspgcs::MavFtpRuntimeConfigAckDTO acknowledgement;
+    };
+
     static std::string MakeCanonicalId();
     static bool SameFrozenBinding(
         const FrozenAssignmentAcceptedSnapshot& frozen,
@@ -192,6 +221,10 @@ private:
     static dspgcs::UploadStableSourceDTO ToWireStableSource(
         const AcceptedRouteArtifactV2StableSource& stableSource);
     static std::int64_t UtcNowMs();
+    static dspgcs::UploadJobFrozenMavFtpConfigDTO FreezeMavFtpConfig(
+        const dspgcs::MavFtpRuntimeConfigSnapshotDTO& runtimeConfig,
+        std::uint32_t requestedMaxConcurrentTargets,
+        std::uint32_t effectiveMaxConcurrentTargets);
 
     dspgcs::UploadJobCommandAckDTO Reject(
         const dspgcs::UploadJobCommandDTO& command,
@@ -237,4 +270,8 @@ private:
     std::unordered_map<std::string, IdempotencyRecord> idempotency_;
     std::deque<std::string> idempotencyOrder_;
     std::vector<dspgcs::UploadJobRouteStateDeltaDTO> pendingDeltas_;
+    dspgcs::MavFtpRuntimeConfigSnapshotDTO runtimeConfig_;
+    std::unordered_map<std::string, RuntimeConfigIdempotencyRecord>
+        runtimeConfigIdempotency_;
+    std::deque<std::string> runtimeConfigIdempotencyOrder_;
 };

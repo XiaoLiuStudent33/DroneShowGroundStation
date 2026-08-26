@@ -53,6 +53,36 @@ namespace GCSRouteWorkflowPrivate
 		return FString(UTF8_TO_TCHAR(Value.c_str()));
 	}
 
+	std::string WorkflowToUtf8(const FString& Value)
+	{
+		const FTCHARToUTF8 Converted(*Value);
+		return std::string(Converted.Get(), Converted.Length());
+	}
+
+	bool WorkflowParseDigestHex(
+		const FString& Hex,
+		dspgcs::MavFtpRuntimeConfigDigest& OutDigest)
+	{
+		if (Hex.Len() != 64) return false;
+		auto Nibble = [](const TCHAR Character, uint8& Out)
+		{
+			if (Character >= TEXT('0') && Character <= TEXT('9'))
+				Out = static_cast<uint8>(Character - TEXT('0'));
+			else if (Character >= TEXT('a') && Character <= TEXT('f'))
+				Out = static_cast<uint8>(Character - TEXT('a') + 10);
+			else return false;
+			return true;
+		};
+		for (int32 Index = 0; Index < 32; ++Index)
+		{
+			uint8 High = 0, Low = 0;
+			if (!Nibble(Hex[Index * 2], High) ||
+				!Nibble(Hex[Index * 2 + 1], Low)) return false;
+			OutDigest[Index] = static_cast<uint8>((High << 4) | Low);
+		}
+		return true;
+	}
+
 	FString WorkflowDigestHex(const dspgcs::UploadJobDigest& Digest)
 	{
 		static constexpr TCHAR Digits[] = TEXT("0123456789abcdef");
@@ -982,6 +1012,18 @@ bool UGCSRouteWorkflowCoordinator::BeginAutoStartTransaction(FString& OutError)
 			OutError = TEXT("Upload Job or Frozen Assignment Sync subsystem is unavailable.");
 			return false;
 		}
+		dspgcs::UploadRuntimeConfigBindingDTO ConfigBinding;
+		if (!Upload->CaptureMavFtpRuntimeConfigBinding(ConfigBinding, OutError))
+		{
+			return false;
+		}
+		Candidate.ConfigAuthoritySessionID =
+			GCSRouteWorkflowPrivate::WorkflowFromUtf8(
+				ConfigBinding.authoritySessionId);
+		Candidate.ConfigRevision = static_cast<int64>(
+			ConfigBinding.configRevision);
+		Candidate.ConfigDigest = GCSRouteWorkflowPrivate::WorkflowDigestHex(
+			ConfigBinding.configDigest);
 		const FDSPGCSUploadJobCommandStatus Command = Upload->GetCommandStatus();
 		if (Command.bHasActiveJobBinding || Command.bHasExecutableJob || Command.bCommandInFlight)
 		{
@@ -1182,6 +1224,24 @@ bool UGCSRouteWorkflowCoordinator::ValidateAutoStartSnapshotStillCurrent(FString
 		}
 	}
 
+	const UDSPGCSUploadJobSubsystem* UploadConfig =
+		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	dspgcs::UploadRuntimeConfigBindingDTO CurrentConfigBinding;
+	if (!UploadConfig || !UploadConfig->CaptureMavFtpRuntimeConfigBinding(
+			CurrentConfigBinding, OutError) ||
+		GCSRouteWorkflowPrivate::WorkflowFromUtf8(
+			CurrentConfigBinding.authoritySessionId) !=
+			AutoStartSnapshot.ConfigAuthoritySessionID ||
+		static_cast<int64>(CurrentConfigBinding.configRevision) !=
+			AutoStartSnapshot.ConfigRevision ||
+		GCSRouteWorkflowPrivate::WorkflowDigestHex(
+			CurrentConfigBinding.configDigest) != AutoStartSnapshot.ConfigDigest)
+	{
+		if (OutError.IsEmpty())
+			OutError = TEXT("MAVFTP Runtime Config identity changed during AutoStart.");
+		return false;
+	}
+
 	const URouteAssignmentSubsystem* Assignment =
 		GameInstanceRef->GetSubsystem<URouteAssignmentSubsystem>();
 	FRouteAssignmentSourceSnapshot Source;
@@ -1266,8 +1326,23 @@ void UGCSRouteWorkflowCoordinator::AdvanceAutoStartTransaction()
 	{
 		UDSPGCSUploadJobSubsystem* Upload =
 			GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
-		bStarted = Upload && Upload->StartUploadJobFromCurrentAuthorities(
-			AutoStartSnapshot.MaxConcurrentTargets, UploadJobID, Error);
+		dspgcs::UploadRuntimeConfigBindingDTO ExpectedConfig;
+		ExpectedConfig.authoritySessionId =
+			GCSRouteWorkflowPrivate::WorkflowToUtf8(
+				AutoStartSnapshot.ConfigAuthoritySessionID);
+		ExpectedConfig.configRevision = AutoStartSnapshot.ConfigRevision > 0
+			? static_cast<std::uint64_t>(AutoStartSnapshot.ConfigRevision) : 0;
+		if (!GCSRouteWorkflowPrivate::WorkflowParseDigestHex(
+				AutoStartSnapshot.ConfigDigest, ExpectedConfig.configDigest))
+		{
+			Error = TEXT("AutoStart Runtime Config digest is invalid.");
+		}
+		else
+		{
+			bStarted = Upload && Upload->StartUploadJobFromCurrentAuthorities(
+				AutoStartSnapshot.MaxConcurrentTargets, ExpectedConfig,
+				UploadJobID, Error);
+		}
 	}
 	if (!bStarted)
 	{

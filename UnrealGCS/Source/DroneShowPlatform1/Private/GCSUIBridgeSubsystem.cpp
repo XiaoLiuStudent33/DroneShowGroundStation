@@ -12,12 +12,15 @@
 #include "Components/Button.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/EditableText.h"
 #include "Components/EditableTextBox.h"
 #include "Components/Slider.h"
 #include "Components/TextBlock.h"
 #include "Components/Widget.h"
 #include "DSPGCSProductionCommandProviderSubsystem.h"
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
+#include "DSPGCSFrozenAssignmentSyncSubsystem.h"
+#include "DSPGCSUploadJobSubsystem.h"
 #include "DroneFleetVisualizationActor.h"
 #include "EngineUtils.h"
 #include "UObject/ConstructorHelpers.h"
@@ -38,6 +41,7 @@
 #include "Misc/Paths.h"
 #include "Math/RotationMatrix.h"
 #include "RoutePreviewSubsystem.h"
+#include "RouteArtifactWorkspaceSubsystem.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/SWidget.h"
 
@@ -49,6 +53,128 @@
 
 namespace
 {
+	constexpr TCHAR UploadDashboardClassPath[] =
+		TEXT("/Game/UI/WBP_GCS_UploadDashboard.WBP_GCS_UploadDashboard_C");
+	constexpr float UploadDashboardToolbarGap = 12.0f;
+
+	template <typename T>
+	T* FindDashboardWidget(UUserWidget* Dashboard, const FName Name)
+	{
+		return Dashboard && Dashboard->WidgetTree
+			? Cast<T>(Dashboard->WidgetTree->FindWidget(Name))
+			: nullptr;
+	}
+
+	void SetDashboardText(
+		UUserWidget* Dashboard,
+		const FName Name,
+		const FString& Value,
+		const FString& ToolTip = {})
+	{
+		if (UTextBlock* Text = FindDashboardWidget<UTextBlock>(Dashboard, Name))
+		{
+			Text->SetText(FText::FromString(Value));
+			Text->SetToolTipText(FText::FromString(ToolTip));
+		}
+	}
+
+	bool ParseDashboardGlobalCap(const FText& Text, int32& OutValue)
+	{
+		const FString Trimmed = Text.ToString().TrimStartAndEnd();
+		int64 Parsed = 0;
+		if (Trimmed.IsEmpty() || !LexTryParseString(Parsed, *Trimmed) ||
+			Parsed < 1 || Parsed > 800)
+		{
+			return false;
+		}
+		OutValue = static_cast<int32>(Parsed);
+		return true;
+	}
+
+	void SetDashboardInputText(UWidget* Widget, const FString& Value)
+	{
+		if (UEditableText* Input = Cast<UEditableText>(Widget))
+			Input->SetText(FText::FromString(Value));
+		else if (UEditableTextBox* InputBox = Cast<UEditableTextBox>(Widget))
+			InputBox->SetText(FText::FromString(Value));
+	}
+
+	FText GetDashboardInputText(const UWidget* Widget)
+	{
+		if (const UEditableText* Input = Cast<UEditableText>(Widget))
+			return Input->GetText();
+		if (const UEditableTextBox* InputBox = Cast<UEditableTextBox>(Widget))
+			return InputBox->GetText();
+		return FText::GetEmpty();
+	}
+
+	void SetDashboardInputReadOnly(UWidget* Widget, const bool bReadOnly)
+	{
+		if (UEditableText* Input = Cast<UEditableText>(Widget))
+			Input->SetIsReadOnly(bReadOnly);
+		else if (UEditableTextBox* InputBox = Cast<UEditableTextBox>(Widget))
+			InputBox->SetIsReadOnly(bReadOnly);
+	}
+
+	bool ResolveAuthoredCanvasSize(UUserWidget* Widget, FVector2D& OutSize)
+	{
+		OutSize = FVector2D::ZeroVector;
+		if (!Widget || !Widget->WidgetTree)
+		{
+			return false;
+		}
+
+		Widget->ForceLayoutPrepass();
+		const FVector2D DesiredSize = Widget->GetDesiredSize();
+		if (DesiredSize.X > 1.0f && DesiredSize.Y > 1.0f)
+		{
+			OutSize = DesiredSize;
+			return true;
+		}
+
+		const UCanvasPanel* RootCanvas =
+			Cast<UCanvasPanel>(Widget->WidgetTree->RootWidget);
+		if (!RootCanvas)
+		{
+			return false;
+		}
+
+		FVector2D MaximumExtent = FVector2D::ZeroVector;
+		for (int32 ChildIndex = 0; ChildIndex < RootCanvas->GetChildrenCount(); ++ChildIndex)
+		{
+			const UWidget* Child = RootCanvas->GetChildAt(ChildIndex);
+			const UCanvasPanelSlot* ChildSlot = Child
+				? Cast<UCanvasPanelSlot>(Child->Slot)
+				: nullptr;
+			if (!ChildSlot)
+			{
+				continue;
+			}
+
+			const FAnchors ChildAnchors = ChildSlot->GetAnchors();
+			if (!ChildAnchors.Minimum.Equals(FVector2D::ZeroVector)
+				|| !ChildAnchors.Maximum.Equals(FVector2D::ZeroVector))
+			{
+				continue;
+			}
+
+			const FVector2D ChildSize = ChildSlot->GetAutoSize()
+				? Child->GetDesiredSize()
+				: ChildSlot->GetSize();
+			const FVector2D ChildTopLeft = ChildSlot->GetPosition()
+				- (ChildSize * ChildSlot->GetAlignment());
+			MaximumExtent.X = FMath::Max(MaximumExtent.X, ChildTopLeft.X + ChildSize.X);
+			MaximumExtent.Y = FMath::Max(MaximumExtent.Y, ChildTopLeft.Y + ChildSize.Y);
+		}
+
+		if (MaximumExtent.X <= 1.0f || MaximumExtent.Y <= 1.0f)
+		{
+			return false;
+		}
+		OutSize = MaximumExtent;
+		return true;
+	}
+
 	bool TryParseFiniteDouble(const FText& Text, double& OutValue)
 	{
 		const FString ValueString = Text.ToString().TrimStartAndEnd();
@@ -209,6 +335,7 @@ public:
 		{
 			Bridge->PollMarqueePlayerControllerInput();
 			Bridge->TickRoutePlaybackUI(DeltaTime);
+			Bridge->TickUploadDashboardUI(DeltaTime);
 		}
 	}
 
@@ -227,6 +354,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 {
 	UnregisterMarqueeInputProcessor();
 	ResetNavigationPages();
+	UnbindUploadDashboardControls();
 
 	MainWidgetRef = MainWidget;
 	TopBarWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_TopBar"));
@@ -234,6 +362,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	FleetPanelWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_FleetPanel"));
 	RightToolbarWidget =
 		FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_RightToolbar"));
+	BindUploadDashboardControls();
 	RightPanelWidget =
 		FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_RightPanel"));
 	PlaybackWidget =
@@ -376,6 +505,7 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 {
 	UnregisterMarqueeInputProcessor();
 	EndTopDownLocateLock();
+	ResetUploadDashboard();
 	if (UButton* SelectAllButton = FindFleetButton(TEXT("BTN_FleetSelectALL")))
 	{
 		SelectAllButton->OnClicked.RemoveDynamic(
@@ -462,6 +592,836 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 
 	Super::Deinitialize();
 }
+
+void UGCSUIBridgeSubsystem::BindUploadDashboardControls()
+{
+	UnbindUploadDashboardControls();
+
+	UButton* ToggleButton =
+		FGCSUIWidgetPresenter::FindButton(RightToolbarWidget.Get(), TEXT("BTN_Device"));
+	if (!ToggleButton)
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("Upload Dashboard toggle is unavailable: BTN_Device was not found."));
+		return;
+	}
+
+	UploadDashboardToggleButton = ToggleButton;
+	ToggleButton->OnClicked.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleUploadDashboardToggleClicked);
+	ToggleButton->OnClicked.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleUploadDashboardToggleClicked);
+	UE_LOG(LogTemp, Log, TEXT("[UploadDashboard] BTN_Device bound."));
+
+	if (UploadDashboardWidget)
+	{
+		if (!AttachUploadDashboardToMainLayout())
+		{
+			bUploadDashboardVisible = false;
+		}
+		ApplyUploadDashboardVisibility();
+	}
+}
+
+void UGCSUIBridgeSubsystem::UnbindUploadDashboardControls()
+{
+	if (UButton* ToggleButton = UploadDashboardToggleButton.Get())
+	{
+		ToggleButton->OnClicked.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleUploadDashboardToggleClicked);
+	}
+	UploadDashboardToggleButton.Reset();
+}
+
+bool UGCSUIBridgeSubsystem::CreateUploadDashboardIfNeeded()
+{
+	if (UploadDashboardWidget)
+	{
+		return AttachUploadDashboardToMainLayout();
+	}
+
+	UUserWidget* NewDashboard = nullptr;
+#if WITH_DEV_AUTOMATION_TESTS
+	if (UploadDashboardFactoryForTest)
+	{
+		NewDashboard = UploadDashboardFactoryForTest();
+	}
+	else
+#endif
+	{
+		const TSubclassOf<UUserWidget> DashboardClass =
+			LoadClass<UUserWidget>(nullptr, UploadDashboardClassPath);
+		if (!DashboardClass)
+		{
+			UE_LOG(
+				LogTemp,
+				Error,
+				TEXT("Unable to load Upload Dashboard class: %s"),
+				UploadDashboardClassPath);
+			return false;
+		}
+
+		NewDashboard = CreateWidget<UUserWidget>(
+			GetGameInstance(),
+			DashboardClass,
+			TEXT("RuntimeUploadDashboard"));
+	}
+
+	if (!NewDashboard)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Unable to create the Upload Dashboard widget."));
+		return false;
+	}
+
+	UploadDashboardWidget = NewDashboard;
+	UploadDashboardWidget->SetVisibility(ESlateVisibility::Collapsed);
+	if (!AttachUploadDashboardToMainLayout())
+	{
+		UploadDashboardWidget->RemoveFromParent();
+		UploadDashboardWidget = nullptr;
+		return false;
+	}
+	BindUploadDashboardDataControls();
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("[UploadDashboard] Created class=%s host=MainRootCanvas."),
+		*GetNameSafe(UploadDashboardWidget->GetClass()));
+	return true;
+}
+
+bool UGCSUIBridgeSubsystem::AttachUploadDashboardToMainLayout()
+{
+	UUserWidget* MainWidget = MainWidgetRef.Get();
+	UUserWidget* Dashboard = UploadDashboardWidget;
+	if (!MainWidget || !MainWidget->WidgetTree || !Dashboard)
+	{
+		UE_LOG(
+			LogTemp,
+			Error,
+			TEXT("Unable to attach Upload Dashboard: main widget or dashboard is unavailable."));
+		return false;
+	}
+
+	UCanvasPanel* MainCanvas = Cast<UCanvasPanel>(MainWidget->WidgetTree->RootWidget);
+	UCanvasPanelSlot* ToolbarSlot = RightToolbarWidget.IsValid()
+		? Cast<UCanvasPanelSlot>(RightToolbarWidget->Slot)
+		: nullptr;
+	if (!MainCanvas || !ToolbarSlot)
+	{
+		UE_LOG(
+			LogTemp,
+			Error,
+			TEXT("Unable to attach Upload Dashboard: main root or RightToolbar is not Canvas-backed."));
+		return false;
+	}
+
+	const FAnchors ToolbarAnchors = ToolbarSlot->GetAnchors();
+	if (!ToolbarAnchors.Minimum.Equals(ToolbarAnchors.Maximum))
+	{
+		UE_LOG(
+			LogTemp,
+			Error,
+			TEXT("Unable to attach Upload Dashboard: stretched RightToolbar anchors are unsupported."));
+		return false;
+	}
+
+	if (Dashboard->GetParent() != MainCanvas)
+	{
+		Dashboard->RemoveFromParent();
+		if (!MainCanvas->AddChildToCanvas(Dashboard))
+		{
+			UE_LOG(LogTemp, Error, TEXT("Unable to attach Upload Dashboard to the main Canvas."));
+			return false;
+		}
+	}
+
+	UCanvasPanelSlot* DashboardSlot = Cast<UCanvasPanelSlot>(Dashboard->Slot);
+	if (!DashboardSlot)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Upload Dashboard did not receive a Canvas slot."));
+		return false;
+	}
+
+	const FVector2D ToolbarTopLeft = ToolbarSlot->GetPosition()
+		- (ToolbarSlot->GetSize() * ToolbarSlot->GetAlignment());
+	FVector2D DashboardSize = FVector2D::ZeroVector;
+	if (!ResolveAuthoredCanvasSize(Dashboard, DashboardSize))
+	{
+		UE_LOG(
+			LogTemp,
+			Error,
+			TEXT("Unable to attach Upload Dashboard: authored panel size is unavailable."));
+		return false;
+	}
+	DashboardSlot->SetAnchors(ToolbarAnchors);
+	DashboardSlot->SetAlignment(FVector2D(1.0f, 0.0f));
+	DashboardSlot->SetPosition(FVector2D(
+		ToolbarTopLeft.X - UploadDashboardToolbarGap,
+		ToolbarTopLeft.Y));
+	DashboardSlot->SetAutoSize(false);
+	DashboardSlot->SetSize(DashboardSize);
+	DashboardSlot->SetZOrder(ToolbarSlot->GetZOrder() + 1);
+	Dashboard->ForceLayoutPrepass();
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("[UploadDashboard] Attached size=(%.0f,%.0f) toolbarGap=%.0f."),
+		DashboardSize.X,
+		DashboardSize.Y,
+		UploadDashboardToolbarGap);
+	return true;
+}
+
+void UGCSUIBridgeSubsystem::HandleUploadDashboardToggleClicked()
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	++UploadDashboardToggleCountForTest;
+#endif
+	if (!bUploadDashboardVisible)
+	{
+		if (!CreateUploadDashboardIfNeeded())
+		{
+			bUploadDashboardVisible = false;
+			ApplyUploadDashboardVisibility();
+			return;
+		}
+		bUploadDashboardVisible = true;
+	}
+	else
+	{
+		bUploadDashboardVisible = false;
+	}
+	ApplyUploadDashboardVisibility();
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("[UploadDashboard] Visibility=%s instance=%s."),
+		bUploadDashboardVisible ? TEXT("Visible") : TEXT("Collapsed"),
+		*GetNameSafe(UploadDashboardWidget));
+}
+
+void UGCSUIBridgeSubsystem::ApplyUploadDashboardVisibility()
+{
+	if (UploadDashboardWidget)
+	{
+		UploadDashboardWidget->SetVisibility(
+			bUploadDashboardVisible
+				? ESlateVisibility::Visible
+				: ESlateVisibility::Collapsed);
+		if (bUploadDashboardVisible)
+		{
+			if (UDSPGCSUploadJobSubsystem* Upload = GetGameInstance()
+				? GetGameInstance()->GetSubsystem<UDSPGCSUploadJobSubsystem>()
+				: nullptr)
+			{
+				const FDSPGCSMavFtpRuntimeConfigStatus Status =
+					Upload->GetMavFtpRuntimeConfigStatus();
+				if (!Status.bHasSnapshot && !Status.bRequestInFlight)
+				{
+					FString Ignored;
+					Upload->RequestMavFtpRuntimeConfigSnapshot(Ignored);
+				}
+			}
+			RefreshUploadDashboardUI();
+		}
+	}
+}
+
+void UGCSUIBridgeSubsystem::ResetUploadDashboard()
+{
+	UnbindUploadDashboardDataControls();
+	UnbindUploadDashboardControls();
+	if (UploadDashboardWidget)
+	{
+		UploadDashboardWidget->SetVisibility(ESlateVisibility::Collapsed);
+		UploadDashboardWidget->RemoveFromParent();
+		UploadDashboardWidget = nullptr;
+	}
+	bUploadDashboardVisible = false;
+	bUploadDashboardDraftDirty = false;
+	bUploadDashboardApplyPending = false;
+	bUpdatingUploadDashboardDraft = false;
+	UploadDashboardDraftGlobalCap = 0;
+	UploadDashboardObservedConfigRevision = 0;
+	UploadDashboardObservedAuthoritySessionID.Reset();
+	UploadDashboardTuningStatus = TEXT("NOT CONNECTED");
+	UploadDashboardTuningDiagnostic.Reset();
+	UploadDashboardRefreshAccumulator = 0.0f;
+#if WITH_DEV_AUTOMATION_TESTS
+	UploadDashboardFactoryForTest = nullptr;
+#endif
+}
+
+void UGCSUIBridgeSubsystem::BindUploadDashboardDataControls()
+{
+	UnbindUploadDashboardDataControls();
+	UUserWidget* Dashboard = UploadDashboardWidget;
+	if (!Dashboard || !Dashboard->WidgetTree)
+	{
+		return;
+	}
+
+	UploadDashboardApplyButton = FindDashboardWidget<UButton>(
+		Dashboard, TEXT("BTN_ApplyMavFtpTuning"));
+	UploadDashboardAutoCapButton = FindDashboardWidget<UButton>(
+		Dashboard, TEXT("BTN_AutoGlobalWriteCap"));
+	UploadDashboardRestoreButton = FindDashboardWidget<UButton>(
+		Dashboard, TEXT("BTN_RestoreMavFtpBaseline"));
+	UploadDashboardWriteWindowInput = Dashboard->WidgetTree->FindWidget(
+		TEXT("EDT_MavFtpWriteWindow"));
+	UploadDashboardGlobalCapInput = Dashboard->WidgetTree->FindWidget(
+		TEXT("EDT_MavFtpGlobalWriteCap"));
+	UploadDashboardSegmentItemsInput = Dashboard->WidgetTree->FindWidget(
+		TEXT("EDT_MavFtpSegmentItems"));
+	UploadDashboardRequestTimeoutInput = Dashboard->WidgetTree->FindWidget(
+		TEXT("EDT_MavFtpRequestTimeoutMs"));
+	UploadDashboardTerminateTimeoutInput = Dashboard->WidgetTree->FindWidget(
+		TEXT("EDT_MavFtpTerminateTimeoutMs"));
+	UploadDashboardRetryCountInput = Dashboard->WidgetTree->FindWidget(
+		TEXT("EDT_MavFtpRetryCount"));
+
+	if (UButton* Button = UploadDashboardApplyButton.Get())
+	{
+		Button->OnClicked.RemoveDynamic(
+			this, &UGCSUIBridgeSubsystem::HandleUploadDashboardApplyClicked);
+		Button->OnClicked.AddDynamic(
+			this, &UGCSUIBridgeSubsystem::HandleUploadDashboardApplyClicked);
+	}
+	if (UButton* Button = UploadDashboardAutoCapButton.Get())
+	{
+		Button->OnClicked.RemoveDynamic(
+			this, &UGCSUIBridgeSubsystem::HandleUploadDashboardAutoCapClicked);
+		Button->OnClicked.AddDynamic(
+			this, &UGCSUIBridgeSubsystem::HandleUploadDashboardAutoCapClicked);
+	}
+	if (UButton* Button = UploadDashboardRestoreButton.Get())
+	{
+		Button->OnClicked.RemoveDynamic(
+			this, &UGCSUIBridgeSubsystem::HandleUploadDashboardRestoreClicked);
+		Button->OnClicked.AddDynamic(
+			this, &UGCSUIBridgeSubsystem::HandleUploadDashboardRestoreClicked);
+	}
+	if (UEditableText* Input = Cast<UEditableText>(
+		UploadDashboardGlobalCapInput.Get()))
+	{
+		Input->OnTextChanged.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleUploadDashboardGlobalCapTextChanged);
+		Input->OnTextChanged.AddDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleUploadDashboardGlobalCapTextChanged);
+	}
+	else if (UEditableTextBox* InputBox = Cast<UEditableTextBox>(
+		UploadDashboardGlobalCapInput.Get()))
+	{
+		InputBox->OnTextChanged.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleUploadDashboardGlobalCapTextChanged);
+		InputBox->OnTextChanged.AddDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleUploadDashboardGlobalCapTextChanged);
+	}
+
+	for (const TWeakObjectPtr<UWidget>& ReadOnly : {
+		UploadDashboardWriteWindowInput,
+		UploadDashboardSegmentItemsInput,
+		UploadDashboardRequestTimeoutInput,
+		UploadDashboardTerminateTimeoutInput,
+		UploadDashboardRetryCountInput })
+	{
+		SetDashboardInputReadOnly(ReadOnly.Get(), true);
+	}
+
+	bUploadDashboardDataBound = UploadDashboardApplyButton.IsValid() &&
+		UploadDashboardAutoCapButton.IsValid() &&
+		UploadDashboardRestoreButton.IsValid() &&
+		UploadDashboardWriteWindowInput.IsValid() &&
+		UploadDashboardGlobalCapInput.IsValid() &&
+		UploadDashboardSegmentItemsInput.IsValid() &&
+		UploadDashboardRequestTimeoutInput.IsValid() &&
+		UploadDashboardTerminateTimeoutInput.IsValid() &&
+		UploadDashboardRetryCountInput.IsValid();
+	if (!bUploadDashboardDataBound)
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("[UploadDashboard] One or more required C++ data controls are missing."));
+	}
+	RefreshUploadDashboardUI();
+}
+
+void UGCSUIBridgeSubsystem::UnbindUploadDashboardDataControls()
+{
+	if (UButton* Button = UploadDashboardApplyButton.Get())
+	{
+		Button->OnClicked.RemoveDynamic(
+			this, &UGCSUIBridgeSubsystem::HandleUploadDashboardApplyClicked);
+	}
+	if (UButton* Button = UploadDashboardAutoCapButton.Get())
+	{
+		Button->OnClicked.RemoveDynamic(
+			this, &UGCSUIBridgeSubsystem::HandleUploadDashboardAutoCapClicked);
+	}
+	if (UButton* Button = UploadDashboardRestoreButton.Get())
+	{
+		Button->OnClicked.RemoveDynamic(
+			this, &UGCSUIBridgeSubsystem::HandleUploadDashboardRestoreClicked);
+	}
+	if (UEditableText* Input = Cast<UEditableText>(
+		UploadDashboardGlobalCapInput.Get()))
+	{
+		Input->OnTextChanged.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleUploadDashboardGlobalCapTextChanged);
+	}
+	else if (UEditableTextBox* InputBox = Cast<UEditableTextBox>(
+		UploadDashboardGlobalCapInput.Get()))
+	{
+		InputBox->OnTextChanged.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleUploadDashboardGlobalCapTextChanged);
+	}
+	UploadDashboardApplyButton.Reset();
+	UploadDashboardAutoCapButton.Reset();
+	UploadDashboardRestoreButton.Reset();
+	UploadDashboardWriteWindowInput.Reset();
+	UploadDashboardGlobalCapInput.Reset();
+	UploadDashboardSegmentItemsInput.Reset();
+	UploadDashboardRequestTimeoutInput.Reset();
+	UploadDashboardTerminateTimeoutInput.Reset();
+	UploadDashboardRetryCountInput.Reset();
+	bUploadDashboardDataBound = false;
+}
+
+bool UGCSUIBridgeSubsystem::GetUploadDashboardTargetCount(
+	int32& OutTargetCount) const
+{
+	OutTargetCount = 0;
+	const UGameInstance* GameInstance = GetGameInstance();
+	if (!GameInstance)
+	{
+		return false;
+	}
+	if (const UDSPGCSUploadJobSubsystem* Upload =
+		GameInstance->GetSubsystem<UDSPGCSUploadJobSubsystem>())
+	{
+		if (const dspgcs::UploadJobSnapshotDTO* Job =
+			Upload->GetStateMirror().GetSnapshot())
+		{
+			if (Job->matchedCount > 0 &&
+				Job->matchedCount <= static_cast<uint32>(MAX_int32))
+			{
+				OutTargetCount = static_cast<int32>(Job->matchedCount);
+				return true;
+			}
+		}
+	}
+	if (const UDSPGCSFrozenAssignmentSyncSubsystem* Sync =
+		GameInstance->GetSubsystem<UDSPGCSFrozenAssignmentSyncSubsystem>())
+	{
+		const FDSPGCSFrozenAssignmentSyncStatus Status = Sync->GetSyncStatus();
+		if (Status.State == EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted &&
+			Status.MatchedCount > 0)
+		{
+			OutTargetCount = Status.MatchedCount;
+			return true;
+		}
+	}
+	const int32 SelectedCount = GetSelectedCommandDroneIDs().Num();
+	if (SelectedCount > 0)
+	{
+		OutTargetCount = SelectedCount;
+		return true;
+	}
+	return false;
+}
+
+bool UGCSUIBridgeSubsystem::IsUploadDashboardMutationLocked() const
+{
+	if (RouteWorkflowCoordinator &&
+		RouteWorkflowCoordinator->IsCommandSelectionMutationBlocked())
+	{
+		return true;
+	}
+	const UGameInstance* GameInstance = GetGameInstance();
+	const UDSPGCSUploadJobSubsystem* Upload = GameInstance
+		? GameInstance->GetSubsystem<UDSPGCSUploadJobSubsystem>() : nullptr;
+	if (!Upload)
+	{
+		return false;
+	}
+	const FDSPGCSUploadJobCommandStatus Command = Upload->GetCommandStatus();
+	if (Command.bCommandInFlight)
+	{
+		return true;
+	}
+	if (const dspgcs::UploadJobSnapshotDTO* Job =
+		Upload->GetStateMirror().GetSnapshot())
+	{
+		return Job->jobState != dspgcs::UploadJobState::Completed &&
+			Job->jobState != dspgcs::UploadJobState::Failed &&
+			Job->jobState != dspgcs::UploadJobState::Cancelled;
+	}
+	return Command.bHasExecutableJob;
+}
+
+void UGCSUIBridgeSubsystem::SetUploadDashboardStatus(
+	const FString& Status,
+	const FString& Diagnostic)
+{
+	UploadDashboardTuningStatus = Status;
+	UploadDashboardTuningDiagnostic = Diagnostic.Left(512);
+	SetDashboardText(
+		UploadDashboardWidget,
+		TEXT("TXT_MavFtpTuningStatus"),
+		UploadDashboardTuningStatus,
+		UploadDashboardTuningDiagnostic);
+}
+
+void UGCSUIBridgeSubsystem::TickUploadDashboardUI(const float DeltaSeconds)
+{
+	if (!bUploadDashboardVisible || !UploadDashboardWidget)
+	{
+		UploadDashboardRefreshAccumulator = 0.0f;
+		return;
+	}
+	UploadDashboardRefreshAccumulator += FMath::Max(0.0f, DeltaSeconds);
+	if (UploadDashboardRefreshAccumulator < UploadDashboardRefreshIntervalSeconds)
+	{
+		return;
+	}
+	UploadDashboardRefreshAccumulator = 0.0f;
+	RefreshUploadDashboardUI();
+}
+
+void UGCSUIBridgeSubsystem::RefreshUploadDashboardUI()
+{
+	UUserWidget* Dashboard = UploadDashboardWidget;
+	UGameInstance* GameInstance = GetGameInstance();
+	if (!Dashboard || !GameInstance)
+	{
+		return;
+	}
+
+	UDSPGCSUploadJobSubsystem* Upload =
+		GameInstance->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	const FDSPGCSMavFtpRuntimeConfigStatus ConfigStatus = Upload
+		? Upload->GetMavFtpRuntimeConfigStatus()
+		: FDSPGCSMavFtpRuntimeConfigStatus{};
+	const dspgcs::MavFtpRuntimeConfigSnapshotDTO* Config = Upload
+		? Upload->GetMavFtpRuntimeConfigSnapshot() : nullptr;
+	const TCHAR* HeaderStatus = TEXT("LOADING");
+	switch (ConfigStatus.State)
+	{
+	case EDSPGCSMavFtpRuntimeConfigState::Connected:
+		HeaderStatus = Config ? TEXT("CONNECTED") : TEXT("LOADING");
+		break;
+	case EDSPGCSMavFtpRuntimeConfigState::Disconnected:
+		HeaderStatus = TEXT("DISCONNECTED");
+		break;
+	case EDSPGCSMavFtpRuntimeConfigState::Stale:
+		HeaderStatus = TEXT("STALE");
+		break;
+	default:
+		break;
+	}
+	SetDashboardText(Dashboard, TEXT("TXT_Status"), HeaderStatus,
+		ConfigStatus.LastSafeDiagnostic);
+
+	const bool bSessionChanged = Config &&
+		!UploadDashboardObservedAuthoritySessionID.IsEmpty() &&
+		UploadDashboardObservedAuthoritySessionID !=
+			FString(UTF8_TO_TCHAR(Config->authoritySessionId.c_str()));
+	const bool bRevisionChanged = Config &&
+		UploadDashboardObservedConfigRevision != Config->configRevision;
+	if (Config && (UploadDashboardObservedAuthoritySessionID.IsEmpty() ||
+		bSessionChanged || bRevisionChanged))
+	{
+		if (!bUploadDashboardDraftDirty && !bUploadDashboardApplyPending)
+		{
+			UploadDashboardDraftGlobalCap = static_cast<int32>(
+				Config->runtimeAcceptedGlobalWriteCap);
+		}
+		else if (bSessionChanged || bRevisionChanged)
+		{
+			SetUploadDashboardStatus(
+				TEXT("STALE"),
+				TEXT("Console Runtime Config changed while the local Draft was modified."));
+		}
+		UploadDashboardObservedAuthoritySessionID =
+			UTF8_TO_TCHAR(Config->authoritySessionId.c_str());
+		UploadDashboardObservedConfigRevision = Config->configRevision;
+	}
+
+	if (bUploadDashboardApplyPending && !ConfigStatus.bRequestInFlight)
+	{
+		bUploadDashboardApplyPending = false;
+		if (ConfigStatus.bLastApplyAccepted && Config)
+		{
+			UploadDashboardDraftGlobalCap = static_cast<int32>(
+				Config->runtimeAcceptedGlobalWriteCap);
+			bUploadDashboardDraftDirty = false;
+			SetUploadDashboardStatus(
+				TEXT("APPLIED"), ConfigStatus.LastSafeDiagnostic);
+		}
+		else
+		{
+			SetUploadDashboardStatus(
+				TEXT("REJECTED"), ConfigStatus.LastSafeDiagnostic);
+		}
+	}
+	else if (!Config)
+	{
+		SetUploadDashboardStatus(TEXT("NOT CONNECTED"),
+			ConfigStatus.LastSafeDiagnostic);
+	}
+	else if (IsUploadDashboardMutationLocked())
+	{
+		SetUploadDashboardStatus(TEXT("JOB LOCKED"));
+	}
+	else if (bUploadDashboardApplyPending)
+	{
+		SetUploadDashboardStatus(TEXT("APPLYING"));
+	}
+	else if (bUploadDashboardDraftDirty &&
+		UploadDashboardTuningStatus != TEXT("STALE") &&
+		UploadDashboardTuningStatus != TEXT("REJECTED"))
+	{
+		SetUploadDashboardStatus(TEXT("MODIFIED"));
+	}
+	else if (!bUploadDashboardDraftDirty &&
+		UploadDashboardTuningStatus != TEXT("APPLIED"))
+	{
+		SetUploadDashboardStatus(TEXT("CURRENT"));
+	}
+
+	bUpdatingUploadDashboardDraft = true;
+	if (Config)
+	{
+		SetDashboardInputText(UploadDashboardWriteWindowInput.Get(),
+			FString::FromInt(Config->writeWindow));
+		SetDashboardInputText(UploadDashboardSegmentItemsInput.Get(),
+			FString::FromInt(Config->segmentItems));
+		SetDashboardInputText(UploadDashboardRequestTimeoutInput.Get(),
+			FString::FromInt(Config->requestTimeoutMs));
+		SetDashboardInputText(UploadDashboardTerminateTimeoutInput.Get(),
+			FString::FromInt(Config->terminateTimeoutMs));
+		SetDashboardInputText(UploadDashboardRetryCountInput.Get(),
+			FString::FromInt(Config->retryCount));
+		SetDashboardText(Dashboard, TEXT("TXT_MavFtpWritePayloadValue"),
+			FString::Printf(TEXT("%u bytes"), Config->writePayload));
+	}
+	else
+	{
+		for (const TWeakObjectPtr<UWidget>& InputRef : {
+			UploadDashboardWriteWindowInput,
+			UploadDashboardSegmentItemsInput,
+			UploadDashboardRequestTimeoutInput,
+			UploadDashboardTerminateTimeoutInput,
+			UploadDashboardRetryCountInput })
+		{
+			SetDashboardInputText(InputRef.Get(), TEXT("-"));
+		}
+		SetDashboardText(Dashboard, TEXT("TXT_MavFtpWritePayloadValue"), TEXT("-"));
+	}
+	if (UWidget* Input = UploadDashboardGlobalCapInput.Get())
+	{
+		if (!bUploadDashboardDraftDirty && Config)
+			UploadDashboardDraftGlobalCap = static_cast<int32>(
+				Config->runtimeAcceptedGlobalWriteCap);
+		if (UploadDashboardDraftGlobalCap > 0)
+			SetDashboardInputText(Input,
+				FString::FromInt(UploadDashboardDraftGlobalCap));
+		SetDashboardInputReadOnly(Input,
+			!Config || IsUploadDashboardMutationLocked() ||
+			bUploadDashboardApplyPending);
+	}
+	bUpdatingUploadDashboardDraft = false;
+
+	const URouteArtifactWorkspaceSubsystem* Workspace =
+		GameInstance->GetSubsystem<URouteArtifactWorkspaceSubsystem>();
+	const FRouteArtifactSourceIdentity* Source = Workspace
+		? Workspace->GetCurrentSourceIdentity() : nullptr;
+	SetDashboardText(Dashboard, TEXT("TXT_MissionFile"),
+		Source ? Source->SourceDisplayFileName : TEXT("-"));
+
+	int32 TargetCount = 0;
+	const bool bHasTargets = GetUploadDashboardTargetCount(TargetCount);
+	SetDashboardText(Dashboard, TEXT("TXT_TotalDroneCount"),
+		bHasTargets ? FString::FromInt(TargetCount) : TEXT("-"));
+	const dspgcs::UploadJobSnapshotDTO* Job = Upload
+		? Upload->GetStateMirror().GetSnapshot() : nullptr;
+	SetDashboardText(Dashboard, TEXT("TXT_TotalItems"),
+		Job && Job->artifactMissionItemsTotal > 0
+			? FString::Printf(TEXT("%llu"),
+				static_cast<unsigned long long>(Job->artifactMissionItemsTotal))
+			: TEXT("-"));
+	SetDashboardText(Dashboard, TEXT("TXT_TotalSegments"),
+		Job && Job->plannedSegmentCountTotal > 0
+			? FString::Printf(TEXT("%llu"),
+				static_cast<unsigned long long>(Job->plannedSegmentCountTotal))
+			: TEXT("-"));
+
+	const int32 AppliedConcurrency = RouteWorkflowCoordinator
+		? RouteWorkflowCoordinator->GetAppliedMaxConcurrentTargets() : 1;
+	SetDashboardText(Dashboard, TEXT("TXT_AnalysisMaxConcurrencyValue"),
+		FString::FromInt(AppliedConcurrency));
+	if (Config && bHasTargets)
+	{
+		const int32 EffectiveTargets = FMath::Min(AppliedConcurrency, TargetCount);
+		const int32 RequiredCap = FMath::Min(
+			EffectiveTargets * static_cast<int32>(Config->writeWindow), 800);
+		const bool bFullWindow =
+			static_cast<int32>(Config->runtimeAcceptedGlobalWriteCap) >= RequiredCap;
+		SetDashboardText(Dashboard, TEXT("TXT_MavFtpRequiredGlobalCap"),
+			FString::FromInt(RequiredCap));
+		SetDashboardText(Dashboard, TEXT("TXT_MavFtpAppliedGlobalCap"),
+			FString::FromInt(Config->runtimeAcceptedGlobalWriteCap));
+		SetDashboardText(Dashboard, TEXT("TXT_MavFtpFullWindowStatus"),
+			bFullWindow ? TEXT("YES") : TEXT("NO"));
+	}
+	else
+	{
+		SetDashboardText(Dashboard, TEXT("TXT_MavFtpRequiredGlobalCap"), TEXT("-"));
+		SetDashboardText(Dashboard, TEXT("TXT_MavFtpAppliedGlobalCap"),
+			Config ? FString::FromInt(Config->runtimeAcceptedGlobalWriteCap) : TEXT("-"));
+		SetDashboardText(Dashboard, TEXT("TXT_MavFtpFullWindowStatus"), TEXT("-"));
+	}
+
+	const bool bCanMutate = Config &&
+		ConfigStatus.State == EDSPGCSMavFtpRuntimeConfigState::Connected &&
+		!ConfigStatus.bRequestInFlight && !IsUploadDashboardMutationLocked();
+	if (UButton* Button = UploadDashboardApplyButton.Get())
+		Button->SetIsEnabled(bCanMutate && bUploadDashboardDraftDirty);
+	if (UButton* Button = UploadDashboardAutoCapButton.Get())
+		Button->SetIsEnabled(bCanMutate && bHasTargets);
+	if (UButton* Button = UploadDashboardRestoreButton.Get())
+		Button->SetIsEnabled(bCanMutate);
+}
+
+void UGCSUIBridgeSubsystem::HandleUploadDashboardGlobalCapTextChanged(
+	const FText& Text)
+{
+	if (bUpdatingUploadDashboardDraft)
+	{
+		return;
+	}
+	int32 Parsed = 0;
+	if (ParseDashboardGlobalCap(Text, Parsed))
+	{
+		UploadDashboardDraftGlobalCap = Parsed;
+		bUploadDashboardDraftDirty = true;
+		SetUploadDashboardStatus(TEXT("MODIFIED"));
+	}
+	else
+	{
+		bUploadDashboardDraftDirty = true;
+		SetUploadDashboardStatus(
+			TEXT("REJECTED"), TEXT("Global Write Cap must be an integer in range 1..800."));
+	}
+	RefreshUploadDashboardUI();
+}
+
+void UGCSUIBridgeSubsystem::HandleUploadDashboardApplyClicked()
+{
+	if (bUploadDashboardApplyPending || IsUploadDashboardMutationLocked())
+	{
+		return;
+	}
+	int32 Candidate = 0;
+	if (!UploadDashboardGlobalCapInput.IsValid() ||
+		!ParseDashboardGlobalCap(
+			GetDashboardInputText(UploadDashboardGlobalCapInput.Get()), Candidate))
+	{
+		SetUploadDashboardStatus(
+			TEXT("REJECTED"), TEXT("Global Write Cap must be an integer in range 1..800."));
+		RefreshUploadDashboardUI();
+		return;
+	}
+	UDSPGCSUploadJobSubsystem* Upload = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UDSPGCSUploadJobSubsystem>() : nullptr;
+	FString Error;
+	if (!Upload || !Upload->ApplyMavFtpRuntimeGlobalCap(Candidate, Error))
+	{
+		SetUploadDashboardStatus(TEXT("REJECTED"), Error);
+		RefreshUploadDashboardUI();
+		return;
+	}
+	UploadDashboardDraftGlobalCap = Candidate;
+	bUploadDashboardApplyPending = true;
+	SetUploadDashboardStatus(TEXT("APPLYING"));
+	RefreshUploadDashboardUI();
+}
+
+void UGCSUIBridgeSubsystem::HandleUploadDashboardAutoCapClicked()
+{
+	const UDSPGCSUploadJobSubsystem* Upload = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UDSPGCSUploadJobSubsystem>() : nullptr;
+	const auto* Config = Upload ? Upload->GetMavFtpRuntimeConfigSnapshot() : nullptr;
+	int32 TargetCount = 0;
+	if (!Config || !GetUploadDashboardTargetCount(TargetCount))
+	{
+		SetUploadDashboardStatus(
+			TEXT("REJECTED"), TEXT("Auto Cap requires a current Config and Target set."));
+		return;
+	}
+	const int32 AppliedConcurrency = RouteWorkflowCoordinator
+		? RouteWorkflowCoordinator->GetAppliedMaxConcurrentTargets() : 1;
+	UploadDashboardDraftGlobalCap = FMath::Min(
+		FMath::Min(AppliedConcurrency, TargetCount) *
+			static_cast<int32>(Config->writeWindow), 800);
+	bUploadDashboardDraftDirty = true;
+	SetUploadDashboardStatus(TEXT("MODIFIED"));
+	RefreshUploadDashboardUI();
+}
+
+void UGCSUIBridgeSubsystem::HandleUploadDashboardRestoreClicked()
+{
+	const UDSPGCSUploadJobSubsystem* Upload = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UDSPGCSUploadJobSubsystem>() : nullptr;
+	const auto* Config = Upload ? Upload->GetMavFtpRuntimeConfigSnapshot() : nullptr;
+	if (!Config)
+	{
+		SetUploadDashboardStatus(TEXT("NOT CONNECTED"));
+		return;
+	}
+	UploadDashboardDraftGlobalCap = static_cast<int32>(
+		Config->bootDefaultGlobalWriteCap);
+	bUploadDashboardDraftDirty = true;
+	SetUploadDashboardStatus(TEXT("MODIFIED"));
+	RefreshUploadDashboardUI();
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+void UGCSUIBridgeSubsystem::BindUploadDashboardForTest(
+	UUserWidget* MainWidget,
+	UUserWidget* RightToolbar)
+{
+	UnbindUploadDashboardControls();
+	MainWidgetRef = MainWidget;
+	RightToolbarWidget = RightToolbar;
+	BindUploadDashboardControls();
+}
+
+void UGCSUIBridgeSubsystem::SetUploadDashboardFactoryForTest(
+	TFunction<UUserWidget*()> Factory)
+{
+	UploadDashboardFactoryForTest = MoveTemp(Factory);
+}
+
+bool UGCSUIBridgeSubsystem::IsUploadDashboardToggleBoundForTest() const
+{
+	const UButton* Button = UploadDashboardToggleButton.Get();
+	return Button && Button->OnClicked.IsAlreadyBound(
+		this,
+		&UGCSUIBridgeSubsystem::HandleUploadDashboardToggleClicked);
+}
+#endif
 
 EGCSDroneDisplayStatus UGCSUIBridgeSubsystem::ResolveDroneDisplayStatus(
 	const EDSPGCSTelemetryLinkState ServerState,

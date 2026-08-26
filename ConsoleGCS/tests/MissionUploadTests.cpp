@@ -1472,7 +1472,21 @@ namespace
 			manager.GetLastTerminalDiagnosticForTest().find("TerminalPhase=") !=
 				std::string::npos &&
 			manager.GetLastTerminalDiagnosticForTest().find(
-				"ArtifactRouteItems=3 WireMissionItems=4") != std::string::npos &&
+				"ArtifactRouteItems=3") != std::string::npos &&
+			manager.GetLastTerminalDiagnosticForTest().find(
+				"WireMissionItems=4") != std::string::npos &&
+			manager.GetLastTerminalDiagnosticForTest().find(" Endpoint=") !=
+				std::string::npos &&
+			manager.GetLastTerminalDiagnosticForTest().find(
+				" Result=Succeeded") != std::string::npos &&
+			manager.GetLastTerminalDiagnosticForTest().find(
+				" ArtifactItems=3") != std::string::npos &&
+			manager.GetLastTerminalDiagnosticForTest().find(
+				" WireItems=4") != std::string::npos &&
+			manager.GetLastTerminalDiagnosticForTest().find(
+				" PeakOutstanding=") != std::string::npos &&
+			manager.GetLastTerminalDiagnosticForTest().find(
+				" WriteDurationMs=") != std::string::npos &&
 			manager.GetLastTerminalDiagnosticForTest().find("WireBytesSent=") !=
 				std::string::npos &&
 			manager.GetLastJobSummaryForTest().find("PeakPreparedMissions=") !=

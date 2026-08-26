@@ -315,7 +315,9 @@ void UDSPGCSProductionTelemetryProviderSubsystem::HandleTransportFrame(
 	if (Envelope.messageType == dspgcs::UploadJobMessageTypes::CommandAck ||
 		Envelope.messageType == dspgcs::UploadJobMessageTypes::Snapshot ||
 		Envelope.messageType == dspgcs::UploadJobMessageTypes::RouteStatePage ||
-		Envelope.messageType == dspgcs::UploadJobMessageTypes::RouteStateDelta)
+		Envelope.messageType == dspgcs::UploadJobMessageTypes::RouteStateDelta ||
+		Envelope.messageType == dspgcs::MavFtpRuntimeConfigMessageTypes::Ack ||
+		Envelope.messageType == dspgcs::MavFtpRuntimeConfigMessageTypes::Snapshot)
 	{
 		FUploadJobFrameHandler Handler;
 		{
