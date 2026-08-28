@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Components/ComboBoxString.h"
 #include "Containers/Ticker.h"
 #include "RouteAssignmentTypes.h"
 #include "UObject/Object.h"
@@ -58,6 +59,36 @@ struct FGCSRouteAutoStartSnapshot
 	FString SyncTransactionID;
 	bool bJobStartAttempted = false;
 	bool bJobStartDispatched = false;
+	bool bUsesConfirmedNpzMapping = false;
+	int64 ConfirmedMappingRevision = 0;
+};
+
+struct FGCSConfirmedNpzMappingEntry
+{
+	FString DroneID;
+	FString EndpointIdentity;
+	int32 RouteSlotIndex = INDEX_NONE;
+	double MatchDistanceMeters = 0.0;
+};
+
+/** Session-only operator confirmation. Upload authority remains Working/Frozen Assignment. */
+struct FGCSConfirmedNpzMappingSnapshot
+{
+	int64 ConfirmationRevision = 0;
+	int64 RouteDatasetGeneration = 0;
+	FString SourceDatasetDigest;
+	int32 RouteCount = 0;
+	int32 NormalizedShowOriginLatitudeE7 = 0;
+	int32 NormalizedShowOriginLongitudeE7 = 0;
+	FString F1CaptureAuthoritySessionID;
+	FString F1CaptureRequestID;
+	int64 F1CaptureRevision = 0;
+	FString SelectionDigest;
+	TArray<FString> SelectedDroneIDs;
+	FString FleetSessionID;
+	TArray<FGCSConfirmedNpzMappingEntry> Entries;
+	bool bValid = false;
+	FString InvalidReason;
 };
 
 struct FGCSRouteAutoStartSyncObservation
@@ -156,6 +187,41 @@ struct FGCSRouteUploadCommandGate
 	FString StartBlockedReason;
 };
 
+enum class EGCSShowOriginDraftSource : uint8
+{
+	Official,
+	Manual,
+	CapturedCandidate,
+	InvalidatedCandidate
+};
+
+/** Immutable audit payload produced from one Ready explicit F.1 capture. */
+struct FGCSShowOriginCandidate
+{
+	FString DroneID;
+	FString EndpointIdentity;
+	FString CaptureAuthoritySessionID;
+	FString CaptureRequestID;
+	int64 CaptureRevision = 0;
+	double Latitude = 0.0;
+	double Longitude = 0.0;
+	double AltitudeAMSL = 0.0;
+	int32 FixType = 0;
+	int64 FirstGpsSampleUtcMs = 0;
+	int64 LastGpsSampleUtcMs = 0;
+	int32 UniqueSampleCount = 0;
+	double MedianResidualMeters = 0.0;
+	double RobustSpreadMeters = 0.0;
+	double MaxResidualMeters = 0.0;
+	int64 CaptureCompletedUtcMs = 0;
+	FString FleetSessionID;
+	int64 CandidateRevision = 0;
+	bool bValid = false;
+	bool bGpsProvenanceIntact = false;
+	bool bApplied = false;
+	FString InvalidReason;
+};
+
 #if WITH_DEV_AUTOMATION_TESTS
 struct FGCSRouteWorkflowCommandTestHooks
 {
@@ -246,7 +312,11 @@ public:
 	static FGCSRouteUploadCommandGate ComputeUploadCommandGate(
 		const FGCSRouteUploadCommandGateInputs& Inputs);
 	static FString FormatAutoStartState(EGCSRouteAutoStartState State);
-
+	static bool BuildCaptureBoundAssignmentSource(
+		const FRouteAssignmentSourceSnapshot& RouteAndFleetSource,
+		const struct FRouteGpsCaptureSnapshot& Capture,
+		FRouteAssignmentSourceSnapshot& OutSource,
+		FString& OutError);
 #if WITH_DEV_AUTOMATION_TESTS
 	void InitializeForTest(UGameInstance* InGameInstance);
 	void SetWorkflowFactoryForTest(
@@ -285,6 +355,43 @@ public:
 	{
 		HandleApplyMaxConcurrencyClicked();
 	}
+	void ClickApplyNpzNumberingForTest() { HandleApplyNpzNumberingClicked(); }
+	void ClickCaptureStableGpsForTest() { HandleCaptureStableGpsClicked(); }
+	void ClickClearNpzNumberingForTest() { HandleClearNpzNumberingClicked(); }
+	void ClickRefreshShowOriginDronesForTest() { HandleRefreshShowOriginDronesClicked(); }
+	void ClickCaptureShowOriginGpsForTest() { HandleCaptureShowOriginGpsClicked(); }
+	void ClickApplyShowOriginGpsForTest() { HandleApplyShowOriginGpsClicked(); }
+	void SelectShowOriginDroneForTest(const FString& DroneID)
+	{
+		HandleShowOriginDroneSelectionChanged(DroneID, ESelectInfo::Direct);
+	}
+	void RefreshShowOriginCaptureForTest() { RefreshShowOriginCaptureState(); }
+	const FString& GetSelectedShowOriginDroneForTest() const
+	{
+		return SelectedShowOriginDroneID;
+	}
+	const FGCSShowOriginCandidate& GetShowOriginCandidateForTest() const
+	{
+		return ShowOriginCandidate;
+	}
+	EGCSShowOriginDraftSource GetShowOriginDraftSourceForTest() const
+	{
+		return ShowOriginDraftSource;
+	}
+	bool HasConfirmedNpzMappingForTest() const { return bHasConfirmedNpzMapping; }
+	bool IsConfirmedNpzMappingValidForTest() const
+	{
+		return bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid;
+	}
+	const FGCSConfirmedNpzMappingSnapshot& GetConfirmedNpzMappingForTest() const
+	{
+		return ConfirmedNpzMapping;
+	}
+	void SetConfirmedNpzMappingForTest(FGCSConfirmedNpzMappingSnapshot Snapshot)
+	{
+		ConfirmedNpzMapping = MoveTemp(Snapshot);
+		bHasConfirmedNpzMapping = true;
+	}
 	void RefreshCommandControlsForTest() { UpdateCommandControlState(); }
 	void RefreshReadOnlyStateForTest() { RefreshReadOnlyState(); }
 	const FString& GetSelectedRoutePathForTest() const { return SelectedRouteImportFilePath; }
@@ -293,6 +400,18 @@ public:
 	bool IsViewVisibleForTest() const { return bViewVisible; }
 	int32 GetSelectedPageIndexForTest() const { return SelectedPageIndex; }
 	int32 GetCloseRequestCountForTest() const { return CloseRequestCountForTest; }
+	int32 GetApplyNpzNumberingClickCountForTest() const
+	{
+		return ApplyNpzNumberingClickCountForTest;
+	}
+	int32 GetCaptureStableGpsClickCountForTest() const
+	{
+		return CaptureStableGpsClickCountForTest;
+	}
+	int32 GetClearNpzNumberingClickCountForTest() const
+	{
+		return ClearNpzNumberingClickCountForTest;
+	}
 	void SetAutoStartTestHooks(FGCSRouteAutoStartTestHooks InHooks)
 	{
 		AutoStartTestHooks = MoveTemp(InHooks);
@@ -344,6 +463,24 @@ private:
 	void HandleRetryFailedClicked();
 	UFUNCTION()
 	void HandleApplyMaxConcurrencyClicked();
+	UFUNCTION()
+	void HandleCaptureStableGpsClicked();
+	UFUNCTION()
+	void HandleApplyNpzNumberingClicked();
+	UFUNCTION()
+	void HandleClearNpzNumberingClicked();
+	UFUNCTION()
+	void HandleRefreshShowOriginDronesClicked();
+	UFUNCTION()
+	void HandleShowOriginDroneSelectionChanged(
+		FString SelectedItem,
+		ESelectInfo::Type SelectionType);
+	UFUNCTION()
+	void HandleCaptureShowOriginGpsClicked();
+	UFUNCTION()
+	void HandleApplyShowOriginGpsClicked();
+	UFUNCTION()
+	void HandleShowOriginFieldTextChanged(const FText& Text);
 
 	UUserWidget* CreateRouteWorkflowWidget(FString& OutError);
 	bool BindWorkflowWidgets(UUserWidget* WorkflowWidget, FString& OutError);
@@ -379,6 +516,27 @@ private:
 	void ClearRouteListModel();
 	bool ReplaceAutoStartPreviewItems(const FGCSRouteAutoStartSnapshot& Snapshot);
 	bool CaptureAutoStartSnapshot(FGCSRouteAutoStartSnapshot& OutSnapshot, FString& OutError) const;
+	bool BuildConfirmedNpzMapping(FGCSConfirmedNpzMappingSnapshot& OutMapping, FString& OutError);
+	bool ValidateConfirmedNpzMappingCurrent(FString& OutError) const;
+	void InvalidateConfirmedNpzMapping(const FString& Reason, bool bResetWorkingAssignment);
+	void ClearConfirmedNpzMapping(bool bResetWorkingAssignment);
+	void ApplyConfirmedRouteSlotDisplayOverride() const;
+	void ClearConfirmedRouteSlotDisplayOverride() const;
+	bool IsConfirmedMappingMutationBlocked(FString& OutError) const;
+	bool IsShowOriginMutationBlocked(FString& OutError) const;
+	void RefreshShowOriginDroneList();
+	void RefreshShowOriginCaptureState();
+	void InvalidateShowOriginCandidate(const FString& Reason);
+	bool RevalidateShowOriginCandidate(FString& OutError) const;
+	bool CommitValidatedShowOrigin(
+		double Latitude,
+		double Longitude,
+		double AltitudeAMSL,
+		FString& OutError);
+	void SetShowOriginDraftFields(
+		double Latitude,
+		double Longitude,
+		double AltitudeAMSL);
 	bool BeginAutoStartTransaction(FString& OutError);
 	void AdvanceAutoStartTransaction();
 	bool ValidateAutoStartSnapshotStillCurrent(FString& OutError) const;
@@ -430,12 +588,27 @@ private:
 	EGCSRouteAutoStartState AutoStartState = EGCSRouteAutoStartState::Idle;
 	FGCSRouteAutoStartSnapshot AutoStartSnapshot;
 	FString AutoStartDiagnostic;
+	FGCSConfirmedNpzMappingSnapshot ConfirmedNpzMapping;
+	bool bHasConfirmedNpzMapping = false;
+	int64 LastIssuedConfirmationRevision = 0;
+	FString SelectedShowOriginDroneID;
+	FString ActiveShowOriginCaptureRequestID;
+	int64 ActiveShowOriginCaptureRevision = 0;
+	int64 LastIssuedShowOriginCandidateRevision = 0;
+	FGCSShowOriginCandidate ShowOriginCandidate;
+	EGCSShowOriginDraftSource ShowOriginDraftSource =
+		EGCSShowOriginDraftSource::Official;
+	bool bUpdatingShowOriginUi = false;
+	bool bShowOriginDraftActive = false;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	TFunction<UUserWidget*()> WorkflowFactoryForTest;
 	bool bSkipRequiredWidgetBindingForTest = false;
 	int32 WorkflowCreationCount = 0;
 	int32 CloseRequestCountForTest = 0;
+	int32 ApplyNpzNumberingClickCountForTest = 0;
+	int32 CaptureStableGpsClickCountForTest = 0;
+	int32 ClearNpzNumberingClickCountForTest = 0;
 	FGCSRouteWorkflowCommandTestHooks CommandTestHooks;
 	FGCSRouteAutoStartTestHooks AutoStartTestHooks;
 	TOptional<FGCSRouteWorkflowCommandGateInputs> CommandGateInputsForTest;

@@ -98,6 +98,18 @@ public:
 
     uint8_t satellitesVisible = 0;
 
+    // Wall-clock audit timestamp for the most recently received GPS_RAW_INT.
+    // This is captured by Console ingress, not when a DSP telemetry DTO is built.
+    std::int64_t lastGpsReceiveUtcMs = 0;
+
+    // Process-local monotonic authority for GPS age/timeout decisions. This value
+    // is intentionally not serialized across DSP-GCS.
+    std::chrono::steady_clock::time_point lastGpsReceiveMonotonic{};
+
+    // In-process identity for unique GPS_RAW_INT samples. DSP-GCS reuses the UTC
+    // timestamp because the wire schema is frozen and already carries it.
+    std::uint64_t gpsSampleSequence = 0;
+
 
 
     double latitude = 0;

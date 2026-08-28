@@ -12,6 +12,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "RouteAssignmentContract.h"
+#include "RouteAssignmentGeo.h"
 #include "RouteAssignmentPipeline.h"
 #include "RouteAssignmentSubsystem.h"
 #include "RoutePreviewSubsystem.h"
@@ -432,6 +433,91 @@ bool FPipeline08BoundaryTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Exact distance retained"),
 		Candidate.MatchedEntries[0].HorizontalDistanceMeters,
 		RouteAssignmentContract::MaxHorizontalMatchDistanceMeters);
+	return true;
+}
+
+IMPLEMENT_PIPELINE_TEST(
+	FPipeline08FixedFrameAnchorMatrixTest,
+	"08FixedFrameAnchorMatrix")
+bool FPipeline08FixedFrameAnchorMatrixTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FRouteAssignmentSourceSnapshot Source = MakeSnapshot();
+	RouteAssignmentGeo::FLocalEnuOriginContext Origin;
+	FString Error;
+	if (!TestTrue(TEXT("Fixed Show Origin ENU context builds"),
+		RouteAssignmentGeo::BuildLocalEnuOriginContext(
+			Source.SourceIdentity.Latitude,
+			Source.SourceIdentity.Longitude,
+			Source.SourceIdentity.Altitude,
+			Origin,
+			Error)))
+	{
+		return false;
+	}
+
+	constexpr int32 AnchorRouteSlot = 14;
+	constexpr int32 GridWidth = 10;
+	const int32 AnchorColumn = AnchorRouteSlot % GridWidth;
+	const int32 AnchorRow = AnchorRouteSlot / GridWidth;
+	TMap<FString, int32> ExpectedRouteSlotByDrone;
+	for (int32 RouteSlot = 0; RouteSlot < 100; ++RouteSlot)
+	{
+		const double EastMeters = static_cast<double>(RouteSlot % GridWidth - AnchorColumn);
+		const double NorthMeters = static_cast<double>(RouteSlot / GridWidth - AnchorRow);
+		FRouteAssignmentRouteSlotSource Route;
+		Route.RouteSlotIndex = RouteSlot;
+		Route.EastMeters = EastMeters;
+		Route.NorthMeters = NorthMeters;
+		Source.RouteSlots.Add(Route);
+
+		RouteAssignmentGeo::FGeodeticPosition Geodetic;
+		if (!TestTrue(TEXT("Grid point converts to WGS84"),
+			RouteAssignmentGeo::LocalEnuToGeodetic(
+				Origin, EastMeters, NorthMeters, 0.0, Geodetic, Error)))
+		{
+			return false;
+		}
+		// Deliberately permute network DroneID relative to RouteSlot. Matching must
+		// use the fixed ENU/Frame-0 position, never DroneID-1.
+		const int32 NumericDroneID = (RouteSlot * 37) % 100 + 1;
+		const FString DroneID = FString::Printf(TEXT("Drone%03d"), NumericDroneID);
+		AddDrone(Source, *DroneID, true, true, 6,
+			Geodetic.LatitudeDegrees, Geodetic.LongitudeDegrees);
+		ExpectedRouteSlotByDrone.Add(DroneID, RouteSlot);
+	}
+
+	FRouteAssignmentCandidate Candidate;
+	TestTrue(TEXT("Symmetric matrix matches directly without a rigid-solve ambiguity gate"),
+		Build(Source, Candidate, Error));
+	TestEqual(TEXT("All 100 drones matched"), Candidate.MatchedEntries.Num(), 100);
+	TestEqual(TEXT("No unresolved drones"), Candidate.UnresolvedDrones.Num(), 0);
+	TestEqual(TEXT("No matching conflicts"), Candidate.Conflicts.Num(), 0);
+	TestEqual(TEXT("No vacant RouteSlots"), Candidate.VacantRouteSlots.Num(), 0);
+	TestEqual(TEXT("No spare drones"), Candidate.SpareDrones.Num(), 0);
+	for (const FRouteAssignmentEntry& Entry : Candidate.MatchedEntries)
+	{
+		const int32* ExpectedRouteSlot = ExpectedRouteSlotByDrone.Find(Entry.DroneID);
+		TestNotNull(TEXT("Matched DroneID belongs to the captured fleet"), ExpectedRouteSlot);
+		if (ExpectedRouteSlot)
+		{
+			TestEqual(*FString::Printf(TEXT("%s maps by position"), *Entry.DroneID),
+				Entry.RouteSlotIndex, *ExpectedRouteSlot);
+		}
+	}
+	const FRouteAssignmentEntry* AnchorEntry = Candidate.MatchedEntries.FindByPredicate(
+		[](const FRouteAssignmentEntry& Entry)
+		{
+			return Entry.RouteSlotIndex == AnchorRouteSlot;
+		});
+	TestNotNull(TEXT("Boundary pile anchor RouteSlot is present"), AnchorEntry);
+	if (AnchorEntry)
+	{
+		TestEqual(TEXT("The Show Origin pile may be RouteSlot 14, not forced to RouteSlot 0"),
+			AnchorEntry->DroneID, FString(TEXT("Drone019")));
+		TestTrue(TEXT("Anchor horizontal residual is effectively zero"),
+			AnchorEntry->HorizontalDistanceMeters < 0.001);
+	}
 	return true;
 }
 

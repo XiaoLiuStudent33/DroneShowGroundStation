@@ -60,11 +60,19 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization")
 	TArray<FVector> GetDronePositions() const { return DronePositions; }
 
+#if WITH_DEV_AUTOMATION_TESTS
+	TArray<float> GetDroneDisplayIDsForTest() const { return DroneDisplayIDs; }
+#endif
+
 	/** Updates the Niagara label highlight from the existing command selection authority. */
 	void SetCommandSelectedDroneIDs(const TArray<FString>& DroneIDs);
 
 	/** Updates only the stable particles identified by DroneID and preserves every other color. */
 	void SetDroneColorsForIDs(const TArray<FString>& DroneIDs, const FLinearColor& Color);
+
+	/** Display-only zero-based RouteSlot override keyed by the unchanged network DroneID. */
+	void SetConfirmedRouteSlotDisplayOverrides(const TMap<FString, int32>& OverridesByDroneID);
+	void ClearConfirmedRouteSlotDisplayOverrides();
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization|Geo")
 	bool IsOriginWorldPositionInitialized() const { return bOriginWorldPositionInitialized; }
@@ -162,7 +170,7 @@ private:
 	UPROPERTY(Transient)
 	TArray<FLinearColor> DroneColors;
 
-	/** Per-particle display identifiers, derived from stable particle index + 1. */
+	/** Per-particle display identifiers: confirmed zero-based RouteSlot or stable particle index. */
 	UPROPERTY(Transient)
 	TArray<float> DroneDisplayIDs;
 
@@ -176,6 +184,8 @@ private:
 
 	/** Derived render cache only; GCSUIBridgeSubsystem remains selection authority. */
 	TSet<FString> CommandSelectedDroneIDs;
+	/** Display-only cache; keys are real DroneIDs and values are zero-based RouteSlots. */
+	TMap<FString, int32> ConfirmedRouteSlotDisplayOverrides;
 	EGCSVisualizationMode VisualizationMode = EGCSVisualizationMode::Live;
 
 	/**

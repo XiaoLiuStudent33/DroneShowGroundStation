@@ -92,6 +92,7 @@ private:
 	friend class FDSPGCSTelemetryChunkAssemblyTest;
 	friend class FDSPGCSTelemetryLinkHealthTest;
 	friend class FGCSSelectionStateSeparationTest;
+	friend class FRouteGpsCaptureProductionTelemetryPreservationTest;
 #endif
 
 	bool CreateTransport();

@@ -4,6 +4,7 @@
 #include "Blueprint/IUserObjectListEntry.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
+#include "Components/ComboBoxString.h"
 #include "Components/EditableTextBox.h"
 #include "Components/ListView.h"
 #include "Components/TextBlock.h"
@@ -11,8 +12,14 @@
 #include "DSPGCSUploadJobProtocol.h"
 #include "DSPGCSUploadJobSubsystem.h"
 #include "DSPGCSFrozenAssignmentSyncSubsystem.h"
+#include "DroneData.h"
 #include "DroneLogicalId.h"
+#include "FleetManagerSubsystem.h"
+#include "GCSDataTypes.h"
+#include "GCSUIBridgeSubsystem.h"
 #include "HAL/PlatformTime.h"
+#include "RouteGpsCaptureSubsystem.h"
+#include "RoutePreviewSubsystem.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowOwnershipTest,"DroneGCS.UI.RouteWorkflow.OwnershipAndTeardown",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
 bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
@@ -32,6 +39,30 @@ bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("Widget created"),First);
 	UUserWidget* Upload=First&&First->WidgetTree?Cast<UUserWidget>(First->WidgetTree->FindWidget(TEXT("WBP_GCS_RouteUpload"))):nullptr;
 	TestNotNull(TEXT("Nested RouteUpload"),Upload);
+	UUserWidget* Convert=First&&First->WidgetTree?Cast<UUserWidget>(First->WidgetTree->FindWidget(TEXT("WBP_GCS_RouteConvert"))):nullptr;
+	TestNotNull(TEXT("Nested RouteConvert"),Convert);
+	UButton* ApplyNumbering=Convert&&Convert->WidgetTree?Cast<UButton>(Convert->WidgetTree->FindWidget(TEXT("BTN_ApplyNpzNumbering"))):nullptr;
+	UButton* CaptureStableGps=Convert&&Convert->WidgetTree?Cast<UButton>(Convert->WidgetTree->FindWidget(TEXT("BTN_CaptureStableGps"))):nullptr;
+	UButton* ClearNumbering=Convert&&Convert->WidgetTree?Cast<UButton>(Convert->WidgetTree->FindWidget(TEXT("BTN_ClearNpzNumbering"))):nullptr;
+	TestNotNull(TEXT("Apply NPZ numbering button resolved"),ApplyNumbering);
+	TestNotNull(TEXT("Stable GPS capture button resolved"),CaptureStableGps);
+	TestNotNull(TEXT("Clear NPZ numbering button resolved"),ClearNumbering);
+	TestNotNull(TEXT("Show Origin DroneID combo resolved as ComboBoxString"),
+		Convert&&Convert->WidgetTree?Cast<UComboBoxString>(Convert->WidgetTree->FindWidget(TEXT("CMB_ShowOriginDroneId"))):nullptr);
+	for(const FName Name:{FName(TEXT("BTN_RefreshShowOriginDrones")),
+		FName(TEXT("BTN_CaptureShowOriginGps")),FName(TEXT("BTN_ApplyShowOriginGps"))})
+		TestNotNull(*FString::Printf(TEXT("%s resolved as Button"),*Name.ToString()),
+			Convert&&Convert->WidgetTree?Cast<UButton>(Convert->WidgetTree->FindWidget(Name)):nullptr);
+	for(const FName Name:{FName(TEXT("TXT_ShowOriginGpsStatus")),
+		FName(TEXT("TXT_ShowOriginGpsSource")),FName(TEXT("TXT_ShowOriginCaptureTime"))})
+		TestNotNull(*FString::Printf(TEXT("%s resolved as TextBlock"),*Name.ToString()),
+			Convert&&Convert->WidgetTree?Cast<UTextBlock>(Convert->WidgetTree->FindWidget(Name)):nullptr);
+	if(ApplyNumbering) ApplyNumbering->OnClicked.Broadcast();
+	if(CaptureStableGps) CaptureStableGps->OnClicked.Broadcast();
+	if(ClearNumbering) ClearNumbering->OnClicked.Broadcast();
+	TestEqual(TEXT("Apply button has exactly one handler"),C->GetApplyNpzNumberingClickCountForTest(),1);
+	TestEqual(TEXT("Capture button has exactly one handler"),C->GetCaptureStableGpsClickCountForTest(),1);
+	TestEqual(TEXT("Clear button has exactly one handler"),C->GetClearNpzNumberingClickCountForTest(),1);
 	for(const FName Name:{FName(TEXT("BTN_StartUpload")),FName(TEXT("BTN_PauseUpload")),FName(TEXT("BTN_ResumeUpload")),FName(TEXT("BTN_CancelUpload")),FName(TEXT("BTN_RetryFailed")),FName(TEXT("BTN_ApplyMaxConcurrency"))})
 	{
 		UButton* Button=Upload&&Upload->WidgetTree?Cast<UButton>(Upload->WidgetTree->FindWidget(Name)):nullptr;
@@ -103,6 +134,249 @@ bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
 	C->Shutdown();
 	TestNull(TEXT("Reference cleared"),C->GetWorkflowWidgetForTest());
 	TestFalse(TEXT("Ticker stopped"),C->IsRefreshTickerActiveForTest());
+	GI->Shutdown();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGCSRouteWorkflowShowOriginAnchorCaptureTest,
+	"DroneGCS.UI.RouteWorkflow.ShowOrigin.AnchorCaptureAuthority",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FGCSRouteWorkflowShowOriginAnchorCaptureTest::RunTest(
+	const FString& Parameters)
+{
+	(void)Parameters;
+	UGameInstance* GI = NewObject<UGameInstance>(GEngine);
+	if (!TestNotNull(TEXT("GameInstance"), GI)) return false;
+	GI->InitializeStandalone(TEXT("GCSRouteWorkflowShowOriginAnchorCapture"));
+	UFleetManagerSubsystem* Fleet = GI->GetSubsystem<UFleetManagerSubsystem>();
+	UGCSUIBridgeSubsystem* Bridge = GI->GetSubsystem<UGCSUIBridgeSubsystem>();
+	URouteGpsCaptureSubsystem* Capture =
+		GI->GetSubsystem<URouteGpsCaptureSubsystem>();
+	URoutePreviewSubsystem* Preview = GI->GetSubsystem<URoutePreviewSubsystem>();
+	if (!TestNotNull(TEXT("Fleet authority"), Fleet)
+		|| !TestNotNull(TEXT("Command Selection authority"), Bridge)
+		|| !TestNotNull(TEXT("F.1 Capture authority"), Capture)
+		|| !TestNotNull(TEXT("Show Origin authority"), Preview))
+	{
+		GI->Shutdown();
+		return false;
+	}
+
+	auto MakeDrone = [](const FString& DroneID, const FString& Endpoint,
+		const bool bOnline, const double Latitude, const double Longitude)
+	{
+		FDroneData Drone;
+		Drone.DroneID = DroneID;
+		Drone.EndpointIdentity = Endpoint;
+		Drone.bOnline = bOnline;
+		Drone.bGPSValid = true;
+		Drone.GPSFixType = 6;
+		Drone.GPSLat = Latitude;
+		Drone.GPSLon = Longitude;
+		Drone.bAltitudeValid = true;
+		Drone.AltitudeAMSL = 42.0f;
+		return Drone;
+	};
+	FGCSFleetSnapshot FleetSnapshot;
+	FleetSnapshot.Header.SchemaVersion = GCSDataSchema::CurrentVersion;
+	FleetSnapshot.Header.SessionID = TEXT("fleet-show-origin");
+	FleetSnapshot.FleetRevision = 1;
+	// Deliberately unordered: the Combo authority must sort true DroneIDs.
+	FleetSnapshot.Drones = {
+		MakeDrone(TEXT("Drone002"), TEXT("endpoint-2"), true, 31.2, 118.2),
+		MakeDrone(TEXT("Drone003"), TEXT("endpoint-3"), false, 31.3, 118.3),
+		MakeDrone(TEXT("Drone001"), TEXT("endpoint-1"), true, 31.1, 118.1)};
+	TestTrue(TEXT("Fleet snapshot installed"), Fleet->ApplySnapshot(FleetSnapshot));
+	Bridge->ReplaceCommandDroneSelection({TEXT("Drone001"), TEXT("Drone002")});
+	const TArray<FString> OriginalCommandSelection =
+		Bridge->GetSelectedCommandDroneIDs();
+	FString Error;
+	TestTrue(TEXT("Initial official Show Origin installed"),
+		Preview->SetShowOrigin(30.0, 120.0, 10.0, Error));
+
+	UGCSRouteWorkflowCoordinator* Coordinator =
+		NewObject<UGCSRouteWorkflowCoordinator>(GI);
+	Coordinator->InitializeForTest(GI);
+	UClass* WorkflowClass = LoadClass<UUserWidget>(nullptr,
+		TEXT("/Game/UI/WBP_GCS_RouteWorkflow.WBP_GCS_RouteWorkflow_C"));
+	if (!TestNotNull(TEXT("Workflow class"), WorkflowClass))
+	{
+		Coordinator->Shutdown();
+		GI->Shutdown();
+		return false;
+	}
+	Coordinator->SetWorkflowFactoryForTest(
+		[GI, WorkflowClass]() { return CreateWidget<UUserWidget>(GI, WorkflowClass); },
+		false);
+	if (!TestTrue(TEXT("Workflow opens"), Coordinator->ShowRouteWorkflow(Error)))
+	{
+		Coordinator->Shutdown();
+		GI->Shutdown();
+		return false;
+	}
+	UUserWidget* Workflow = Coordinator->GetWorkflowWidgetForTest();
+	UUserWidget* Convert = Workflow && Workflow->WidgetTree
+		? Cast<UUserWidget>(Workflow->WidgetTree->FindWidget(TEXT("WBP_GCS_RouteConvert")))
+		: nullptr;
+	UComboBoxString* Combo = Convert && Convert->WidgetTree
+		? Cast<UComboBoxString>(Convert->WidgetTree->FindWidget(TEXT("CMB_ShowOriginDroneId")))
+		: nullptr;
+	UEditableTextBox* LatitudeInput = Convert && Convert->WidgetTree
+		? Cast<UEditableTextBox>(Convert->WidgetTree->FindWidget(TEXT("EDT_OriginLatitude")))
+		: nullptr;
+	UEditableTextBox* LongitudeInput = Convert && Convert->WidgetTree
+		? Cast<UEditableTextBox>(Convert->WidgetTree->FindWidget(TEXT("EDT_OriginLongitude")))
+		: nullptr;
+	UEditableTextBox* AltitudeInput = Convert && Convert->WidgetTree
+		? Cast<UEditableTextBox>(Convert->WidgetTree->FindWidget(TEXT("EDT_OriginAltitude")))
+		: nullptr;
+	UTextBlock* SourceText = Convert && Convert->WidgetTree
+		? Cast<UTextBlock>(Convert->WidgetTree->FindWidget(TEXT("TXT_ShowOriginGpsSource")))
+		: nullptr;
+	if (!TestNotNull(TEXT("Show Origin Drone Combo"), Combo)
+		|| !TestNotNull(TEXT("Latitude input"), LatitudeInput)
+		|| !TestNotNull(TEXT("Longitude input"), LongitudeInput)
+		|| !TestNotNull(TEXT("Altitude input"), AltitudeInput)
+		|| !TestNotNull(TEXT("Source text"), SourceText))
+	{
+		Coordinator->Shutdown();
+		GI->Shutdown();
+		return false;
+	}
+
+	Coordinator->ClickRefreshShowOriginDronesForTest();
+	TestEqual(TEXT("Only Online drones are listed"), Combo->GetOptionCount(), 2);
+	TestEqual(TEXT("Online DroneIDs are deterministically sorted"),
+		Combo->GetOptionAtIndex(0), FString(TEXT("Drone001")));
+	TestEqual(TEXT("Second Online DroneID is present"),
+		Combo->GetOptionAtIndex(1), FString(TEXT("Drone002")));
+	TestEqual(TEXT("Refresh never auto-selects an anchor"),
+		Coordinator->GetSelectedShowOriginDroneForTest(), FString());
+	TestEqual(TEXT("Refresh preserves Command Selection"),
+		Bridge->GetSelectedCommandDroneIDs(), OriginalCommandSelection);
+
+	Coordinator->SelectShowOriginDroneForTest(TEXT("Drone001"));
+	TestEqual(TEXT("Anchor selection records only true DroneID"),
+		Coordinator->GetSelectedShowOriginDroneForTest(), FString(TEXT("Drone001")));
+	TestEqual(TEXT("Selecting anchor does not change official Latitude"),
+		Preview->GetRouteData().ShowOriginLatitude, 30.0);
+	TestEqual(TEXT("Selecting anchor preserves Command Selection"),
+		Bridge->GetSelectedCommandDroneIDs(), OriginalCommandSelection);
+
+	Coordinator->ClickCaptureShowOriginGpsForTest();
+	FRouteGpsCaptureSnapshot CaptureSnapshot;
+	TestTrue(TEXT("Explicit F.1 capture exists"),
+		Capture->GetCurrentSnapshot(CaptureSnapshot));
+	TestFalse(TEXT("Anchor capture is not Command Selection bound"),
+		CaptureSnapshot.bCommandSelectionBound);
+	TestEqual(TEXT("Anchor capture has one participant"),
+		CaptureSnapshot.SelectedDroneIDs,
+		TArray<FString>{TEXT("Drone001")});
+	TestEqual(TEXT("Starting anchor capture preserves Command Selection"),
+		Bridge->GetSelectedCommandDroneIDs(), OriginalCommandSelection);
+
+	const int32 SampleCount = CaptureSnapshot.Policy.MinUniqueSamples;
+	const int64 StepMilliseconds = FMath::DivideAndRoundUp<int64>(
+		CaptureSnapshot.Policy.MinWindowDurationMilliseconds,
+		FMath::Max<int64>(1, SampleCount - 1));
+	const int64 BaseUtcMilliseconds = FDateTime::UtcNow().ToUnixTimestamp() * 1000;
+	const double BaseMonotonic = FPlatformTime::Seconds();
+	for (int32 SampleIndex = 0; SampleIndex < SampleCount; ++SampleIndex)
+	{
+		const int64 OffsetMilliseconds = StepMilliseconds * SampleIndex;
+		FRouteGpsTelemetryObservation Observation;
+		Observation.CaptureRequestID = CaptureSnapshot.CaptureRequestID;
+		Observation.DroneID = TEXT("Drone001");
+		Observation.EndpointIdentity = TEXT("endpoint-1");
+		Observation.bVehicleOnline = true;
+		Observation.bGpsValid = true;
+		Observation.FixType = CaptureSnapshot.Policy.RequiredFixType;
+		Observation.Latitude = 31.234567 + SampleIndex * 0.00000001;
+		Observation.Longitude = 118.345678 + SampleIndex * 0.00000001;
+		Observation.AltitudeAMSL = 42.0f;
+		Observation.bAltitudeValid = true;
+		Observation.GpsSampleTimestampUtcMs = BaseUtcMilliseconds + OffsetMilliseconds;
+		Observation.TelemetryReceivedUtcMs = BaseUtcMilliseconds + OffsetMilliseconds;
+		Observation.TelemetryReceivedMonotonicSeconds =
+			BaseMonotonic + OffsetMilliseconds / 1000.0;
+		Capture->ObserveTelemetrySample(Observation);
+	}
+	Coordinator->RefreshShowOriginCaptureForTest();
+	const FGCSShowOriginCandidate& Candidate =
+		Coordinator->GetShowOriginCandidateForTest();
+	TestTrue(TEXT("Stable capture creates an immutable candidate"), Candidate.bValid);
+	TestTrue(TEXT("Candidate retains GPS provenance"), Candidate.bGpsProvenanceIntact);
+	TestEqual(TEXT("Candidate is bound to anchor DroneID"),
+		Candidate.DroneID, FString(TEXT("Drone001")));
+	TestEqual(TEXT("Candidate display still does not commit official Latitude"),
+		Preview->GetRouteData().ShowOriginLatitude, 30.0);
+	TestEqual(TEXT("Candidate display still does not commit official Longitude"),
+		Preview->GetRouteData().ShowOriginLongitude, 120.0);
+	TestEqual(TEXT("Candidate display still does not commit official Altitude"),
+		Preview->GetRouteData().ShowOriginAltitude, 10.0);
+	TestTrue(TEXT("Candidate latitude is displayed"),
+		LatitudeInput->GetText().ToString().StartsWith(TEXT("31.234567")));
+	TestEqual(TEXT("Candidate AMSL is displayed"),
+		FCString::Atod(*AltitudeInput->GetText().ToString()), 42.0);
+
+	LatitudeInput->SetText(FText::FromString(TEXT("31.2500000")));
+	LatitudeInput->OnTextChanged.Broadcast(LatitudeInput->GetText());
+	TestEqual(TEXT("Manual edit clears GPS provenance"),
+		Coordinator->GetShowOriginDraftSourceForTest(),
+		EGCSShowOriginDraftSource::Manual);
+	TestFalse(TEXT("Edited candidate is no longer a valid GPS candidate"),
+		Coordinator->GetShowOriginCandidateForTest().bGpsProvenanceIntact);
+	TestTrue(TEXT("Manual source is explicit"),
+		SourceText->GetText().ToString().Contains(TEXT("手动输入")));
+
+	FGCSConfirmedNpzMappingSnapshot Mapping;
+	Mapping.bValid = true;
+	Mapping.ConfirmationRevision = 10;
+	Coordinator->SetConfirmedNpzMappingForTest(Mapping);
+	LongitudeInput->SetText(FText::FromString(TEXT("118.3500000")));
+	LongitudeInput->OnTextChanged.Broadcast(LongitudeInput->GetText());
+	AltitudeInput->SetText(FText::FromString(TEXT("43.0")));
+	AltitudeInput->OnTextChanged.Broadcast(AltitudeInput->GetText());
+	Coordinator->ClickApplyShowOriginGpsForTest();
+	TestEqual(TEXT("Apply atomically commits manual Latitude"),
+		Preview->GetRouteData().ShowOriginLatitude, 31.25);
+	TestEqual(TEXT("Apply atomically commits manual Longitude"),
+		Preview->GetRouteData().ShowOriginLongitude, 118.35);
+	TestEqual(TEXT("Apply atomically commits manual AMSL"),
+		Preview->GetRouteData().ShowOriginAltitude, 43.0);
+	TestFalse(TEXT("Horizontal Origin change invalidates confirmed numbering"),
+		Coordinator->IsConfirmedNpzMappingValidForTest());
+
+	const FRoutePreviewData BeforeInvalidApply = Preview->GetRouteData();
+	LatitudeInput->SetText(FText::FromString(TEXT("1000")));
+	LatitudeInput->OnTextChanged.Broadcast(LatitudeInput->GetText());
+	Coordinator->ClickApplyShowOriginGpsForTest();
+	TestEqual(TEXT("Invalid Apply preserves official Latitude"),
+		Preview->GetRouteData().ShowOriginLatitude,
+		BeforeInvalidApply.ShowOriginLatitude);
+	TestEqual(TEXT("Invalid Apply preserves official Longitude"),
+		Preview->GetRouteData().ShowOriginLongitude,
+		BeforeInvalidApply.ShowOriginLongitude);
+	TestEqual(TEXT("Invalid Apply preserves official Altitude"),
+		Preview->GetRouteData().ShowOriginAltitude,
+		BeforeInvalidApply.ShowOriginAltitude);
+
+	Mapping.bValid = true;
+	Mapping.ConfirmationRevision = 11;
+	Coordinator->SetConfirmedNpzMappingForTest(Mapping);
+	LatitudeInput->SetText(FText::AsNumber(Preview->GetRouteData().ShowOriginLatitude));
+	LatitudeInput->OnTextChanged.Broadcast(LatitudeInput->GetText());
+	LongitudeInput->SetText(FText::AsNumber(Preview->GetRouteData().ShowOriginLongitude));
+	LongitudeInput->OnTextChanged.Broadcast(LongitudeInput->GetText());
+	AltitudeInput->SetText(FText::AsNumber(Preview->GetRouteData().ShowOriginAltitude));
+	AltitudeInput->OnTextChanged.Broadcast(AltitudeInput->GetText());
+	Coordinator->ClickApplyShowOriginGpsForTest();
+	TestTrue(TEXT("Equivalent Origin does not invalidate confirmed numbering"),
+		Coordinator->IsConfirmedNpzMappingValidForTest());
+
+	Coordinator->Shutdown();
 	GI->Shutdown();
 	return true;
 }
@@ -1300,6 +1574,155 @@ bool FGCSRouteWorkflowAutoStartStaleMatrixTest::RunTest(const FString& Parameter
 			C->GetAutoStartStateForTest(),EGCSRouteAutoStartState::CancelledAsStale);
 		C->Shutdown();
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGCSRouteWorkflowCaptureBoundAssignmentSourceTest,
+	"DroneGCS.UI.RouteWorkflow.NpzNumbering.CaptureBoundSource",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowCaptureBoundAssignmentSourceTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FRouteAssignmentSourceSnapshot FullSource;
+	FullSource.SourceIdentity.FleetSessionID = TEXT("fleet-f15");
+	for (int32 Index = 0; Index < 100; ++Index)
+	{
+		FRouteAssignmentDroneSource Drone;
+		Drone.DroneID = FString::Printf(TEXT("Drone%03d"), Index + 1);
+		Drone.Latitude = 10.0 + Index;
+		Drone.Longitude = 20.0 + Index;
+		FullSource.Drones.Add(MoveTemp(Drone));
+	}
+	for (int32 Slot = 0; Slot < 50; ++Slot)
+	{
+		FRouteAssignmentRouteSlotSource RouteSlot;
+		RouteSlot.RouteSlotIndex = Slot;
+		FullSource.RouteSlots.Add(RouteSlot);
+	}
+
+	FRouteGpsCaptureSnapshot Capture;
+	Capture.State = ERouteGpsCaptureState::Ready;
+	Capture.FleetSessionID = FullSource.SourceIdentity.FleetSessionID;
+	for (int32 Index = 0; Index < 8; ++Index)
+	{
+		const FString DroneID = FString::Printf(TEXT("Drone%03d"), Index * 3 + 1);
+		Capture.SelectedDroneIDs.Add(DroneID);
+		FRouteGpsCaptureParticipantResult Participant;
+		Participant.DroneID = DroneID;
+		Participant.EndpointIdentity = FString::Printf(TEXT("endpoint-%d"), Index);
+		Participant.EstimatedLatitude = 31.0 + Index * 0.000001;
+		Participant.EstimatedLongitude = 118.0 + Index * 0.000001;
+		Participant.FixType = 6;
+		Participant.Status = ERouteGpsCaptureParticipantStatus::Ready;
+		Capture.Participants.Add(MoveTemp(Participant));
+	}
+	Capture.SelectedDroneIDs.Sort();
+
+	FRouteAssignmentSourceSnapshot Bound;
+	FString Error;
+	TestTrue(TEXT("Ready F.1 Capture builds matcher input"),
+		UGCSRouteWorkflowCoordinator::BuildCaptureBoundAssignmentSource(
+			FullSource, Capture, Bound, Error));
+	TestEqual(TEXT("Fleet=100 Selection=8 sends only eight drones to matcher"),
+		Bound.Drones.Num(), 8);
+	TestEqual(TEXT("All 50 zero-based RouteSlots remain available"),
+		Bound.RouteSlots.Num(), 50);
+	TestEqual(TEXT("Matcher source uses stable Capture latitude, not live Fleet GPS"),
+		Bound.Drones[0].Latitude, Capture.Participants[0].EstimatedLatitude);
+	TestEqual(TEXT("Route/Fleet source identity remains attached"),
+		Bound.SourceIdentity.FleetSessionID, FString(TEXT("fleet-f15")));
+
+	Capture.State = ERouteGpsCaptureState::Invalidated;
+	TestFalse(TEXT("Stale Capture is rejected"),
+		UGCSRouteWorkflowCoordinator::BuildCaptureBoundAssignmentSource(
+			FullSource, Capture, Bound, Error));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGCSRouteWorkflowConfirmedMappingPriorityTest,
+	"DroneGCS.UI.RouteWorkflow.NpzNumbering.ConfirmedMappingPriority",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowConfirmedMappingPriorityTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UGCSRouteWorkflowCoordinator* Coordinator = NewObject<UGCSRouteWorkflowCoordinator>();
+	Coordinator->InitializeForTest(nullptr);
+	Coordinator->SetAppliedMaxConcurrentTargetsForTest(1);
+	FGCSRouteAutoStartSnapshot Base;
+	Base.SelectedDroneIDs = {TEXT("Drone005")};
+	Base.FleetSessionID = TEXT("fleet-f15");
+	Base.FleetRevision = 10;
+	Base.ArtifactSetID = TEXT("artifact-f15");
+	Base.ArtifactSetDigest = FString::ChrN(64, TEXT('a'));
+	Base.SourceDatasetDigest = FString::ChrN(64, TEXT('b'));
+	Base.RouteSlotCount = 100;
+	Base.bUsesConfirmedNpzMapping = true;
+	Base.ConfirmedMappingRevision = 7;
+	FGCSRouteAutoStartTargetSnapshot Target;
+	Target.DroneID = TEXT("Drone005");
+	Target.EndpointIdentity = TEXT("192.0.2.5:14550");
+	Target.NumericDroneID = 5;
+	Target.RouteSlotIndex = 37;
+	Target.RouteRelativePath = TEXT("routes/00000000/37.waypoints");
+	Target.RouteFileByteSize = 100;
+	Target.RouteDigest = FString::ChrN(64, TEXT('c'));
+	Base.Targets.Add(Target);
+
+	int32 BuiltRouteSlot = INDEX_NONE;
+	int32 FrozenRouteSlot = INDEX_NONE;
+	int32 StartedRouteSlot = INDEX_NONE;
+	FGCSRouteAutoStartSyncObservation Observation;
+	FGCSRouteAutoStartTestHooks Hooks;
+	Hooks.CaptureSnapshot = [Base](FGCSRouteAutoStartSnapshot& Out, FString&)
+	{
+		Out = Base;
+		return true;
+	};
+	Hooks.BuildAssignment = [&BuiltRouteSlot](FGCSRouteAutoStartSnapshot& Snapshot, FString&)
+	{
+		BuiltRouteSlot = Snapshot.Targets[0].RouteSlotIndex;
+		return true;
+	};
+	Hooks.FreezeAssignment = [&FrozenRouteSlot](FGCSRouteAutoStartSnapshot& Snapshot, FString&)
+	{
+		FrozenRouteSlot = Snapshot.Targets[0].RouteSlotIndex;
+		Snapshot.AssignmentAuthoritySessionID = TEXT("assignment-f15");
+		Snapshot.AssignmentRevision = 12;
+		return true;
+	};
+	Hooks.StartSync = [&Observation](FGCSRouteAutoStartSnapshot& Snapshot, FString&)
+	{
+		Snapshot.SyncTransactionID = TEXT("sync-f15");
+		Snapshot.AssignmentDigest = FString::ChrN(64, TEXT('d'));
+		Observation.State = static_cast<uint8>(EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted);
+		Observation.TransactionID = Snapshot.SyncTransactionID;
+		Observation.FleetSessionID = Snapshot.FleetSessionID;
+		Observation.AssignmentAuthoritySessionID = Snapshot.AssignmentAuthoritySessionID;
+		Observation.AssignmentRevision = Snapshot.AssignmentRevision;
+		Observation.AssignmentDigest = Snapshot.AssignmentDigest;
+		return true;
+	};
+	Hooks.ObserveSync = [&Observation]() { return Observation; };
+	Hooks.ValidateSnapshot = [](const FGCSRouteAutoStartSnapshot&, FString&) { return true; };
+	Hooks.StartJob = [&StartedRouteSlot, &Coordinator](int32, FString& JobID, FString&)
+	{
+		StartedRouteSlot = Coordinator->GetAutoStartSnapshotForTest().Targets[0].RouteSlotIndex;
+		JobID = TEXT("job-f15");
+		return true;
+	};
+	Coordinator->SetAutoStartTestHooks(MoveTemp(Hooks));
+	FString Error;
+	TestTrue(TEXT("Confirmed mapping transaction starts"), Coordinator->StartAutoStartForTest(Error));
+	TestEqual(TEXT("Working is rebuilt from RouteSlot37"), BuiltRouteSlot, 37);
+	TestEqual(TEXT("Frozen mapping remains RouteSlot37"), FrozenRouteSlot, 37);
+	TestEqual(TEXT("Upload target remains RouteSlot37"), StartedRouteSlot, 37);
+	TestNotEqual(TEXT("Drone005 is never rewritten to legacy RouteSlot4"), StartedRouteSlot, 4);
+	TestTrue(TEXT("Confirmed authority marker remains frozen in transaction"),
+		Coordinator->GetAutoStartSnapshotForTest().bUsesConfirmedNpzMapping);
+	Coordinator->Shutdown();
 	return true;
 }
 

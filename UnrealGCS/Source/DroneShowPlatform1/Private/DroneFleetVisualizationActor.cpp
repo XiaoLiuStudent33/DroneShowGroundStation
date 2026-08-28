@@ -536,6 +536,38 @@ void ADroneFleetVisualizationActor::SetDroneColorsForIDs(
 	}
 }
 
+void ADroneFleetVisualizationActor::SetConfirmedRouteSlotDisplayOverrides(
+	const TMap<FString, int32>& OverridesByDroneID)
+{
+	TMap<FString, int32> Validated;
+	Validated.Reserve(OverridesByDroneID.Num());
+	for (const TPair<FString, int32>& Override : OverridesByDroneID)
+	{
+		if (!Override.Key.TrimStartAndEnd().IsEmpty() && Override.Value >= 0)
+		{
+			Validated.Add(Override.Key, Override.Value);
+		}
+	}
+	if (ConfirmedRouteSlotDisplayOverrides.OrderIndependentCompareEqual(Validated))
+	{
+		return;
+	}
+	ConfirmedRouteSlotDisplayOverrides = MoveTemp(Validated);
+	RebuildDroneLabelAttributes();
+	PushDroneLabelAttributesToNiagara();
+}
+
+void ADroneFleetVisualizationActor::ClearConfirmedRouteSlotDisplayOverrides()
+{
+	if (ConfirmedRouteSlotDisplayOverrides.IsEmpty())
+	{
+		return;
+	}
+	ConfirmedRouteSlotDisplayOverrides.Reset();
+	RebuildDroneLabelAttributes();
+	PushDroneLabelAttributesToNiagara();
+}
+
 void ADroneFleetVisualizationActor::RefreshFromFleet()
 {
 	// Telemetry continues to update FleetManager during preview. Only the render
@@ -922,7 +954,11 @@ void ADroneFleetVisualizationActor::RebuildDroneLabelAttributes()
 	DroneSelectedMasks.SetNumUninitialized(ParticleCount);
 	for (int32 Index = 0; Index < ParticleCount; ++Index)
 	{
-		DroneDisplayIDs[Index] = static_cast<float>(Index);
+		const int32* ConfirmedRouteSlot = ParticleDroneIDs.IsValidIndex(Index)
+			? ConfirmedRouteSlotDisplayOverrides.Find(ParticleDroneIDs[Index])
+			: nullptr;
+		DroneDisplayIDs[Index] = static_cast<float>(
+			ConfirmedRouteSlot ? *ConfirmedRouteSlot : Index);
 		DroneSelectedMasks[Index] = VisualizationMode == EGCSVisualizationMode::Live
 			&& ParticleDroneIDs.IsValidIndex(Index)
 			&& CommandSelectedDroneIDs.Contains(ParticleDroneIDs[Index])

@@ -21,6 +21,13 @@ public:
 
     void Parse(const mavlink_message_t& msg,
         FlightData& data);
+
+    // Deterministic receive-time seam used by ingress tests. Production callers
+    // use Parse(), which captures both clocks at the actual parser entry point.
+    void ParseAt(const mavlink_message_t& msg,
+        FlightData& data,
+        std::chrono::steady_clock::time_point receiveMonotonic,
+        std::int64_t receiveUtcMs);
 private:
 
     // 将ArduPilot模式编号转换为字符串

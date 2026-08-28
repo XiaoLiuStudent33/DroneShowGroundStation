@@ -1121,6 +1121,13 @@ int RunConsolePipelineTests()
             telemetry.altitude > 123.4f && telemetry.altitude < 123.5f &&
                 telemetry.altitudeValid,
             "GPS_RAW_INT AMSL altitude conversion failed");
+		const std::int64_t firstGpsReceiveUtcMs = telemetry.lastGpsReceiveUtcMs;
+		const std::uint64_t firstGpsSampleSequence = telemetry.gpsSampleSequence;
+		Expect(
+			firstGpsReceiveUtcMs > 0 && firstGpsSampleSequence == 1 &&
+			telemetry.lastGpsReceiveMonotonic !=
+				std::chrono::steady_clock::time_point{},
+			"GPS_RAW_INT did not establish true receive-time/sample identity");
 
         mavlink_message_t position{};
         mavlink_msg_global_position_int_pack(
@@ -1154,6 +1161,10 @@ int RunConsolePipelineTests()
                 telemetry.relativeAltitude < 5.1f &&
                 telemetry.groundSpeed > 4.9f && telemetry.groundSpeed < 5.1f,
             "GLOBAL_POSITION_INT overwrote #24 AMSL or failed relative altitude/ground speed");
+		Expect(
+			telemetry.lastGpsReceiveUtcMs == firstGpsReceiveUtcMs &&
+			telemetry.gpsSampleSequence == firstGpsSampleSequence,
+			"non-GPS telemetry changed GPS sample receive identity");
 
         mavlink_message_t invalidGps{};
         mavlink_msg_gps_raw_int_pack(
@@ -1182,6 +1193,11 @@ int RunConsolePipelineTests()
             "invalid GPS_RAW_INT was not routed to Drone001");
         telemetry = drone001->GetFlightData();
         Expect(!telemetry.gpsValid, "GPS_RAW_INT fix_type=1 remained valid");
+		Expect(
+			telemetry.gpsFixType == 1 && telemetry.satellitesVisible == 5 &&
+			telemetry.gpsSampleSequence == firstGpsSampleSequence + 1 &&
+			telemetry.lastGpsReceiveUtcMs >= firstGpsReceiveUtcMs,
+			"fix downgrade did not update raw GPS fields and sample identity");
         Expect(
             manager.FindDrone("Drone001") == drone001 &&
                 manager.GetDroneCount() == 3,
@@ -1425,6 +1441,8 @@ int RunConsolePipelineTests()
         Expect(
             batch.items.front().droneId == "Drone001" &&
                 batch.items.front().sysId == 1 &&
+				batch.items.front().sampleTimestampUtcMs ==
+					drone001->GetFlightData().lastGpsReceiveUtcMs &&
                 batch.items.front().connection.online &&
                 batch.items.front().gps.valid &&
                 batch.items.front().battery.remainingPercent == 87.0f,

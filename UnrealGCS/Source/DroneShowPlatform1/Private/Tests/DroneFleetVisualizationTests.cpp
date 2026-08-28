@@ -115,6 +115,22 @@ bool FDroneFleetVisualizationBridgeTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Stable first particle"), InitialIDs[0], FString(TEXT("Drone001")));
 	TestEqual(TEXT("Stable middle particle"), InitialIDs[49], FString(TEXT("Drone050")));
 	TestEqual(TEXT("Stable final particle"), InitialIDs[99], FString(TEXT("Drone100")));
+	TMap<FString, int32> ConfirmedRouteSlots;
+	ConfirmedRouteSlots.Add(TEXT("Drone005"), 37);
+	Visualization->SetConfirmedRouteSlotDisplayOverrides(ConfirmedRouteSlots);
+	const TArray<float> ConfirmedDisplayIDs = Visualization->GetDroneDisplayIDsForTest();
+	TestEqual(TEXT("Confirmed RouteSlot is displayed without changing particle identity"),
+		ConfirmedDisplayIDs[4], 37.0f);
+	TestEqual(TEXT("Drone005 network identity remains unchanged"),
+		Visualization->GetParticleDroneIDs()[4], FString(TEXT("Drone005")));
+	Visualization->RefreshFromFleet();
+	TestEqual(TEXT("Confirmed display survives Fleet refresh"),
+		Visualization->GetDroneDisplayIDsForTest()[4], 37.0f);
+	Visualization->ClearConfirmedRouteSlotDisplayOverrides();
+	TestEqual(TEXT("Clear restores zero-based particle-index display"),
+		Visualization->GetDroneDisplayIDsForTest()[4], 4.0f);
+	TestEqual(TEXT("Clear still preserves Drone005 identity"),
+		Visualization->GetParticleDroneIDs()[4], FString(TEXT("Drone005")));
 	for (const FVector& Position : Visualization->GetDronePositions())
 	{
 		TestEqual(TEXT("All Phase 3 positions remain at UE origin"), Position, FVector::ZeroVector);

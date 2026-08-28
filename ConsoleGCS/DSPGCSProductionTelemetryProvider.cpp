@@ -42,7 +42,9 @@ namespace
         dspgcs::TelemetryDTO dto;
         dto.droneId = session.GetDroneId();
         dto.sysId = data.systemID;
-        dto.sampleTimestampUtcMs = UtcNowMs();
+        // Existing wire field now carries the true Console GPS_RAW_INT receive
+        // time. Re-publishing the same sample preserves this identity.
+        dto.sampleTimestampUtcMs = data.lastGpsReceiveUtcMs;
         dto.changedFields = dspgcs::TelemetryFields::All;
 
         dto.gps.valid = data.gpsValid;

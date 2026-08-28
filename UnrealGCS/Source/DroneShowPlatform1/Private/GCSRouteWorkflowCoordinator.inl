@@ -2,6 +2,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
+#include "Components/ComboBoxString.h"
 #include "Components/EditableTextBox.h"
 #include "Components/ListView.h"
 #include "Components/ProgressBar.h"
@@ -9,8 +10,11 @@
 #include "Components/WidgetSwitcher.h"
 #include "DSPGCSFrozenAssignmentSyncSubsystem.h"
 #include "DSPGCSUploadJobSubsystem.h"
+#include "DroneFleetVisualizationActor.h"
 #include "DroneLogicalId.h"
 #include "Engine/GameInstance.h"
+#include "Engine/World.h"
+#include "EngineUtils.h"
 #include "FleetManagerSubsystem.h"
 #include "GameFramework/PlayerController.h"
 #include "GCSUIBridgeSubsystem.h"
@@ -18,14 +22,50 @@
 #include "Misc/Guid.h"
 #include "Misc/Paths.h"
 #include "RouteArtifactWorkspaceSubsystem.h"
+#include "RouteAssignmentPipeline.h"
 #include "RouteAssignmentSubsystem.h"
+#include "RouteGpsCaptureSubsystem.h"
 #include "RoutePreviewSubsystem.h"
+#include "RouteWaypointGenerator.h"
 #include "RouteWaypointGenerationSubsystem.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogGCSRouteWorkflow, Log, All);
 
 namespace GCSRouteWorkflowPrivate
 {
+	FString GpsCaptureState(const ERouteGpsCaptureState State)
+	{
+		switch (State)
+		{
+		case ERouteGpsCaptureState::Idle: return TEXT("Not Captured");
+		case ERouteGpsCaptureState::Capturing: return TEXT("Capturing");
+		case ERouteGpsCaptureState::Ready: return TEXT("Ready");
+		case ERouteGpsCaptureState::Failed: return TEXT("Failed");
+		case ERouteGpsCaptureState::Invalidated: return TEXT("Invalidated");
+		default: return TEXT("Unknown");
+		}
+	}
+
+	FString GpsCaptureFailure(const ERouteGpsCaptureFailureReason Reason)
+	{
+		switch (Reason)
+		{
+		case ERouteGpsCaptureFailureReason::None: return TEXT("None");
+		case ERouteGpsCaptureFailureReason::Offline: return TEXT("Offline");
+		case ERouteGpsCaptureFailureReason::ParticipantMissing: return TEXT("ParticipantMissing");
+		case ERouteGpsCaptureFailureReason::EndpointChanged: return TEXT("EndpointChanged");
+		case ERouteGpsCaptureFailureReason::FleetSessionChanged: return TEXT("FleetSessionChanged");
+		case ERouteGpsCaptureFailureReason::GpsUnavailable: return TEXT("GpsUnavailable");
+		case ERouteGpsCaptureFailureReason::GpsStale: return TEXT("GpsStale");
+		case ERouteGpsCaptureFailureReason::FixQualityInsufficient: return TEXT("FixQualityInsufficient");
+		case ERouteGpsCaptureFailureReason::InsufficientSamples: return TEXT("InsufficientSamples");
+		case ERouteGpsCaptureFailureReason::UnstablePosition: return TEXT("UnstablePosition");
+		case ERouteGpsCaptureFailureReason::SelectionInvalidated: return TEXT("SelectionInvalidated");
+		case ERouteGpsCaptureFailureReason::Superseded: return TEXT("Superseded");
+		default: return TEXT("Unknown");
+		}
+	}
+
 	template <typename T>
 	T* Get(const TMap<FName, TWeakObjectPtr<UWidget>>& Map, const FName Name)
 	{
@@ -113,6 +153,7 @@ namespace GCSRouteWorkflowPrivate
 			const FString Value(Name);
 			UClass* Type = UTextBlock::StaticClass();
 			if (Value.StartsWith(TEXT("BTN_"))) Type = UButton::StaticClass();
+			else if (Value.StartsWith(TEXT("CMB_"))) Type = UComboBoxString::StaticClass();
 			else if (Value.StartsWith(TEXT("EDT_"))) Type = UEditableTextBox::StaticClass();
 			else if (Value.StartsWith(TEXT("PROGRESS_"))) Type = UProgressBar::StaticClass();
 			else if (Value.StartsWith(TEXT("SWITCHER_"))) Type = UWidgetSwitcher::StaticClass();
@@ -187,6 +228,21 @@ namespace GCSRouteWorkflowPrivate
 			&& Left.bShowOriginSet == Right.bShowOriginSet;
 	}
 
+	bool SameStableAssignmentSource(
+		const FRouteAssignmentSourceIdentity& Left,
+		const FRouteAssignmentSourceIdentity& Right)
+	{
+		return Left.SourceDatasetDigest == Right.SourceDatasetDigest
+			&& Left.NormalizedShowOriginLatitudeE7 == Right.NormalizedShowOriginLatitudeE7
+			&& Left.NormalizedShowOriginLongitudeE7 == Right.NormalizedShowOriginLongitudeE7
+			&& Left.FleetSessionID == Right.FleetSessionID
+			&& Left.RouteDatasetGeneration == Right.RouteDatasetGeneration
+			&& Left.bShowOriginSet == Right.bShowOriginSet
+			&& Left.Latitude == Right.Latitude
+			&& Left.Longitude == Right.Longitude
+			&& Left.Altitude == Right.Altitude;
+	}
+
 	bool SameAutoStartTarget(
 		const FGCSRouteAutoStartTargetSnapshot& Left,
 		const FGCSRouteAutoStartTargetSnapshot& Right)
@@ -222,6 +278,7 @@ bool UGCSRouteWorkflowCoordinator::Initialize(UGameInstance* GI, UUserWidget* Ri
 void UGCSRouteWorkflowCoordinator::Shutdown()
 {
 	StopRefreshTicker();
+	ClearConfirmedRouteSlotDisplayOverride();
 	UnbindCommandControls();
 	ClearRouteListModel();
 	if (UButton* Button = OpenWorkflowButtonRef.Get()) Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteWorkflowClicked);
@@ -243,6 +300,17 @@ void UGCSRouteWorkflowCoordinator::Shutdown()
 	AutoStartState = EGCSRouteAutoStartState::Idle;
 	AutoStartSnapshot = FGCSRouteAutoStartSnapshot{};
 	AutoStartDiagnostic.Reset();
+	ConfirmedNpzMapping = FGCSConfirmedNpzMappingSnapshot{};
+	SelectedShowOriginDroneID.Reset();
+	ActiveShowOriginCaptureRequestID.Reset();
+	ActiveShowOriginCaptureRevision = 0;
+	LastIssuedShowOriginCandidateRevision = 0;
+	ShowOriginCandidate = FGCSShowOriginCandidate{};
+	ShowOriginDraftSource = EGCSShowOriginDraftSource::Official;
+	bUpdatingShowOriginUi = false;
+	bShowOriginDraftActive = false;
+	bHasConfirmedNpzMapping = false;
+	LastIssuedConfirmationRevision = 0;
 #if WITH_DEV_AUTOMATION_TESTS
 	WorkflowFactoryForTest = {};
 	bSkipRequiredWidgetBindingForTest = false;
@@ -250,6 +318,9 @@ void UGCSRouteWorkflowCoordinator::Shutdown()
 	AutoStartTestHooks = {};
 	CommandGateInputsForTest.Reset();
 	CloseRequestCountForTest = 0;
+	ApplyNpzNumberingClickCountForTest = 0;
+	CaptureStableGpsClickCountForTest = 0;
+	ClearNpzNumberingClickCountForTest = 0;
 #endif
 }
 
@@ -413,6 +484,13 @@ bool UGCSRouteWorkflowCoordinator::BindWorkflowWidgets(UUserWidget* Workflow, FS
 	if (!ResolveRequiredWidgets(Convert, Required({
 		TEXT("TXT_RouteFilePath"),TEXT("TXT_RouteCount"),TEXT("TXT_FrameCount"),TEXT("TXT_DatasetState"),
 		TEXT("BTN_RouteBrowse"),TEXT("BTN_OutputBrowse"),TEXT("BTN_LoadPreview"),TEXT("BTN_GenerateWaypoints"),
+		TEXT("BTN_CaptureStableGps"),TEXT("BTN_ApplyNpzNumbering"),TEXT("BTN_ClearNpzNumbering"),
+		TEXT("TXT_NpzGpsMappingStatusValue"),TEXT("TXT_NpzGpsMappingCounts"),
+		TEXT("TXT_NpzGpsMappingDescription"),TEXT("TXT_NpzMappingExceptions"),TEXT("TXT_NpzMappingWarning"),
+		TEXT("CMB_ShowOriginDroneId"),TEXT("BTN_RefreshShowOriginDrones"),
+		TEXT("TXT_ShowOriginGpsStatus"),TEXT("BTN_CaptureShowOriginGps"),
+		TEXT("BTN_ApplyShowOriginGps"),TEXT("TXT_ShowOriginGpsSource"),
+		TEXT("TXT_ShowOriginCaptureTime"),
 		TEXT("EDT_OriginLatitude"),TEXT("EDT_OriginLongitude"),TEXT("EDT_OriginAltitude"),
 		TEXT("TXT_OutputPath"),TEXT("TXT_StateDatasetValue"),TEXT("TXT_StatePreviewValue"),TEXT("TXT_StateArtifactValue"),
 		TEXT("PROGRESS_Convert"),TEXT("TXT_GeneratedCount"),TEXT("TXT_ValidatedCount"),TEXT("TXT_ConvertPercent"),
@@ -433,7 +511,11 @@ bool UGCSRouteWorkflowCoordinator::BindWorkflowWidgets(UUserWidget* Workflow, FS
 		FString::FromInt(AppliedMaxConcurrentTargets));
 	ApplyReadOnlyControlState();
 	BindCommandControls();
-	bBindingValid = true; return true;
+	ApplyConfirmedRouteSlotDisplayOverride();
+	bBindingValid = true;
+	RefreshShowOriginDroneList();
+	RefreshShowOriginCaptureState();
+	return true;
 }
 
 void UGCSRouteWorkflowCoordinator::ApplyReadOnlyControlState()
@@ -520,6 +602,50 @@ void UGCSRouteWorkflowCoordinator::BindCommandControls()
 		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleApplyMaxConcurrencyClicked);
 		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleApplyMaxConcurrencyClicked);
 	}
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_ApplyNpzNumbering")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleApplyNpzNumberingClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleApplyNpzNumberingClicked);
+	}
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_CaptureStableGps")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleCaptureStableGpsClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleCaptureStableGpsClicked);
+	}
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_ClearNpzNumbering")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleClearNpzNumberingClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleClearNpzNumberingClicked);
+	}
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_RefreshShowOriginDrones")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRefreshShowOriginDronesClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRefreshShowOriginDronesClicked);
+	}
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_CaptureShowOriginGps")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleCaptureShowOriginGpsClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleCaptureShowOriginGpsClicked);
+	}
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_ApplyShowOriginGps")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleApplyShowOriginGpsClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleApplyShowOriginGpsClicked);
+	}
+	if (UComboBoxString* Combo = Get<UComboBoxString>(ConvertWidgets, TEXT("CMB_ShowOriginDroneId")))
+	{
+		Combo->OnSelectionChanged.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleShowOriginDroneSelectionChanged);
+		Combo->OnSelectionChanged.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleShowOriginDroneSelectionChanged);
+	}
+	for (const FName Name : {FName(TEXT("EDT_OriginLatitude")),
+		FName(TEXT("EDT_OriginLongitude")), FName(TEXT("EDT_OriginAltitude"))})
+	{
+		if (UEditableTextBox* Box = Get<UEditableTextBox>(ConvertWidgets, Name))
+		{
+			Box->OnTextChanged.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleShowOriginFieldTextChanged);
+			Box->OnTextChanged.AddDynamic(this, &UGCSRouteWorkflowCoordinator::HandleShowOriginFieldTextChanged);
+		}
+	}
 }
 
 void UGCSRouteWorkflowCoordinator::UnbindCommandControls()
@@ -551,6 +677,1082 @@ void UGCSRouteWorkflowCoordinator::UnbindCommandControls()
 		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRetryFailedClicked);
 	if (UButton* Button = Get<UButton>(UploadWidgets, TEXT("BTN_ApplyMaxConcurrency")))
 		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleApplyMaxConcurrencyClicked);
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_ApplyNpzNumbering")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleApplyNpzNumberingClicked);
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_CaptureStableGps")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleCaptureStableGpsClicked);
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_ClearNpzNumbering")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleClearNpzNumberingClicked);
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_RefreshShowOriginDrones")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRefreshShowOriginDronesClicked);
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_CaptureShowOriginGps")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleCaptureShowOriginGpsClicked);
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_ApplyShowOriginGps")))
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleApplyShowOriginGpsClicked);
+	if (UComboBoxString* Combo = Get<UComboBoxString>(ConvertWidgets, TEXT("CMB_ShowOriginDroneId")))
+		Combo->OnSelectionChanged.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleShowOriginDroneSelectionChanged);
+	for (const FName Name : {FName(TEXT("EDT_OriginLatitude")),
+		FName(TEXT("EDT_OriginLongitude")), FName(TEXT("EDT_OriginAltitude"))})
+		if (UEditableTextBox* Box = Get<UEditableTextBox>(ConvertWidgets, Name))
+			Box->OnTextChanged.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleShowOriginFieldTextChanged);
+}
+
+bool UGCSRouteWorkflowCoordinator::BuildCaptureBoundAssignmentSource(
+	const FRouteAssignmentSourceSnapshot& RouteAndFleetSource,
+	const FRouteGpsCaptureSnapshot& Capture,
+	FRouteAssignmentSourceSnapshot& OutSource,
+	FString& OutError)
+{
+	OutSource = FRouteAssignmentSourceSnapshot{};
+	OutError.Reset();
+	if (Capture.State != ERouteGpsCaptureState::Ready)
+	{
+		OutError = TEXT("F.1 GPS Capture is not Ready.");
+		return false;
+	}
+	if (Capture.FleetSessionID.IsEmpty() ||
+		Capture.FleetSessionID != RouteAndFleetSource.SourceIdentity.FleetSessionID)
+	{
+		OutError = TEXT("F.1 GPS Capture Fleet session does not match the Route Assignment source.");
+		return false;
+	}
+	if (Capture.SelectedDroneIDs.IsEmpty() ||
+		Capture.Participants.Num() != Capture.SelectedDroneIDs.Num())
+	{
+		OutError = TEXT("F.1 GPS Capture participant set is incomplete.");
+		return false;
+	}
+
+	OutSource.SourceIdentity = RouteAndFleetSource.SourceIdentity;
+	OutSource.RouteSlots = RouteAndFleetSource.RouteSlots;
+	OutSource.Drones.Reserve(Capture.Participants.Num());
+	TSet<FString> Selected(Capture.SelectedDroneIDs);
+	TSet<FString> Seen;
+	for (const FRouteGpsCaptureParticipantResult& Participant : Capture.Participants)
+	{
+		if (!Selected.Contains(Participant.DroneID) || Seen.Contains(Participant.DroneID) ||
+			Participant.EndpointIdentity.TrimStartAndEnd().IsEmpty() ||
+			Participant.Status != ERouteGpsCaptureParticipantStatus::Ready ||
+			!FMath::IsFinite(Participant.EstimatedLatitude) ||
+			!FMath::IsFinite(Participant.EstimatedLongitude))
+		{
+			OutError = FString::Printf(
+				TEXT("F.1 GPS Capture participant is invalid or duplicated: %s"),
+				*Participant.DroneID);
+			OutSource = FRouteAssignmentSourceSnapshot{};
+			return false;
+		}
+		Seen.Add(Participant.DroneID);
+		FRouteAssignmentDroneSource Drone;
+		Drone.DroneID = Participant.DroneID;
+		Drone.Latitude = Participant.EstimatedLatitude;
+		Drone.Longitude = Participant.EstimatedLongitude;
+		Drone.AltitudeAMSL = Participant.AltitudeAMSL;
+		Drone.bGPSValid = true;
+		Drone.GPSFixType = Participant.FixType;
+		Drone.bAltitudeValid = true;
+		Drone.bOnline = true;
+		OutSource.Drones.Add(MoveTemp(Drone));
+	}
+	OutSource.Drones.Sort([](const FRouteAssignmentDroneSource& Left,
+		const FRouteAssignmentDroneSource& Right)
+	{
+		return Left.DroneID < Right.DroneID;
+	});
+	return Seen.Num() == Capture.SelectedDroneIDs.Num();
+}
+
+bool UGCSRouteWorkflowCoordinator::IsConfirmedMappingMutationBlocked(FString& OutError) const
+{
+	OutError.Reset();
+	if (IsCommandSelectionMutationBlocked())
+	{
+		OutError = TEXT("Cannot change NPZ numbering while an upload transaction or Job is active.");
+		return true;
+	}
+	if (GameInstanceRef.IsValid())
+	{
+		const UDSPGCSFrozenAssignmentSyncSubsystem* Sync =
+			GameInstanceRef->GetSubsystem<UDSPGCSFrozenAssignmentSyncSubsystem>();
+		if (Sync && Sync->GetSyncState() == EDSPGCSFrozenAssignmentSyncState::SyncingToConsole)
+		{
+			OutError = TEXT("Cannot change NPZ numbering while Frozen Assignment sync is active.");
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UGCSRouteWorkflowCoordinator::BuildConfirmedNpzMapping(
+	FGCSConfirmedNpzMappingSnapshot& OutMapping,
+	FString& OutError)
+{
+	OutMapping = FGCSConfirmedNpzMappingSnapshot{};
+	OutError.Reset();
+	if (!GameInstanceRef.IsValid())
+	{
+		OutError = TEXT("Route Workflow Coordinator is not initialized.");
+		return false;
+	}
+	UGameInstance* GI = GameInstanceRef.Get();
+	UGCSUIBridgeSubsystem* Bridge = GI->GetSubsystem<UGCSUIBridgeSubsystem>();
+	UFleetManagerSubsystem* Fleet = GI->GetSubsystem<UFleetManagerSubsystem>();
+	URouteGpsCaptureSubsystem* CaptureAuthority = GI->GetSubsystem<URouteGpsCaptureSubsystem>();
+	URouteAssignmentSubsystem* Assignment = GI->GetSubsystem<URouteAssignmentSubsystem>();
+	if (!Bridge || !Fleet || !Assignment)
+	{
+		OutError = TEXT("Selection, Fleet, or Route Assignment authority is unavailable.");
+		return false;
+	}
+
+	TArray<FString> Selection = Bridge->GetSelectedCommandDroneIDs();
+	Selection.Sort();
+	if (Selection.IsEmpty())
+	{
+		OutError = TEXT("NPZ numbering requires at least one selected drone.");
+		return false;
+	}
+
+	FRouteAssignmentSourceSnapshot FullSource;
+	if (!Assignment->CaptureSourceSnapshot(FullSource, OutError))
+	{
+		return false;
+	}
+	if (FullSource.SourceIdentity.FleetSessionID.IsEmpty() ||
+		FullSource.SourceIdentity.FleetSessionID != Fleet->GetActiveFleetSessionID())
+	{
+		OutError = TEXT("Route Assignment and live Fleet session identities do not match.");
+		return false;
+	}
+
+	FRouteGpsCaptureSnapshot Capture;
+	if (!CaptureAuthority || !CaptureAuthority->GetLatestCommandSelectionSnapshot(Capture) ||
+		Capture.State != ERouteGpsCaptureState::Ready)
+	{
+		OutError = TEXT("F.1 GPS Capture must be Ready before confirming NPZ numbering.");
+		return false;
+	}
+	if (Capture.SelectedDroneIDs != Selection)
+	{
+		OutError = TEXT("F.1 GPS Capture Selection no longer matches the current Command Selection.");
+		return false;
+	}
+	FRouteAssignmentSourceSnapshot NumberingSource;
+	TMap<FString, FString> EndpointByDroneID;
+	if (!BuildCaptureBoundAssignmentSource(FullSource, Capture, NumberingSource, OutError))
+	{
+		return false;
+	}
+	for (const FRouteGpsCaptureParticipantResult& Participant : Capture.Participants)
+	{
+		EndpointByDroneID.Add(Participant.DroneID, Participant.EndpointIdentity);
+	}
+
+	for (const FString& DroneID : Selection)
+	{
+		FDroneData CurrentDrone;
+		if (!Fleet->GetDroneByID(DroneID, CurrentDrone) || !CurrentDrone.bOnline ||
+			CurrentDrone.EndpointIdentity.TrimStartAndEnd().IsEmpty())
+		{
+			OutError = FString::Printf(
+				TEXT("Selected NPZ numbering participant identity is unavailable: %s"),
+				*DroneID);
+			return false;
+		}
+		const FString* CapturedEndpoint = EndpointByDroneID.Find(DroneID);
+		if (!CapturedEndpoint || *CapturedEndpoint != CurrentDrone.EndpointIdentity)
+		{
+			OutError = FString::Printf(
+				TEXT("F.1 participant endpoint is no longer current: %s"), *DroneID);
+			return false;
+		}
+		EndpointByDroneID.Add(DroneID, CurrentDrone.EndpointIdentity);
+	}
+
+	FRouteAssignmentCandidate Candidate;
+	if (!RouteAssignmentPipeline::BuildCandidateFromSourceSnapshot(
+		NumberingSource, Candidate, OutError))
+	{
+		return false;
+	}
+	if (!Candidate.Conflicts.IsEmpty() || !Candidate.UnresolvedDrones.IsEmpty() ||
+		!Candidate.ExcludedDrones.IsEmpty() || !Candidate.SpareDrones.IsEmpty() ||
+		Candidate.MatchedEntries.Num() != Selection.Num())
+	{
+		OutError = TEXT("NPZ numbering did not produce one unambiguous RouteSlot for every selected drone.");
+		return false;
+	}
+	if (Candidate.MatchedEntries.IsEmpty())
+	{
+		OutError = TEXT("Selected GPS positions did not match any Frame-0 RouteSlot.");
+		return false;
+	}
+
+	if (LastIssuedConfirmationRevision == MAX_int64)
+	{
+		OutError = TEXT("Confirmed NPZ Mapping revision space is exhausted.");
+		return false;
+	}
+	FGCSConfirmedNpzMappingSnapshot Mapping;
+	Mapping.ConfirmationRevision = LastIssuedConfirmationRevision + 1;
+	Mapping.RouteDatasetGeneration = NumberingSource.SourceIdentity.RouteDatasetGeneration;
+	Mapping.SourceDatasetDigest = NumberingSource.SourceIdentity.SourceDatasetDigest.ToLowerHex();
+	Mapping.RouteCount = NumberingSource.RouteSlots.Num();
+	Mapping.NormalizedShowOriginLatitudeE7 =
+		NumberingSource.SourceIdentity.NormalizedShowOriginLatitudeE7;
+	Mapping.NormalizedShowOriginLongitudeE7 =
+		NumberingSource.SourceIdentity.NormalizedShowOriginLongitudeE7;
+	Mapping.F1CaptureAuthoritySessionID = Capture.CaptureAuthoritySessionID;
+	Mapping.F1CaptureRequestID = Capture.CaptureRequestID;
+	Mapping.F1CaptureRevision = Capture.CaptureRevision;
+	Mapping.SelectionDigest = Capture.SelectionDigest;
+	Mapping.SelectedDroneIDs = Selection;
+	Mapping.FleetSessionID = NumberingSource.SourceIdentity.FleetSessionID;
+	Mapping.Entries.Reserve(Candidate.MatchedEntries.Num());
+	for (const FRouteAssignmentEntry& Match : Candidate.MatchedEntries)
+	{
+		const FString* Endpoint = EndpointByDroneID.Find(Match.DroneID);
+		if (!Endpoint)
+		{
+			OutError = TEXT("Matcher produced a DroneID outside the selected participant set.");
+			return false;
+		}
+		FGCSConfirmedNpzMappingEntry Entry;
+		Entry.DroneID = Match.DroneID;
+		Entry.EndpointIdentity = *Endpoint;
+		Entry.RouteSlotIndex = Match.RouteSlotIndex;
+		Entry.MatchDistanceMeters = Match.HorizontalDistanceMeters;
+		Mapping.Entries.Add(MoveTemp(Entry));
+	}
+	Mapping.Entries.Sort([](const FGCSConfirmedNpzMappingEntry& Left,
+		const FGCSConfirmedNpzMappingEntry& Right)
+	{
+		return Left.DroneID < Right.DroneID;
+	});
+	Mapping.bValid = true;
+
+	Assignment->Reset();
+	if (!Assignment->ReplaceWorkingAssignment(Candidate, OutError))
+	{
+		return false;
+	}
+	LastIssuedConfirmationRevision = Mapping.ConfirmationRevision;
+	OutMapping = MoveTemp(Mapping);
+	return true;
+}
+
+bool UGCSRouteWorkflowCoordinator::ValidateConfirmedNpzMappingCurrent(
+	FString& OutError) const
+{
+	OutError.Reset();
+	if (!bHasConfirmedNpzMapping)
+	{
+		OutError = TEXT("No Confirmed NPZ Mapping exists.");
+		return false;
+	}
+	if (!ConfirmedNpzMapping.bValid)
+	{
+		OutError = ConfirmedNpzMapping.InvalidReason.IsEmpty()
+			? TEXT("Confirmed NPZ Mapping is invalidated; Clear or confirm again.")
+			: ConfirmedNpzMapping.InvalidReason;
+		return false;
+	}
+	if (!GameInstanceRef.IsValid())
+	{
+		OutError = TEXT("Route Workflow Coordinator is not initialized.");
+		return false;
+	}
+	const UGameInstance* GI = GameInstanceRef.Get();
+	const UGCSUIBridgeSubsystem* Bridge = GI->GetSubsystem<UGCSUIBridgeSubsystem>();
+	const UFleetManagerSubsystem* Fleet = GI->GetSubsystem<UFleetManagerSubsystem>();
+	const URouteAssignmentSubsystem* Assignment = GI->GetSubsystem<URouteAssignmentSubsystem>();
+	if (!Bridge || !Fleet || !Assignment)
+	{
+		OutError = TEXT("Confirmed NPZ Mapping authority dependencies are unavailable.");
+		return false;
+	}
+	TArray<FString> Selection = Bridge->GetSelectedCommandDroneIDs();
+	Selection.Sort();
+	if (Selection != ConfirmedNpzMapping.SelectedDroneIDs)
+	{
+		OutError = TEXT("Confirmed NPZ Mapping was invalidated by a Command Selection change.");
+		return false;
+	}
+	if (Fleet->GetActiveFleetSessionID() != ConfirmedNpzMapping.FleetSessionID)
+	{
+		OutError = TEXT("Confirmed NPZ Mapping was invalidated by a Fleet session change.");
+		return false;
+	}
+	const URouteGpsCaptureSubsystem* CaptureAuthority =
+		GI->GetSubsystem<URouteGpsCaptureSubsystem>();
+	FRouteGpsCaptureSnapshot Capture;
+	if (!CaptureAuthority || !CaptureAuthority->GetLatestCommandSelectionSnapshot(Capture) ||
+		Capture.State != ERouteGpsCaptureState::Ready ||
+		Capture.CaptureAuthoritySessionID != ConfirmedNpzMapping.F1CaptureAuthoritySessionID ||
+		Capture.CaptureRequestID != ConfirmedNpzMapping.F1CaptureRequestID ||
+		Capture.CaptureRevision != ConfirmedNpzMapping.F1CaptureRevision ||
+		Capture.SelectionDigest != ConfirmedNpzMapping.SelectionDigest ||
+		Capture.FleetSessionID != ConfirmedNpzMapping.FleetSessionID)
+	{
+		OutError = TEXT("Confirmed NPZ Mapping F.1 GPS Capture is stale or no longer Ready.");
+		return false;
+	}
+	FRouteAssignmentSourceSnapshot Source;
+	if (!Assignment->CaptureSourceSnapshot(Source, OutError))
+	{
+		return false;
+	}
+	if (Source.SourceIdentity.RouteDatasetGeneration != ConfirmedNpzMapping.RouteDatasetGeneration ||
+		Source.SourceIdentity.SourceDatasetDigest.ToLowerHex() != ConfirmedNpzMapping.SourceDatasetDigest ||
+		Source.RouteSlots.Num() != ConfirmedNpzMapping.RouteCount ||
+		Source.SourceIdentity.NormalizedShowOriginLatitudeE7 !=
+			ConfirmedNpzMapping.NormalizedShowOriginLatitudeE7 ||
+		Source.SourceIdentity.NormalizedShowOriginLongitudeE7 !=
+			ConfirmedNpzMapping.NormalizedShowOriginLongitudeE7)
+	{
+		OutError = TEXT("Confirmed NPZ Mapping Route dataset or Show Origin changed.");
+		return false;
+	}
+	TSet<FString> DroneIDs;
+	TSet<int32> RouteSlots;
+	for (const FGCSConfirmedNpzMappingEntry& Entry : ConfirmedNpzMapping.Entries)
+	{
+		FDroneData Drone;
+		if (Entry.DroneID.IsEmpty() || DroneIDs.Contains(Entry.DroneID) ||
+			Entry.RouteSlotIndex < 0 || Entry.RouteSlotIndex >= ConfirmedNpzMapping.RouteCount ||
+			RouteSlots.Contains(Entry.RouteSlotIndex) ||
+			!Fleet->GetDroneByID(Entry.DroneID, Drone) || !Drone.bOnline ||
+			Drone.EndpointIdentity != Entry.EndpointIdentity)
+		{
+			OutError = FString::Printf(
+				TEXT("Confirmed NPZ Mapping participant or endpoint changed: %s"),
+				*Entry.DroneID);
+			return false;
+		}
+		DroneIDs.Add(Entry.DroneID);
+		RouteSlots.Add(Entry.RouteSlotIndex);
+	}
+	return !ConfirmedNpzMapping.Entries.IsEmpty();
+}
+
+void UGCSRouteWorkflowCoordinator::ApplyConfirmedRouteSlotDisplayOverride() const
+{
+	if (!GameInstanceRef.IsValid()) return;
+	UWorld* World = GameInstanceRef->GetWorld();
+	if (!World) return;
+	TMap<FString, int32> Overrides;
+	if (bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid)
+	{
+		for (const FGCSConfirmedNpzMappingEntry& Entry : ConfirmedNpzMapping.Entries)
+		{
+			Overrides.Add(Entry.DroneID, Entry.RouteSlotIndex);
+		}
+	}
+	for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
+	{
+		It->SetConfirmedRouteSlotDisplayOverrides(Overrides);
+	}
+}
+
+void UGCSRouteWorkflowCoordinator::ClearConfirmedRouteSlotDisplayOverride() const
+{
+	if (!GameInstanceRef.IsValid()) return;
+	UWorld* World = GameInstanceRef->GetWorld();
+	if (!World) return;
+	for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
+	{
+		It->ClearConfirmedRouteSlotDisplayOverrides();
+	}
+}
+
+void UGCSRouteWorkflowCoordinator::InvalidateConfirmedNpzMapping(
+	const FString& Reason,
+	const bool bResetWorkingAssignment)
+{
+	if (!bHasConfirmedNpzMapping || !ConfirmedNpzMapping.bValid) return;
+	ConfirmedNpzMapping.bValid = false;
+	ConfirmedNpzMapping.InvalidReason = Reason.IsEmpty()
+		? TEXT("Confirmed NPZ Mapping is invalidated; Clear or confirm again.")
+		: Reason;
+	ClearConfirmedRouteSlotDisplayOverride();
+	if (bResetWorkingAssignment && GameInstanceRef.IsValid())
+	{
+		if (URouteAssignmentSubsystem* Assignment =
+			GameInstanceRef->GetSubsystem<URouteAssignmentSubsystem>())
+		{
+			Assignment->Reset();
+		}
+	}
+}
+
+void UGCSRouteWorkflowCoordinator::ClearConfirmedNpzMapping(
+	const bool bResetWorkingAssignment)
+{
+	ClearConfirmedRouteSlotDisplayOverride();
+	ConfirmedNpzMapping = FGCSConfirmedNpzMappingSnapshot{};
+	bHasConfirmedNpzMapping = false;
+	if (bResetWorkingAssignment && GameInstanceRef.IsValid())
+	{
+		if (URouteAssignmentSubsystem* Assignment =
+			GameInstanceRef->GetSubsystem<URouteAssignmentSubsystem>())
+		{
+			Assignment->Reset();
+		}
+	}
+}
+
+void UGCSRouteWorkflowCoordinator::HandleCaptureStableGpsClicked()
+{
+	if (!IsInGameThread()) return;
+#if WITH_DEV_AUTOMATION_TESTS
+	++CaptureStableGpsClickCountForTest;
+#endif
+	FString Error;
+	if (IsConfirmedMappingMutationBlocked(Error))
+	{
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview, Error);
+		return;
+	}
+	if (!GameInstanceRef.IsValid())
+	{
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview,
+			TEXT("Route Workflow Coordinator is not initialized."));
+		return;
+	}
+	FRouteGpsCapturePolicy Policy;
+	if (!URouteGpsCaptureSubsystem::LoadConfiguredPolicy(Policy, Error))
+	{
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview, Error);
+		return;
+	}
+#if UE_BUILD_SHIPPING
+	if (!Policy.bHardwareValidated)
+	{
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview,
+			TEXT("GPS Capture policy is not hardware-validated; Shipping capture is fail-closed."));
+		return;
+	}
+#endif
+	URouteGpsCaptureSubsystem* CaptureAuthority =
+		GameInstanceRef->GetSubsystem<URouteGpsCaptureSubsystem>();
+	if (!CaptureAuthority || !CaptureAuthority->BeginCapture(Policy, Error))
+	{
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview,
+			Error.IsEmpty() ? TEXT("Stable GPS Capture could not start.") : Error);
+		return;
+	}
+
+	// A newly accepted capture is a new identity-bound transaction. Only now is
+	// the previously confirmed mapping invalidated; a rejected click preserves it.
+	ClearConfirmedNpzMapping(true);
+	ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview);
+	FRouteGpsCaptureSnapshot Snapshot;
+	CaptureAuthority->GetCurrentSnapshot(Snapshot);
+	UE_LOG(LogGCSRouteWorkflow, Display,
+		TEXT("[F1_GPS_CAPTURE] Started Profile=%s HardwareValidated=%s Request=%s Revision=%lld Selected=%d"),
+		*Policy.ProfileName, Policy.bHardwareValidated ? TEXT("yes") : TEXT("no"),
+		*Snapshot.CaptureRequestID, Snapshot.CaptureRevision,
+		Snapshot.SelectedDroneIDs.Num());
+	RefreshReadOnlyState();
+}
+
+void UGCSRouteWorkflowCoordinator::HandleApplyNpzNumberingClicked()
+{
+	if (!IsInGameThread()) return;
+#if WITH_DEV_AUTOMATION_TESTS
+	++ApplyNpzNumberingClickCountForTest;
+#endif
+	FString Error;
+	if (IsConfirmedMappingMutationBlocked(Error))
+	{
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview, Error);
+		return;
+	}
+	FGCSConfirmedNpzMappingSnapshot Mapping;
+	if (!BuildConfirmedNpzMapping(Mapping, Error))
+	{
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview,
+			Error.IsEmpty() ? TEXT("NPZ numbering confirmation was rejected.") : Error);
+		return;
+	}
+	ConfirmedNpzMapping = MoveTemp(Mapping);
+	bHasConfirmedNpzMapping = true;
+	ApplyConfirmedRouteSlotDisplayOverride();
+	ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview);
+	UE_LOG(LogGCSRouteWorkflow, Display,
+		TEXT("[NPZ_NUMBERING] Confirmed Revision=%lld Authority=StableF1Capture Frame=FixedShowOriginENU Snapshot=%s Entries=%d RouteSlots=%d"),
+		ConfirmedNpzMapping.ConfirmationRevision,
+		*ConfirmedNpzMapping.F1CaptureRequestID,
+		ConfirmedNpzMapping.Entries.Num(), ConfirmedNpzMapping.RouteCount);
+	RefreshReadOnlyState();
+}
+
+void UGCSRouteWorkflowCoordinator::HandleClearNpzNumberingClicked()
+{
+	if (!IsInGameThread()) return;
+#if WITH_DEV_AUTOMATION_TESTS
+	++ClearNpzNumberingClickCountForTest;
+#endif
+	FString Error;
+	if (IsConfirmedMappingMutationBlocked(Error))
+	{
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview, Error);
+		return;
+	}
+	ClearConfirmedNpzMapping(true);
+	ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview);
+	UE_LOG(LogGCSRouteWorkflow, Display,
+		TEXT("[NPZ_NUMBERING] Cleared; legacy NumericDroneID-1 fallback is available for F.1.5."));
+	RefreshReadOnlyState();
+}
+
+void UGCSRouteWorkflowCoordinator::HandleRefreshShowOriginDronesClicked()
+{
+	if (!IsInGameThread()) return;
+	RefreshShowOriginDroneList();
+	RefreshShowOriginCaptureState();
+	UpdateCommandControlState();
+}
+
+void UGCSRouteWorkflowCoordinator::RefreshShowOriginDroneList()
+{
+	using namespace GCSRouteWorkflowPrivate;
+	if (!GameInstanceRef.IsValid()) return;
+	UComboBoxString* Combo = Get<UComboBoxString>(
+		ConvertWidgets, TEXT("CMB_ShowOriginDroneId"));
+	const UFleetManagerSubsystem* Fleet =
+		GameInstanceRef->GetSubsystem<UFleetManagerSubsystem>();
+	if (!Combo || !Fleet) return;
+
+	TArray<FString> OnlineDroneIDs;
+	for (const FDroneData& Drone : Fleet->GetDronePage(0, Fleet->GetDroneCount()))
+	{
+		if (Drone.bOnline && !Drone.DroneID.TrimStartAndEnd().IsEmpty())
+		{
+			OnlineDroneIDs.Add(Drone.DroneID);
+		}
+	}
+	OnlineDroneIDs.Sort();
+	const bool bPreserveSelection =
+		!SelectedShowOriginDroneID.IsEmpty()
+		&& OnlineDroneIDs.Contains(SelectedShowOriginDroneID);
+
+	TGuardValue<bool> Guard(bUpdatingShowOriginUi, true);
+	Combo->ClearOptions();
+	for (const FString& DroneID : OnlineDroneIDs)
+	{
+		Combo->AddOption(DroneID);
+	}
+	if (bPreserveSelection)
+	{
+		Combo->SetSelectedOption(SelectedShowOriginDroneID);
+	}
+	else
+	{
+		const bool bWasSelected = !SelectedShowOriginDroneID.IsEmpty();
+		SelectedShowOriginDroneID.Reset();
+		Combo->ClearSelection();
+		if (bWasSelected)
+		{
+			InvalidateShowOriginCandidate(
+				TEXT("所选无人机已离线，请重新选择"));
+			SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
+				TEXT("所选无人机已离线，请重新选择"));
+		}
+		else if (OnlineDroneIDs.IsEmpty())
+		{
+			SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
+				TEXT("当前没有在线无人机"));
+		}
+	}
+}
+
+void UGCSRouteWorkflowCoordinator::HandleShowOriginDroneSelectionChanged(
+	FString SelectedItem,
+	ESelectInfo::Type SelectionType)
+{
+	(void)SelectionType;
+	if (!IsInGameThread() || bUpdatingShowOriginUi) return;
+	SelectedItem = SelectedItem.TrimStartAndEnd();
+	if (SelectedItem == SelectedShowOriginDroneID) return;
+	if (ShowOriginCandidate.bValid && !ShowOriginCandidate.bApplied)
+	{
+		InvalidateShowOriginCandidate(
+			TEXT("已切换表演原点来源无人机；旧GPS候选已失效"));
+	}
+	SelectedShowOriginDroneID = MoveTemp(SelectedItem);
+	ActiveShowOriginCaptureRequestID.Reset();
+	ActiveShowOriginCaptureRevision = 0;
+	RefreshShowOriginCaptureState();
+	UpdateCommandControlState();
+}
+
+void UGCSRouteWorkflowCoordinator::HandleCaptureShowOriginGpsClicked()
+{
+	using namespace GCSRouteWorkflowPrivate;
+	if (!IsInGameThread() || !GameInstanceRef.IsValid()) return;
+	if (SelectedShowOriginDroneID.IsEmpty())
+	{
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
+			TEXT("请先选择一架在线无人机"));
+		return;
+	}
+
+	FString Error;
+	FRouteGpsCapturePolicy Policy;
+	if (!URouteGpsCaptureSubsystem::LoadConfiguredPolicy(Policy, Error))
+	{
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"), Error);
+		return;
+	}
+#if UE_BUILD_SHIPPING
+	if (!Policy.bHardwareValidated)
+	{
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
+			TEXT("GPS采集策略尚未通过硬件验证，Shipping模式拒绝采集"));
+		return;
+	}
+#endif
+	URouteGpsCaptureSubsystem* CaptureAuthority =
+		GameInstanceRef->GetSubsystem<URouteGpsCaptureSubsystem>();
+	const TArray<FString> Participants{SelectedShowOriginDroneID};
+	if (!CaptureAuthority ||
+		!CaptureAuthority->BeginCaptureForParticipants(Policy, Participants, Error))
+	{
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
+			Error.IsEmpty() ? TEXT("稳定GPS采集无法启动") : Error);
+		return;
+	}
+
+	FRouteGpsCaptureSnapshot Snapshot;
+	CaptureAuthority->GetCurrentSnapshot(Snapshot);
+	if (ShowOriginCandidate.bValid && !ShowOriginCandidate.bApplied)
+	{
+		InvalidateShowOriginCandidate(TEXT("新的GPS采集已替换旧候选"));
+	}
+	ShowOriginCandidate = FGCSShowOriginCandidate{};
+	ActiveShowOriginCaptureRequestID = Snapshot.CaptureRequestID;
+	ActiveShowOriginCaptureRevision = Snapshot.CaptureRevision;
+	SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
+		FString::Printf(TEXT("%s｜正在采集稳定GPS"), *SelectedShowOriginDroneID));
+	SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsSource"),
+		FString::Printf(TEXT("来源：%s（采集中）"), *SelectedShowOriginDroneID));
+	SetText(ConvertWidgets, TEXT("TXT_ShowOriginCaptureTime"), TEXT("采集时间：--"));
+	UE_LOG(LogGCSRouteWorkflow, Display,
+		TEXT("[SHOW_ORIGIN_CAPTURE] Started Drone=%s EndpointBound=yes Request=%s Revision=%lld Policy=%s"),
+		*SelectedShowOriginDroneID, *Snapshot.CaptureRequestID,
+		Snapshot.CaptureRevision, *Policy.ProfileName);
+	UpdateCommandControlState();
+}
+
+void UGCSRouteWorkflowCoordinator::InvalidateShowOriginCandidate(
+	const FString& Reason)
+{
+	ActiveShowOriginCaptureRequestID.Reset();
+	ActiveShowOriginCaptureRevision = 0;
+	if (ShowOriginCandidate.bApplied)
+	{
+		ShowOriginCandidate = FGCSShowOriginCandidate{};
+		ShowOriginDraftSource = EGCSShowOriginDraftSource::Official;
+		return;
+	}
+	ShowOriginCandidate.bValid = false;
+	ShowOriginCandidate.bGpsProvenanceIntact = false;
+	ShowOriginCandidate.InvalidReason = Reason;
+	if (bShowOriginDraftActive)
+	{
+		ShowOriginDraftSource = EGCSShowOriginDraftSource::InvalidatedCandidate;
+	}
+}
+
+void UGCSRouteWorkflowCoordinator::RefreshShowOriginCaptureState()
+{
+	using namespace GCSRouteWorkflowPrivate;
+	if (!GameInstanceRef.IsValid()) return;
+	const UFleetManagerSubsystem* Fleet =
+		GameInstanceRef->GetSubsystem<UFleetManagerSubsystem>();
+	if (SelectedShowOriginDroneID.IsEmpty()) return;
+
+	if (ActiveShowOriginCaptureRequestID.IsEmpty())
+	{
+		if (ShowOriginDraftSource == EGCSShowOriginDraftSource::CapturedCandidate
+			|| ShowOriginDraftSource == EGCSShowOriginDraftSource::Manual
+			|| ShowOriginDraftSource == EGCSShowOriginDraftSource::InvalidatedCandidate)
+		{
+			return;
+		}
+		FDroneData Drone;
+		if (!Fleet || !Fleet->GetDroneByID(SelectedShowOriginDroneID, Drone)
+			|| !Drone.bOnline)
+		{
+			SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
+				TEXT("所选无人机已离线，请重新选择"));
+			return;
+		}
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"), FString::Printf(
+			TEXT("%s｜Online｜Fix %d｜GPS %s"), *Drone.DroneID,
+			Drone.GPSFixType, DroneGPS::IsValid(Drone) ? TEXT("有效") : TEXT("不可用")));
+		return;
+	}
+
+	const URouteGpsCaptureSubsystem* CaptureAuthority =
+		GameInstanceRef->GetSubsystem<URouteGpsCaptureSubsystem>();
+	FRouteGpsCaptureSnapshot Snapshot;
+	if (!CaptureAuthority || !CaptureAuthority->GetCurrentSnapshot(Snapshot)
+		|| Snapshot.CaptureRequestID != ActiveShowOriginCaptureRequestID
+		|| Snapshot.CaptureRevision != ActiveShowOriginCaptureRevision)
+	{
+		InvalidateShowOriginCandidate(TEXT("GPS候选已被新的Capture事务替换"));
+		ShowOriginDraftSource = EGCSShowOriginDraftSource::InvalidatedCandidate;
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
+			TEXT("GPS候选已失效：Capture已被替换"));
+		ActiveShowOriginCaptureRequestID.Reset();
+		ActiveShowOriginCaptureRevision = 0;
+		return;
+	}
+
+	if (Snapshot.State == ERouteGpsCaptureState::Capturing)
+	{
+		const int32 Samples = Snapshot.Participants.IsEmpty()
+			? 0 : Snapshot.Participants[0].UniqueSampleCount;
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"), FString::Printf(
+			TEXT("%s｜正在采集稳定GPS｜样本 %d/%d"),
+			*SelectedShowOriginDroneID, Samples, Snapshot.Policy.MinUniqueSamples));
+		return;
+	}
+	if (Snapshot.State == ERouteGpsCaptureState::Failed
+		|| Snapshot.State == ERouteGpsCaptureState::Invalidated)
+	{
+		const ERouteGpsCaptureFailureReason Failure = Snapshot.Participants.IsEmpty()
+			? ERouteGpsCaptureFailureReason::GpsUnavailable
+			: Snapshot.Participants[0].FailureReason;
+		InvalidateShowOriginCandidate(FString::Printf(
+			TEXT("GPS采集失败：%s"), *GpsCaptureFailure(Failure)));
+		ShowOriginDraftSource = EGCSShowOriginDraftSource::InvalidatedCandidate;
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"), FString::Printf(
+			TEXT("%s｜GPS采集失败：%s"), *SelectedShowOriginDroneID,
+			*GpsCaptureFailure(Failure)));
+		return;
+	}
+	if (Snapshot.State != ERouteGpsCaptureState::Ready
+		|| Snapshot.Participants.Num() != 1) return;
+	if (ShowOriginCandidate.bValid
+		&& ShowOriginCandidate.CaptureRequestID == Snapshot.CaptureRequestID
+		&& ShowOriginCandidate.CaptureRevision == Snapshot.CaptureRevision)
+	{
+		return;
+	}
+
+	const FRouteGpsCaptureParticipantResult& Participant = Snapshot.Participants[0];
+	if (Participant.Status != ERouteGpsCaptureParticipantStatus::Ready
+		|| Participant.DroneID != SelectedShowOriginDroneID)
+	{
+		InvalidateShowOriginCandidate(TEXT("Ready Capture参与者与当前Anchor不一致"));
+		ShowOriginDraftSource = EGCSShowOriginDraftSource::InvalidatedCandidate;
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
+			TEXT("GPS候选已失效：参与者身份不一致"));
+		return;
+	}
+
+	FGCSShowOriginCandidate Candidate;
+	Candidate.DroneID = Participant.DroneID;
+	Candidate.EndpointIdentity = Participant.EndpointIdentity;
+	Candidate.CaptureAuthoritySessionID = Snapshot.CaptureAuthoritySessionID;
+	Candidate.CaptureRequestID = Snapshot.CaptureRequestID;
+	Candidate.CaptureRevision = Snapshot.CaptureRevision;
+	Candidate.Latitude = Participant.EstimatedLatitude;
+	Candidate.Longitude = Participant.EstimatedLongitude;
+	Candidate.AltitudeAMSL = Participant.AltitudeAMSL;
+	Candidate.FixType = Participant.FixType;
+	Candidate.FirstGpsSampleUtcMs = Participant.FirstGpsSampleUtcMs;
+	Candidate.LastGpsSampleUtcMs = Participant.LastGpsSampleUtcMs;
+	Candidate.UniqueSampleCount = Participant.UniqueSampleCount;
+	Candidate.MedianResidualMeters = Participant.MedianResidualMeters;
+	Candidate.RobustSpreadMeters = Participant.RobustSpreadMeters;
+	Candidate.MaxResidualMeters = Participant.MaxResidualMeters;
+	Candidate.CaptureCompletedUtcMs = Snapshot.CompletedAtUtc.ToUnixTimestamp() * 1000
+		+ Snapshot.CompletedAtUtc.GetMillisecond();
+	Candidate.FleetSessionID = Snapshot.FleetSessionID;
+	Candidate.CandidateRevision = ++LastIssuedShowOriginCandidateRevision;
+	Candidate.bValid = true;
+	Candidate.bGpsProvenanceIntact = true;
+	ShowOriginCandidate = MoveTemp(Candidate);
+	ShowOriginDraftSource = EGCSShowOriginDraftSource::CapturedCandidate;
+	bShowOriginDraftActive = true;
+	SetShowOriginDraftFields(ShowOriginCandidate.Latitude,
+		ShowOriginCandidate.Longitude, ShowOriginCandidate.AltitudeAMSL);
+	const FDateTime NowUtc = FDateTime::UtcNow();
+	const int64 NowMs = NowUtc.ToUnixTimestamp() * 1000 + NowUtc.GetMillisecond();
+	const int64 AgeMs = FMath::Max<int64>(0, NowMs - ShowOriginCandidate.LastGpsSampleUtcMs);
+	SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"), FString::Printf(
+		TEXT("%s｜GPS稳定｜%d/%d｜Age %lld ms"),
+		*ShowOriginCandidate.DroneID, ShowOriginCandidate.UniqueSampleCount,
+		Snapshot.Policy.MinUniqueSamples, AgeMs));
+	SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsSource"), FString::Printf(
+		TEXT("来源：%s（待应用）"), *ShowOriginCandidate.DroneID));
+	SetText(ConvertWidgets, TEXT("TXT_ShowOriginCaptureTime"), FString::Printf(
+		TEXT("采集时间：%s"), *Snapshot.CompletedAtUtc.ToString(TEXT("%Y-%m-%d %H:%M:%S"))));
+	UE_LOG(LogGCSRouteWorkflow, Display,
+		TEXT("[SHOW_ORIGIN_CAPTURE] Ready Drone=%s Request=%s CaptureRevision=%lld CandidateRevision=%lld Samples=%d Fix=%d Lat=%.9f Lon=%.9f AMSL=%.3f"),
+		*ShowOriginCandidate.DroneID, *ShowOriginCandidate.CaptureRequestID,
+		ShowOriginCandidate.CaptureRevision, ShowOriginCandidate.CandidateRevision,
+		ShowOriginCandidate.UniqueSampleCount, ShowOriginCandidate.FixType,
+		ShowOriginCandidate.Latitude, ShowOriginCandidate.Longitude,
+		ShowOriginCandidate.AltitudeAMSL);
+	UpdateCommandControlState();
+}
+
+void UGCSRouteWorkflowCoordinator::SetShowOriginDraftFields(
+	const double Latitude,
+	const double Longitude,
+	const double AltitudeAMSL)
+{
+	using namespace GCSRouteWorkflowPrivate;
+	TGuardValue<bool> Guard(bUpdatingShowOriginUi, true);
+	SetEdit(ConvertWidgets, TEXT("EDT_OriginLatitude"),
+		FString::Printf(TEXT("%.8f"), Latitude));
+	SetEdit(ConvertWidgets, TEXT("EDT_OriginLongitude"),
+		FString::Printf(TEXT("%.8f"), Longitude));
+	SetEdit(ConvertWidgets, TEXT("EDT_OriginAltitude"),
+		FString::Printf(TEXT("%.3f"), AltitudeAMSL));
+}
+
+void UGCSRouteWorkflowCoordinator::HandleShowOriginFieldTextChanged(const FText& Text)
+{
+	(void)Text;
+	using namespace GCSRouteWorkflowPrivate;
+	if (!IsInGameThread() || bUpdatingShowOriginUi) return;
+	bShowOriginDraftActive = true;
+	if (ShowOriginCandidate.bValid && ShowOriginCandidate.bGpsProvenanceIntact)
+	{
+		ShowOriginCandidate.bGpsProvenanceIntact = false;
+		ShowOriginCandidate.bValid = false;
+		ShowOriginCandidate.InvalidReason = TEXT("候选坐标已手工修改");
+	}
+	ShowOriginDraftSource = EGCSShowOriginDraftSource::Manual;
+	ActiveShowOriginCaptureRequestID.Reset();
+	ActiveShowOriginCaptureRevision = 0;
+	SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
+		TEXT("候选坐标已手工修改"));
+	SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsSource"),
+		TEXT("来源：手动输入"));
+	SetText(ConvertWidgets, TEXT("TXT_ShowOriginCaptureTime"),
+		TEXT("采集时间：--"));
+	UpdateCommandControlState();
+}
+
+bool UGCSRouteWorkflowCoordinator::RevalidateShowOriginCandidate(
+	FString& OutError) const
+{
+	OutError.Reset();
+	if (!ShowOriginCandidate.bValid || !ShowOriginCandidate.bGpsProvenanceIntact
+		|| ShowOriginDraftSource != EGCSShowOriginDraftSource::CapturedCandidate)
+	{
+		OutError = ShowOriginCandidate.InvalidReason.IsEmpty()
+			? TEXT("GPS候选无效，请重新采集或手工修改坐标")
+			: ShowOriginCandidate.InvalidReason;
+		return false;
+	}
+	if (!GameInstanceRef.IsValid())
+	{
+		OutError = TEXT("Route Workflow Coordinator未初始化");
+		return false;
+	}
+	const UGameInstance* GI = GameInstanceRef.Get();
+	const UFleetManagerSubsystem* Fleet = GI->GetSubsystem<UFleetManagerSubsystem>();
+	FDroneData Drone;
+	if (!Fleet || Fleet->GetActiveFleetSessionID() != ShowOriginCandidate.FleetSessionID
+		|| !Fleet->GetDroneByID(ShowOriginCandidate.DroneID, Drone)
+		|| !Drone.bOnline || Drone.EndpointIdentity != ShowOriginCandidate.EndpointIdentity)
+	{
+		OutError = TEXT("GPS候选已失效：Fleet、在线状态或Endpoint已变化");
+		return false;
+	}
+	const URouteGpsCaptureSubsystem* CaptureAuthority =
+		GI->GetSubsystem<URouteGpsCaptureSubsystem>();
+	FRouteGpsCaptureSnapshot Snapshot;
+	if (!CaptureAuthority || !CaptureAuthority->GetCurrentSnapshot(Snapshot)
+		|| Snapshot.State != ERouteGpsCaptureState::Ready
+		|| Snapshot.CaptureAuthoritySessionID != ShowOriginCandidate.CaptureAuthoritySessionID
+		|| Snapshot.CaptureRequestID != ShowOriginCandidate.CaptureRequestID
+		|| Snapshot.CaptureRevision != ShowOriginCandidate.CaptureRevision)
+	{
+		OutError = TEXT("GPS候选已失效：Capture事务已被替换或不再Ready");
+		return false;
+	}
+	return true;
+}
+
+bool UGCSRouteWorkflowCoordinator::IsShowOriginMutationBlocked(FString& OutError) const
+{
+	if (IsConfirmedMappingMutationBlocked(OutError))
+	{
+		OutError = TEXT("当前航线任务正在执行，不能修改表演原点");
+		return true;
+	}
+	if (GameInstanceRef.IsValid())
+	{
+		const URouteWaypointGenerationSubsystem* Generator =
+			GameInstanceRef->GetSubsystem<URouteWaypointGenerationSubsystem>();
+		if (Generator && Generator->IsGenerationActive())
+		{
+			OutError = TEXT("当前航线任务正在执行，不能修改表演原点");
+			return true;
+		}
+	}
+	OutError.Reset();
+	return false;
+}
+
+bool UGCSRouteWorkflowCoordinator::CommitValidatedShowOrigin(
+	const double Latitude,
+	const double Longitude,
+	const double AltitudeAMSL,
+	FString& OutError)
+{
+	if (!GameInstanceRef.IsValid())
+	{
+		OutError = TEXT("Route Workflow Coordinator未初始化");
+		return false;
+	}
+	URoutePreviewSubsystem* Preview =
+		GameInstanceRef->GetSubsystem<URoutePreviewSubsystem>();
+	if (!Preview)
+	{
+		OutError = TEXT("Show Origin Authority不可用");
+		return false;
+	}
+
+	FRouteWaypointGeneratorContext NewContext;
+	FRouteWaypointGeneratorError NewContextError;
+	if (!RouteWaypointGenerator::BuildContext(
+		Latitude, Longitude, NewContext, NewContextError))
+	{
+		OutError = NewContextError.Diagnostic;
+		return false;
+	}
+	const FRoutePreviewData& Current = Preview->GetRouteData();
+	const bool bHadCurrentOrigin = Current.bShowOriginSet;
+	bool bSameHorizontalOrigin = false;
+	if (Current.bShowOriginSet)
+	{
+		FRouteWaypointGeneratorContext CurrentContext;
+		FRouteWaypointGeneratorError CurrentContextError;
+		if (!RouteWaypointGenerator::BuildContext(
+			Current.ShowOriginLatitude, Current.ShowOriginLongitude,
+			CurrentContext, CurrentContextError))
+		{
+			OutError = TEXT("当前Show Origin Authority包含无效坐标");
+			return false;
+		}
+		bSameHorizontalOrigin =
+			CurrentContext.NormalizedShowOriginLatitudeE7 ==
+				NewContext.NormalizedShowOriginLatitudeE7
+			&& CurrentContext.NormalizedShowOriginLongitudeE7 ==
+				NewContext.NormalizedShowOriginLongitudeE7;
+		if (bSameHorizontalOrigin && Current.ShowOriginAltitude == AltitudeAMSL)
+		{
+			OutError.Reset();
+			return true;
+		}
+	}
+
+#if WITH_DEV_AUTOMATION_TESTS
+	const bool bCommitted = CommandTestHooks.SetOrigin
+		? CommandTestHooks.SetOrigin(Latitude, Longitude, AltitudeAMSL, OutError)
+		: Preview->SetShowOrigin(Latitude, Longitude, AltitudeAMSL, OutError);
+#else
+	const bool bCommitted =
+		Preview->SetShowOrigin(Latitude, Longitude, AltitudeAMSL, OutError);
+#endif
+	if (!bCommitted) return false;
+	if (!bHadCurrentOrigin || !bSameHorizontalOrigin)
+	{
+		InvalidateConfirmedNpzMapping(
+			TEXT("Confirmed NPZ Mapping was invalidated by a Show Origin change."),
+			true);
+		ResetAutoStartForNewDataset();
+	}
+	return true;
+}
+
+void UGCSRouteWorkflowCoordinator::HandleApplyShowOriginGpsClicked()
+{
+	using namespace GCSRouteWorkflowPrivate;
+	if (!IsInGameThread() || !GameInstanceRef.IsValid()) return;
+	FString Error;
+	if (IsShowOriginMutationBlocked(Error))
+	{
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"), Error);
+		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview, Error);
+		return;
+	}
+	if (ShowOriginDraftSource == EGCSShowOriginDraftSource::InvalidatedCandidate)
+	{
+		Error = ShowOriginCandidate.InvalidReason.IsEmpty()
+			? TEXT("GPS候选已失效，请重新采集或手工修改坐标")
+			: ShowOriginCandidate.InvalidReason;
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"), Error);
+		return;
+	}
+	if (ShowOriginDraftSource == EGCSShowOriginDraftSource::CapturedCandidate
+		&& !RevalidateShowOriginCandidate(Error))
+	{
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"), Error);
+		return;
+	}
+
+	const UEditableTextBox* LatitudeInput = Get<UEditableTextBox>(
+		ConvertWidgets, TEXT("EDT_OriginLatitude"));
+	const UEditableTextBox* LongitudeInput = Get<UEditableTextBox>(
+		ConvertWidgets, TEXT("EDT_OriginLongitude"));
+	const UEditableTextBox* AltitudeInput = Get<UEditableTextBox>(
+		ConvertWidgets, TEXT("EDT_OriginAltitude"));
+	double Latitude = 0.0;
+	double Longitude = 0.0;
+	double Altitude = 0.0;
+	if (!ParseOriginInputs(
+		LatitudeInput ? LatitudeInput->GetText().ToString() : FString(),
+		LongitudeInput ? LongitudeInput->GetText().ToString() : FString(),
+		AltitudeInput ? AltitudeInput->GetText().ToString() : FString(),
+		Latitude, Longitude, Altitude, Error))
+	{
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"), Error);
+		return;
+	}
+
+	const bool bFromGps =
+		ShowOriginDraftSource == EGCSShowOriginDraftSource::CapturedCandidate;
+	const FString AppliedDroneID = ShowOriginCandidate.DroneID;
+	{
+		TGuardValue<bool> Guard(bCommandInFlight, true);
+		if (!CommitValidatedShowOrigin(Latitude, Longitude, Altitude, Error))
+		{
+			SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
+				Error.IsEmpty() ? TEXT("Show Origin Authority拒绝应用") : Error);
+			return;
+		}
+	}
+	bShowOriginDraftActive = false;
+	ShowOriginDraftSource = EGCSShowOriginDraftSource::Official;
+	if (bFromGps)
+	{
+		ShowOriginCandidate.bApplied = true;
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsSource"), FString::Printf(
+			TEXT("来源：%s（已应用）"), *AppliedDroneID));
+	}
+	else
+	{
+		SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsSource"),
+			TEXT("来源：手动输入（已应用）"));
+	}
+	SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
+		TEXT("表演原点已应用"));
+	ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview);
+	UE_LOG(LogGCSRouteWorkflow, Display,
+		TEXT("[SHOW_ORIGIN_APPLY] Committed Source=%s Lat=%.9f Lon=%.9f AMSL=%.3f"),
+		bFromGps ? *AppliedDroneID : TEXT("Manual"), Latitude, Longitude, Altitude);
+	RefreshReadOnlyState();
 }
 
 void UGCSRouteWorkflowCoordinator::HandleRouteBrowseClicked()
@@ -776,6 +1978,9 @@ void UGCSRouteWorkflowCoordinator::HandleLoadPreviewClicked()
 	}
 	if (bSucceeded)
 	{
+		InvalidateConfirmedNpzMapping(
+			TEXT("Confirmed NPZ Mapping was invalidated by a successful Route dataset/Origin commit."),
+			true);
 		ResetAutoStartForNewDataset();
 		ClearRouteListModel();
 		ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview);
@@ -912,11 +2117,37 @@ bool UGCSRouteWorkflowCoordinator::CaptureAutoStartSnapshot(
 	OutSnapshot.ArtifactSetDigest = Info.ArtifactSetDigest.ToLowerHex();
 	OutSnapshot.SourceDatasetDigest = Info.SourceDatasetDigest.ToLowerHex();
 	OutSnapshot.RouteSlotCount = Info.RouteSlotCount;
+	TMap<FString, const FGCSConfirmedNpzMappingEntry*> ConfirmedEntries;
+	TArray<FString> TargetDroneIDs = OutSnapshot.SelectedDroneIDs;
+	if (bHasConfirmedNpzMapping)
+	{
+		if (!ValidateConfirmedNpzMappingCurrent(OutError))
+		{
+			if (OutError.IsEmpty())
+				OutError = TEXT("Confirmed NPZ Mapping is stale; Clear or confirm again.");
+			return false;
+		}
+		if (ConfirmedNpzMapping.SourceDatasetDigest != OutSnapshot.SourceDatasetDigest ||
+			ConfirmedNpzMapping.RouteCount != OutSnapshot.RouteSlotCount)
+		{
+			OutError = TEXT("Current Artifact does not match the Confirmed NPZ Mapping dataset/domain.");
+			return false;
+		}
+		TargetDroneIDs.Reset(ConfirmedNpzMapping.Entries.Num());
+		for (const FGCSConfirmedNpzMappingEntry& Entry : ConfirmedNpzMapping.Entries)
+		{
+			TargetDroneIDs.Add(Entry.DroneID);
+			ConfirmedEntries.Add(Entry.DroneID, &Entry);
+		}
+		TargetDroneIDs.Sort();
+		OutSnapshot.bUsesConfirmedNpzMapping = true;
+		OutSnapshot.ConfirmedMappingRevision = ConfirmedNpzMapping.ConfirmationRevision;
+	}
 
 	TSet<int32> NumericIDs;
 	TSet<int32> RouteSlots;
-	OutSnapshot.Targets.Reserve(OutSnapshot.SelectedDroneIDs.Num());
-	for (const FString& DroneID : OutSnapshot.SelectedDroneIDs)
+	OutSnapshot.Targets.Reserve(TargetDroneIDs.Num());
+	for (const FString& DroneID : TargetDroneIDs)
 	{
 		FTCHARToUTF8 EncodedDroneID(*DroneID);
 		std::uint64_t NumericID64 = 0;
@@ -928,7 +2159,9 @@ bool UGCSRouteWorkflowCoordinator::CaptureAutoStartSnapshot(
 			return false;
 		}
 		const int32 NumericID = static_cast<int32>(NumericID64);
-		const int32 RouteSlot = NumericID - 1;
+		const FGCSConfirmedNpzMappingEntry* const* ConfirmedEntry =
+			ConfirmedEntries.Find(DroneID);
+		const int32 RouteSlot = ConfirmedEntry ? (*ConfirmedEntry)->RouteSlotIndex : NumericID - 1;
 		if (NumericIDs.Contains(NumericID) || RouteSlots.Contains(RouteSlot))
 		{
 			OutError = FString::Printf(TEXT("Duplicate numeric DroneID or RouteSlot: %s"), *DroneID);
@@ -956,6 +2189,12 @@ bool UGCSRouteWorkflowCoordinator::CaptureAutoStartSnapshot(
 		if (Drone.EndpointIdentity.TrimStartAndEnd().IsEmpty())
 		{
 			OutError = FString::Printf(TEXT("Selected drone endpoint identity is invalid: %s"), *DroneID);
+			return false;
+		}
+		if (ConfirmedEntry && Drone.EndpointIdentity != (*ConfirmedEntry)->EndpointIdentity)
+		{
+			OutError = FString::Printf(
+				TEXT("Confirmed NPZ Mapping endpoint changed for %s."), *DroneID);
 			return false;
 		}
 
@@ -1203,12 +2442,15 @@ bool UGCSRouteWorkflowCoordinator::ValidateAutoStartSnapshotStillCurrent(FString
 	if (Current.SelectedDroneIDs != AutoStartSnapshot.SelectedDroneIDs ||
 		AppliedMaxConcurrentTargets != AutoStartSnapshot.MaxConcurrentTargets ||
 		Current.FleetSessionID != AutoStartSnapshot.FleetSessionID ||
-		Current.FleetRevision != AutoStartSnapshot.FleetRevision ||
+		(!AutoStartSnapshot.bUsesConfirmedNpzMapping &&
+			Current.FleetRevision != AutoStartSnapshot.FleetRevision) ||
 		Current.ArtifactSetID != AutoStartSnapshot.ArtifactSetID ||
 		Current.ArtifactSetDigest != AutoStartSnapshot.ArtifactSetDigest ||
 		Current.SourceDatasetDigest != AutoStartSnapshot.SourceDatasetDigest ||
 		Current.RouteSlotCount != AutoStartSnapshot.RouteSlotCount ||
-		Current.Targets.Num() != AutoStartSnapshot.Targets.Num())
+		Current.Targets.Num() != AutoStartSnapshot.Targets.Num() ||
+		Current.bUsesConfirmedNpzMapping != AutoStartSnapshot.bUsesConfirmedNpzMapping ||
+		Current.ConfirmedMappingRevision != AutoStartSnapshot.ConfirmedMappingRevision)
 	{
 		OutError = TEXT("Selection, Fleet, or Artifact identity changed during Console sync.");
 		return false;
@@ -1247,8 +2489,11 @@ bool UGCSRouteWorkflowCoordinator::ValidateAutoStartSnapshotStillCurrent(FString
 	FRouteAssignmentSourceSnapshot Source;
 	FRouteAssignmentSnapshot Frozen;
 	if (!Assignment || !Assignment->CaptureSourceSnapshot(Source, OutError) ||
-		!GCSRouteWorkflowPrivate::SameAssignmentSource(
-			Source.SourceIdentity, AutoStartSnapshot.AssignmentSourceIdentity) ||
+		!(AutoStartSnapshot.bUsesConfirmedNpzMapping
+			? GCSRouteWorkflowPrivate::SameStableAssignmentSource(
+				Source.SourceIdentity, AutoStartSnapshot.AssignmentSourceIdentity)
+			: GCSRouteWorkflowPrivate::SameAssignmentSource(
+				Source.SourceIdentity, AutoStartSnapshot.AssignmentSourceIdentity)) ||
 		!Assignment->GetFrozenSnapshot(Frozen) ||
 		Frozen.AssignmentAuthoritySessionID != AutoStartSnapshot.AssignmentAuthoritySessionID ||
 		Frozen.AssignmentRevision != AutoStartSnapshot.AssignmentRevision)
@@ -1577,6 +2822,53 @@ void UGCSRouteWorkflowCoordinator::UpdateCommandControlState()
 		Button->SetIsEnabled(Gate.bLoadPreviewEnabled);
 	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_GenerateWaypoints")))
 		Button->SetIsEnabled(Gate.bGenerateWaypointsEnabled);
+	FString NumberingGateError;
+	const bool bNumberingMutationAllowed =
+		!IsConfirmedMappingMutationBlocked(NumberingGateError);
+	FRouteGpsCaptureSnapshot Capture;
+	const URouteGpsCaptureSubsystem* CaptureAuthority = GameInstanceRef.IsValid()
+		? GameInstanceRef->GetSubsystem<URouteGpsCaptureSubsystem>() : nullptr;
+	const bool bHasCapture = CaptureAuthority &&
+		CaptureAuthority->GetLatestCommandSelectionSnapshot(Capture);
+	TArray<FString> CurrentSelection;
+	if (const UGCSUIBridgeSubsystem* Bridge = GameInstanceRef.IsValid()
+		? GameInstanceRef->GetSubsystem<UGCSUIBridgeSubsystem>() : nullptr)
+	{
+		CurrentSelection = Bridge->GetSelectedCommandDroneIDs();
+		CurrentSelection.Sort();
+	}
+	const bool bCaptureReadyForSelection = bHasCapture &&
+		Capture.State == ERouteGpsCaptureState::Ready &&
+		Capture.SelectedDroneIDs == CurrentSelection;
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_CaptureStableGps")))
+	{
+		Button->SetIsEnabled(bNumberingMutationAllowed && Inputs.bRouteLoaded &&
+			Inputs.bShowOriginSet && !CurrentSelection.IsEmpty() &&
+			(!bHasCapture || Capture.State != ERouteGpsCaptureState::Capturing));
+		Button->SetToolTipText(FText::FromString(
+			bNumberingMutationAllowed
+				? TEXT("Capture a selection-bound stable GPS window. This does not assign NPZ RouteSlots.")
+				: NumberingGateError));
+	}
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_ApplyNpzNumbering")))
+	{
+		Button->SetIsEnabled(bNumberingMutationAllowed && Inputs.bRouteLoaded &&
+			Inputs.bShowOriginSet && bCaptureReadyForSelection);
+		Button->SetToolTipText(FText::FromString(
+			bNumberingMutationAllowed
+				? (!bCaptureReadyForSelection
+					? TEXT("F.1 Stable GPS Capture must be Ready for the current Selection first.")
+					: TEXT("Confirm direct one-to-one NPZ RouteSlot matching in the fixed Show Origin ENU / Frame-0 coordinate system."))
+				: NumberingGateError));
+	}
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_ClearNpzNumbering")))
+	{
+		Button->SetIsEnabled(bNumberingMutationAllowed && bHasConfirmedNpzMapping);
+		Button->SetToolTipText(FText::FromString(
+			bNumberingMutationAllowed
+				? TEXT("Clear the Confirmed NPZ Mapping and its visualization override.")
+				: NumberingGateError));
+	}
 	for (const FName Name : {FName(TEXT("EDT_OriginLatitude")),
 		FName(TEXT("EDT_OriginLongitude")), FName(TEXT("EDT_OriginAltitude"))})
 	{
@@ -1585,6 +2877,41 @@ void UGCSRouteWorkflowCoordinator::UpdateCommandControlState()
 			Box->SetIsReadOnly(Inputs.bGenerationActive || Inputs.bCommandInFlight);
 			Box->SetIsEnabled(!Inputs.bGenerationActive && !Inputs.bCommandInFlight);
 		}
+	}
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_RefreshShowOriginDrones")))
+	{
+		Button->SetIsEnabled(!bCommandInFlight);
+	}
+	FRouteGpsCaptureSnapshot ActiveCapture;
+	const bool bAnyCaptureRunning = CaptureAuthority
+		&& CaptureAuthority->GetCurrentSnapshot(ActiveCapture)
+		&& ActiveCapture.State == ERouteGpsCaptureState::Capturing;
+	bool bSelectedAnchorOnline = false;
+	if (!SelectedShowOriginDroneID.IsEmpty())
+	{
+		FDroneData Anchor;
+		const UFleetManagerSubsystem* Fleet = GameInstanceRef.IsValid()
+			? GameInstanceRef->GetSubsystem<UFleetManagerSubsystem>() : nullptr;
+		bSelectedAnchorOnline = Fleet
+			&& Fleet->GetDroneByID(SelectedShowOriginDroneID, Anchor)
+			&& Anchor.bOnline;
+	}
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_CaptureShowOriginGps")))
+	{
+		Button->SetIsEnabled(!bCommandInFlight && bSelectedAnchorOnline
+			&& !bAnyCaptureRunning);
+	}
+	FString ShowOriginBlockReason;
+	const bool bShowOriginBlocked = IsShowOriginMutationBlocked(ShowOriginBlockReason);
+	const bool bDraftUsable = ShowOriginDraftSource !=
+		EGCSShowOriginDraftSource::InvalidatedCandidate;
+	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_ApplyShowOriginGps")))
+	{
+		Button->SetIsEnabled(!bShowOriginBlocked && Inputs.bOriginValid && bDraftUsable);
+		Button->SetToolTipText(FText::FromString(bShowOriginBlocked
+			? ShowOriginBlockReason
+			: (bDraftUsable ? TEXT("验证并原子应用当前经纬度和AMSL为正式表演原点")
+				: TEXT("GPS候选已失效，请重新采集或手工修改坐标"))));
 	}
 }
 
@@ -1742,6 +3069,7 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	using namespace GCSRouteWorkflowPrivate;
 	if (!IsInGameThread() || !bBindingValid || !GameInstanceRef.IsValid()) return;
 	UGameInstance* GI = GameInstanceRef.Get();
+	RefreshShowOriginCaptureState();
 	if (URoutePreviewSubsystem* Preview = GI->GetSubsystem<URoutePreviewSubsystem>())
 	{
 		const bool Loaded = Preview->IsRouteLoaded(), Prepared = Preview->HasPreparedRoute();
@@ -1758,15 +3086,98 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 		SetText(ConvertWidgets,TEXT("TXT_RouteFilePath"),RoutePathText);
 		SetTooltip(ConvertWidgets,TEXT("TXT_RouteFilePath"),RoutePathText);
 		const FRoutePreviewData& Data = Preview->GetRouteData(); const bool Origin = Loaded && Data.bShowOriginSet;
-		if (!Prepared && Origin)
+		if (!Prepared && Origin && !bShowOriginDraftActive)
 		{
-			SetEdit(ConvertWidgets,TEXT("EDT_OriginLatitude"),FString::Printf(TEXT("%.8f"),Data.ShowOriginLatitude));
-			SetEdit(ConvertWidgets,TEXT("EDT_OriginLongitude"),FString::Printf(TEXT("%.8f"),Data.ShowOriginLongitude));
-			SetEdit(ConvertWidgets,TEXT("EDT_OriginAltitude"),FString::Printf(TEXT("%.3f"),Data.ShowOriginAltitude));
+			SetShowOriginDraftFields(Data.ShowOriginLatitude,
+				Data.ShowOriginLongitude, Data.ShowOriginAltitude);
 		}
 		FString PreviewText = Preview->IsPreviewModeActive() ? TEXT("Preview: ")+Playback(Preview->GetPlaybackState()) : (Preview->IsRouteOverlayVisible() ? TEXT("Live + Frame-0 Overlay") : (Preview->IsRouteOverlayEnabled() ? TEXT("Overlay Enabled") : TEXT("--")));
 		SetText(ConvertWidgets,TEXT("TXT_StatePreviewValue"),PreviewText);
 	}
+	FRouteGpsCaptureSnapshot GpsCapture;
+	const URouteGpsCaptureSubsystem* GpsCaptureAuthority =
+		GI->GetSubsystem<URouteGpsCaptureSubsystem>();
+	const bool bHasGpsCapture = GpsCaptureAuthority &&
+		GpsCaptureAuthority->GetLatestCommandSelectionSnapshot(GpsCapture);
+	int32 GpsReady = 0;
+	int32 GpsPending = 0;
+	int32 GpsFailed = 0;
+	TArray<FString> GpsExceptions;
+	if (bHasGpsCapture)
+	{
+		for (const FRouteGpsCaptureParticipantResult& Participant : GpsCapture.Participants)
+		{
+			switch (Participant.Status)
+			{
+			case ERouteGpsCaptureParticipantStatus::Ready: ++GpsReady; break;
+			case ERouteGpsCaptureParticipantStatus::Pending: ++GpsPending; break;
+			case ERouteGpsCaptureParticipantStatus::Failed: ++GpsFailed; break;
+			default: break;
+			}
+			if (Participant.FailureReason != ERouteGpsCaptureFailureReason::None)
+			{
+				GpsExceptions.Add(FString::Printf(TEXT("%s: %s"),
+					*Participant.DroneID,
+					*GpsCaptureFailure(Participant.FailureReason)));
+			}
+		}
+	}
+	const int32 MatchedCount = bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid
+		? ConfirmedNpzMapping.Entries.Num() : 0;
+	int32 RouteSlotCount = 0;
+	if (const URoutePreviewSubsystem* Preview = GI->GetSubsystem<URoutePreviewSubsystem>())
+	{
+		RouteSlotCount = Preview->HasPreparedRoute()
+			? Preview->GetPreparedDroneCount() : Preview->GetDroneCount();
+	}
+	const int32 VacantCount = FMath::Max(0, RouteSlotCount - MatchedCount);
+	const int32 SpareCount = 0;
+	const FString MappingState = bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid
+		? TEXT("Confirmed")
+		: (bHasGpsCapture ? GpsCaptureState(GpsCapture.State) : TEXT("Not Captured"));
+	SetText(ConvertWidgets, TEXT("TXT_NpzGpsMappingStatusValue"), MappingState);
+	SetText(ConvertWidgets, TEXT("TXT_NpzGpsMappingCounts"), FString::Printf(
+		TEXT("GPS Ready %d/%d | Matched %d | Vacant %d | Spare %d"),
+		GpsReady, bHasGpsCapture ? GpsCapture.SelectedDroneIDs.Num() : 0,
+		MatchedCount, VacantCount, SpareCount));
+	TArray<FString> MappingDetails = GpsExceptions;
+	if (bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid)
+	{
+		for (const FGCSConfirmedNpzMappingEntry& Match : ConfirmedNpzMapping.Entries)
+		{
+			MappingDetails.Add(FString::Printf(TEXT("%s -> Slot %d (%.3f m)"),
+				*Match.DroneID, Match.RouteSlotIndex, Match.MatchDistanceMeters));
+		}
+	}
+	const FString MappingDetailsText = MappingDetails.IsEmpty()
+		? TEXT("Exceptions/Matches: none")
+		: FString::Join(MappingDetails, TEXT("; "));
+	SetText(ConvertWidgets, TEXT("TXT_NpzMappingExceptions"), MappingDetailsText);
+	SetTooltip(ConvertWidgets, TEXT("TXT_NpzMappingExceptions"), MappingDetailsText);
+	FRouteGpsCapturePolicy ConfiguredGpsPolicy;
+	FString GpsPolicyError;
+	const bool bGpsPolicyValid = URouteGpsCaptureSubsystem::LoadConfiguredPolicy(
+		ConfiguredGpsPolicy, GpsPolicyError);
+	FString MappingDescription = TEXT("Capture stable GPS, then directly match ENU positions to the externally generated NPZ Frame-0 RouteSlots.");
+	if (bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid)
+	{
+		MappingDescription = FString::Printf(
+			TEXT("Confirmed fixed-frame NPZ Mapping: %d drones | Revision %lld"),
+			ConfirmedNpzMapping.Entries.Num(), ConfirmedNpzMapping.ConfirmationRevision);
+	}
+	SetText(ConvertWidgets, TEXT("TXT_NpzGpsMappingDescription"), MappingDescription);
+	SetTooltip(ConvertWidgets, TEXT("TXT_NpzGpsMappingDescription"), MappingDescription);
+	FString MappingWarning;
+	if (!bGpsPolicyValid) MappingWarning = TEXT("GPS policy invalid: ") + GpsPolicyError;
+	else if (!ConfiguredGpsPolicy.bHardwareValidated)
+	{
+		MappingWarning = FString::Printf(
+			TEXT("SIMULATION/COMMISSIONING - NOT HARDWARE VALIDATED: GPS=%s"),
+			*ConfiguredGpsPolicy.ProfileName);
+	}
+	else MappingWarning = FString::Printf(TEXT("Hardware-validated GPS profile: %s"),
+		*ConfiguredGpsPolicy.ProfileName);
+	SetText(ConvertWidgets, TEXT("TXT_NpzMappingWarning"), MappingWarning);
 	URouteArtifactWorkspaceSubsystem* Workspace = GI->GetSubsystem<URouteArtifactWorkspaceSubsystem>(); ERouteArtifactCurrentStatus C=ERouteArtifactCurrentStatus::None; ERouteArtifactGenerationStatus G=ERouteArtifactGenerationStatus::None; ERouteArtifactRecoveryStatus R=ERouteArtifactRecoveryStatus::Stable; FRouteArtifactCurrentInfo Info; FString Root;
 	if (Workspace) { C=Workspace->GetCurrentStatus(); G=Workspace->GetGenerationStatus(); R=Workspace->GetLastRecoveryResult().Status; Info=Workspace->GetCurrentInfo(); FString Error; if(!Workspace->ResolveWorkspaceRoot(Root,Error)) Root.Reset(); }
 	SetText(ConvertWidgets,TEXT("TXT_OutputPath"),Root.IsEmpty()?TEXT("--"):Root); SetTooltip(ConvertWidgets,TEXT("TXT_OutputPath"),Root.IsEmpty()?TEXT("--"):Root); const FString ReadyText=Ready(C,R); SetText(ConvertWidgets,TEXT("TXT_ArtifactReadyValue"),ReadyText); SetText(UploadWidgets,TEXT("TXT_ArtifactReadyValue"),ReadyText);
@@ -2164,7 +3575,25 @@ void UGCSRouteWorkflowCoordinator::RefreshVisibleRouteRows()
 	}
 }
 
-bool UGCSRouteWorkflowCoordinator::TickRefresh(float DeltaSeconds) { (void)DeltaSeconds; AdvanceAutoStartTransaction(); if(RouteWorkflowWidget&&RouteWorkflowWidget->IsVisible()) RefreshReadOnlyState(); return true; }
+bool UGCSRouteWorkflowCoordinator::TickRefresh(float DeltaSeconds)
+{
+	(void)DeltaSeconds;
+	AdvanceAutoStartTransaction();
+	if (bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid &&
+		!IsCommandSelectionMutationBlocked())
+	{
+		FString InvalidReason;
+		if (!ValidateConfirmedNpzMappingCurrent(InvalidReason))
+		{
+			InvalidateConfirmedNpzMapping(InvalidReason, true);
+		}
+	}
+	if (RouteWorkflowWidget && RouteWorkflowWidget->IsVisible())
+	{
+		RefreshReadOnlyState();
+	}
+	return true;
+}
 void UGCSRouteWorkflowCoordinator::StartRefreshTicker() { if(!RefreshTickerHandle.IsValid()) RefreshTickerHandle=FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this,&UGCSRouteWorkflowCoordinator::TickRefresh),RefreshIntervalSeconds); }
 void UGCSRouteWorkflowCoordinator::StopRefreshTicker() { if(RefreshTickerHandle.IsValid()) { FTSTicker::GetCoreTicker().RemoveTicker(RefreshTickerHandle); RefreshTickerHandle.Reset(); } }
 double UGCSRouteWorkflowCoordinator::ComputeProgressRatio(uint64 Completed,uint64 Total) { return Total==0?0.0:FMath::Clamp(static_cast<double>(Completed)/Total,0.0,1.0); }

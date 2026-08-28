@@ -13,6 +13,8 @@
 #include "DSPGCSProtocol.h"
 #include "DSPGCSTransportFactory.h"
 #include "GCSServerAdapterSubsystem.h"
+#include "RouteGpsCaptureSubsystem.h"
+#include "Async/Async.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/ScopeLock.h"
@@ -372,6 +374,46 @@ void UDSPGCSProductionTelemetryProviderSubsystem::HandleTransportFrame(
 
 	if (Adapter->PushFleetSnapshot(Snapshot))
 	{
+		TArray<FRouteGpsTelemetryObservation> Observations;
+		const FDateTime ReceivedUtc = FDateTime::UtcNow();
+		const int64 ReceivedUtcMs = ReceivedUtc.ToUnixTimestamp() * 1000
+			+ ReceivedUtc.GetMillisecond();
+		const double ReceivedMonotonicSeconds = FPlatformTime::Seconds();
+		const int32 Count = FMath::Min(
+			Snapshot.Drones.Num(), static_cast<int32>(CompleteBatch.items.size()));
+		Observations.Reserve(Count);
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			const FDroneData& Drone = Snapshot.Drones[Index];
+			const dspgcs::TelemetryDTO& Source = CompleteBatch.items[Index];
+			FRouteGpsTelemetryObservation& Observation = Observations.AddDefaulted_GetRef();
+			Observation.DroneID = Drone.DroneID;
+			Observation.EndpointIdentity = Drone.EndpointIdentity;
+			Observation.bVehicleOnline = Drone.bOnline;
+			Observation.bGpsValid = Drone.bGPSValid;
+			Observation.FixType = Drone.GPSFixType;
+			Observation.Latitude = Drone.GPSLat;
+			Observation.Longitude = Drone.GPSLon;
+			Observation.AltitudeAMSL = Drone.AltitudeAMSL;
+			Observation.bAltitudeValid = Drone.bAltitudeValid;
+			Observation.GpsSampleTimestampUtcMs = Source.sampleTimestampUtcMs;
+			Observation.TelemetryReceivedUtcMs = ReceivedUtcMs;
+			Observation.TelemetryReceivedMonotonicSeconds = ReceivedMonotonicSeconds;
+		}
+		const TWeakObjectPtr<UDSPGCSProductionTelemetryProviderSubsystem> WeakThis(this);
+		AsyncTask(ENamedThreads::GameThread,
+			[WeakThis, Observations = MoveTemp(Observations)]()
+			{
+				UDSPGCSProductionTelemetryProviderSubsystem* Self = WeakThis.Get();
+				UGameInstance* GameInstance = Self ? Self->GetGameInstance() : nullptr;
+				URouteGpsCaptureSubsystem* Capture = GameInstance
+					? GameInstance->GetSubsystem<URouteGpsCaptureSubsystem>() : nullptr;
+				if (!Capture) return;
+				for (const FRouteGpsTelemetryObservation& Observation : Observations)
+				{
+					Capture->ObserveTelemetrySample(Observation);
+				}
+			});
 		ReceivedDroneCount.store(Snapshot.Drones.Num());
 		MarkValidTelemetryReceivedAt(FPlatformTime::Seconds());
 		UE_LOG(

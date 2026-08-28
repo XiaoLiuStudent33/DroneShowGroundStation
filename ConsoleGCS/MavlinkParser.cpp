@@ -4,6 +4,15 @@
 #include <cmath>
 #include <string>
 
+namespace
+{
+    std::int64_t UtcNowMilliseconds()
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+}
+
 /**
  * @brief 实现 Console 当前 Inbound MAVLink 能力到 FlightData 的字段映射。
  *
@@ -122,6 +131,19 @@ void MavlinkParser::Parse(
     const mavlink_message_t& msg,
     FlightData& data)
 {
+    ParseAt(
+        msg,
+        data,
+        std::chrono::steady_clock::now(),
+        UtcNowMilliseconds());
+}
+
+void MavlinkParser::ParseAt(
+    const mavlink_message_t& msg,
+    FlightData& data,
+    const std::chrono::steady_clock::time_point receiveMonotonic,
+    const std::int64_t receiveUtcMs)
+{
     switch (msg.msgid)
     {
         //--------------------------------------------------
@@ -225,6 +247,9 @@ void MavlinkParser::Parse(
             static_cast<float>(static_cast<double>(gps.alt) / 1000.0);
         data.gpsFixType = gps.fix_type;
         data.satellitesVisible = gps.satellites_visible;
+        data.lastGpsReceiveUtcMs = receiveUtcMs;
+        data.lastGpsReceiveMonotonic = receiveMonotonic;
+        ++data.gpsSampleSequence;
         data.gpsValid =
             gps.fix_type >= 3 &&
             (gps.lat != 0 || gps.lon != 0);
