@@ -24,7 +24,7 @@ namespace AppConfigDefaults
     inline constexpr int MavftpTerminateTimeoutMs = 2500;
     inline constexpr std::uint32_t MavftpRequestRetryCount = 3U;
     inline constexpr std::uint32_t MavftpWriteWindow = 16U;
-    inline constexpr std::uint32_t MavftpGlobalWriteOutstandingCap = 16U;
+    inline constexpr std::uint32_t MavftpGlobalWriteOutstandingCap = 800U;
 
 }
 

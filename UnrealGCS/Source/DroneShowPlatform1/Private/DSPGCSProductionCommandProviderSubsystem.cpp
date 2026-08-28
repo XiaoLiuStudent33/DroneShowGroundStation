@@ -1,8 +1,8 @@
 /**
- * @brief ÊµÏÖ UE ÁìÓòÃüÁîµ½ DSP-GCS DTO µÄ±àÂëºÍ½á¹ûÊÂ¼ş·Ö·¢¡£
+ * @brief å®ç° UE é¢†åŸŸå‘½ä»¤åˆ° DSP-GCS DTO çš„ç¼–ç å’Œç»“æœäº‹ä»¶åˆ†å‘ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * ¸Ã Provider ¸´ÓÃ ProductionTelemetry ÒÑÆô¶¯µÄË«Ïò Transport£¬²»Ö±½Ó·¢ËÍ MAVLink¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è¯¥ Provider å¤ç”¨ ProductionTelemetry å·²å¯åŠ¨çš„åŒå‘ Transportï¼Œä¸ç›´æ¥å‘é€ MAVLinkã€‚
  */
 #include "DSPGCSProductionCommandProviderSubsystem.h"
 
@@ -25,6 +25,8 @@ namespace
 		case EGCSProductionCommandType::SetMode: return dspgcs::CommandType::SetMode;
 		case EGCSProductionCommandType::HoverTest: return dspgcs::CommandType::HoverTest;
 		case EGCSProductionCommandType::SetLedColor: return dspgcs::CommandType::SetLedColor;
+		case EGCSProductionCommandType::TimeStart: return dspgcs::CommandType::TimeStart;
+		case EGCSProductionCommandType::TimeStop: return dspgcs::CommandType::TimeStop;
 		}
 		return dspgcs::CommandType::Arm;
 	}
@@ -180,6 +182,10 @@ FString UDSPGCSProductionCommandProviderSubsystem::SubmitCommand(
 	Request.parameters.red = Parameters.Red;
 	Request.parameters.green = Parameters.Green;
 	Request.parameters.blue = Parameters.Blue;
+	Request.parameters.timeControlMask = Parameters.TimeControlMask;
+	Request.parameters.scheduledHour = Parameters.ScheduledHour;
+	Request.parameters.scheduledMinute = Parameters.ScheduledMinute;
+	Request.parameters.scheduledSecond = Parameters.ScheduledSecond;
 	Request.source.sourceType = "UI";
 	Request.source.sourceId = "UnrealGCS";
 	Request.source.stationId = "GCS-PRIMARY";
@@ -222,6 +228,20 @@ FString UDSPGCSProductionCommandProviderSubsystem::SubmitCommand(
 			Parameters.Red,
 			Parameters.Green,
 			Parameters.Blue);
+	}
+	else if (CommandType == EGCSProductionCommandType::TimeStart ||
+		CommandType == EGCSProductionCommandType::TimeStop)
+	{
+		UE_LOG(
+			LogTemp,
+			Display,
+			TEXT("DSP-GCS TimeControl Targets=%d Control=%u Mask=%u LocalTime=%02u:%02u:%02u"),
+			static_cast<int32>(Request.targetDroneIds.size()),
+			CommandType == EGCSProductionCommandType::TimeStart ? 1u : 0u,
+			Parameters.TimeControlMask,
+			Parameters.ScheduledHour,
+			Parameters.ScheduledMinute,
+			Parameters.ScheduledSecond);
 	}
 	return CommandID;
 }

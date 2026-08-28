@@ -76,7 +76,7 @@ Phase 2I-C.3.E.0.1 = CONSOLE RENDER INTEGRITY DONE
 
 正常 UI Start 每次重新建立当前选择的 Working/Frozen Assignment，等待精确 Console Accepted，重新校验全部 Authority 后 exactly once 创建一个 Job。E.1 后，`EDT_MaxConcurrency` + `BTN_ApplyMaxConcurrency` 是本次及后续 Job 的操作员 Authority：合法 Applied 值为 `1..50`，Start 在事务开始时冻结该值并复用现有 DTO `MaxConcurrentTargets`；Console 严格拒绝越界值，实际并发为 `min(DTO.MaxConcurrentTargets, MatchedTargetCount)`。不存在 Console `max_concurrent_targets` INI 覆盖。E.2 多机硬件验证尚未完成；Console 重启后的 DroneID 发现顺序风险为 DEFERRED/E.3。
 
-Console 可观测性由 `ConsoleUI` 的单一 Renderer 线程负责。Producer 只入队 1024 条上限的结构化记录或发布 Fleet 快照；真实 Windows Console 使用动态尺寸 Dashboard，重定向、Pipe、文件、Tee 和 CI 使用无 cursor 控制的 Linear 输出。溢出通过 `DroppedLogCount` 可观测，terminal/error 优先于普通日志。E.1 使用动态 N Target 准入和公平 Write permit pool；`write_window=16` 仍为每 Client 上限，独立 `global_write_outstanding_cap` 合法范围 `1..800`、默认 `16`。
+Console 可观测性由 `ConsoleUI` 的单一 Renderer 线程负责。Producer 只入队 1024 条上限的结构化记录或发布 Fleet 快照；真实 Windows Console 使用动态尺寸 Dashboard，重定向、Pipe、文件、Tee 和 CI 使用无 cursor 控制的 Linear 输出。溢出通过 `DroppedLogCount` 可观测，terminal/error 优先于普通日志。E.1 使用动态 N Target 准入和公平 Write permit pool；`write_window=16` 仍为每 Client 上限，独立 `global_write_outstanding_cap` 合法范围 `1..800`、启动默认 `800`。
 
 ## 5. 保护规则
 

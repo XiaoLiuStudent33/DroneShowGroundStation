@@ -76,6 +76,10 @@ bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
 	{
 		TestFalse(TEXT("Concurrency draft is editable"),Concurrency->GetIsReadOnly());
 		TestTrue(TEXT("Concurrency draft is enabled"),Concurrency->GetIsEnabled());
+		TestEqual(TEXT("Validated startup concurrency is the default draft"),
+			Concurrency->GetText().ToString(),FString(TEXT("50")));
+		TestEqual(TEXT("Validated startup concurrency is applied"),
+			C->GetAppliedMaxConcurrentTargetsForTest(),50);
 		Concurrency->SetText(FText::FromString(TEXT("37")));
 		C->RefreshReadOnlyStateForTest();
 		TestEqual(TEXT("Snapshot refresh does not overwrite concurrency draft"),

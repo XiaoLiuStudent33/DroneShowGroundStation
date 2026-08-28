@@ -176,7 +176,37 @@ void CommandManager::Tick()
             targetItem->state = MapOutcome(result.outcome);
             targetItem->ackResult = result.ackResult;
             targetItem->attempts = result.attempts;
-            targetItem->detail = CommandOutcomeName(result.outcome);
+            if (result.modeConfirmationRequired)
+            {
+                if (result.outcome == CommandOutcome::Accepted)
+                {
+                    targetItem->detail = "RTL_CONFIRMED custom_mode=" +
+                        std::to_string(static_cast<unsigned int>(
+                            result.expectedCustomMode));
+                }
+                else if (result.outcome == CommandOutcome::Timeout)
+                {
+                    targetItem->detail =
+                        "RTL_MODE_NOT_CONFIRMED expected_custom_mode=" +
+                        std::to_string(static_cast<unsigned int>(
+                            result.expectedCustomMode));
+                }
+                else
+                {
+                    targetItem->detail = CommandOutcomeName(result.outcome);
+                }
+            }
+            else if (result.outcome == CommandOutcome::Accepted ||
+                result.outcome == CommandOutcome::Rejected)
+            {
+                targetItem->detail = MavResultName(result.ackResult);
+                targetItem->detail += "(" +
+                    std::to_string(static_cast<unsigned int>(result.ackResult)) + ")";
+            }
+            else
+            {
+                targetItem->detail = CommandOutcomeName(result.outcome);
+            }
             touchedCommands.push_back(owner.commandId);
         }
     }

@@ -7,6 +7,7 @@
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
 #include "HAL/PlatformMisc.h"
+#include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
@@ -198,8 +199,33 @@ namespace
 	{
 		// Platform MoveFile maps to the OS rename primitive and supports a directory
 		// on the same volume. IFileManager::Move is file-oriented on Windows.
-		return FPlatformFileManager::Get().GetPlatformFile().MoveFile(
-			*Destination, *Source);
+		IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+		uint32 ErrorCode = 0;
+		// Runtime readers and endpoint security can briefly retain a read handle
+		// after validation. Match UE's normal file-manager tolerance and give
+		// those transient handles up to five seconds to drain before failing the
+		// atomic directory promotion.
+		constexpr int32 MaxMoveAttempts = 11;
+		for (int32 Attempt = 0; Attempt < MaxMoveAttempts; ++Attempt)
+		{
+			if (PlatformFile.MoveFile(*Destination, *Source)) return true;
+			ErrorCode = FPlatformMisc::GetLastError();
+#if PLATFORM_WINDOWS
+			if (ErrorCode != ERROR_SHARING_VIOLATION
+				&& ErrorCode != ERROR_LOCK_VIOLATION
+				&& ErrorCode != ERROR_ACCESS_DENIED)
+			{
+				break;
+			}
+#endif
+			if (Attempt + 1 < MaxMoveAttempts) FPlatformProcess::SleepNoStats(0.5f);
+		}
+		TCHAR ErrorText[1024] = {};
+		FPlatformMisc::GetSystemErrorMessage(ErrorText, UE_ARRAY_COUNT(ErrorText), ErrorCode);
+		UE_LOG(LogRouteArtifactWorkspace, Warning,
+			TEXT("Directory rename failed. Source=%s Destination=%s PlatformFile=%s OSError=%u Detail=%s"),
+			*Source, *Destination, PlatformFile.GetName(), ErrorCode, ErrorText);
+		return false;
 	}
 
 	bool DeleteTree(const FString& Path)
@@ -586,8 +612,9 @@ namespace
 			OutError = TEXT("Legacy Route Artifact v1 Current is unsupported by v2 production consumers.");
 			return true;
 		}
-		OutError = V2Error.Contains(TEXT("ReparsePointDetected")) ? V2Error : V1Error;
-		if (OutError.IsEmpty()) OutError = V2Error;
+		// Preserve the v2 failure as well; trying the legacy parser must not hide
+		// a corrupt/missing route behind an unrelated v1 schema error.
+		OutError = FString::Printf(TEXT("V2: %s; V1: %s"), *V2Error, *V1Error);
 		return false;
 	}
 }
@@ -694,8 +721,8 @@ struct FRouteArtifactWorkspaceManager::FImpl
 			OutError += TEXT(" Staging cleanup failed; recovery is required.");
 		}
 		UE_LOG(LogRouteArtifactWorkspace, Warning,
-			TEXT("Artifact generation failed. Attempt=%s Set=%s"),
-			*FailedAttemptID, *FailedSetID.Left(12));
+			TEXT("Artifact generation failed. Attempt=%s Set=%s Reason=%s"),
+			*FailedAttemptID, *FailedSetID.Left(12), *OutError);
 		return false;
 	}
 
@@ -978,6 +1005,12 @@ bool FRouteArtifactWorkspaceManager::RecoverWorkspace(
 	const bool bCurrentExists = Files.DirectoryExists(*Current);
 	const bool bCurrentValid = bCurrentExists
 		&& ValidateCurrentDirectoryAnySchema(Current, CurrentSchema, CurrentError);
+	if (bCurrentExists && !bCurrentValid)
+	{
+		UE_LOG(LogRouteArtifactWorkspace, Warning,
+			TEXT("Current validation failed during recovery. Path=%s Reason=%s"),
+			*Current, *CurrentError);
+	}
 	if (bCurrentExists && CurrentError.Contains(TEXT("ReparsePointDetected")))
 	{
 		Impl->CurrentStatus = ERouteArtifactCurrentStatus::Invalid;
@@ -1115,6 +1148,50 @@ bool FRouteArtifactWorkspaceManager::RecoverWorkspace(
 	Impl->CurrentStatus = ERouteArtifactCurrentStatus::Invalid;
 	if (ValidPrevious.Num() != 1)
 	{
+		if (ValidPrevious.IsEmpty()
+			&& CurrentError.Contains(TEXT("V2: RequiredWorkspacePathDoesNotExist.")))
+		{
+			// A partially deleted Current can never be uploaded, but it must not
+			// permanently prevent creation of its replacement. Isolate the damaged
+			// directory inside Staging; the next successfully promoted Current makes
+			// it an ordinary orphan attempt that recovery can safely remove.
+			TArray<FString> InvalidFiles;
+			TArray<FString> InvalidDirectories;
+			FString InvalidTreeError;
+			if (!RouteArtifactFilesystemSafety::EnumerateTreeNoReparse(
+				Current, InvalidFiles, InvalidDirectories, InvalidTreeError))
+			{
+				return Finish(ERouteArtifactRecoveryStatus::Unrecoverable,
+					ERouteArtifactRecoveryErrorCode::ReparsePointDetected,
+					TEXT("Invalid Current contains an unsafe filesystem entry."), false);
+			}
+			CleanupAttempts();
+			if (!Files.MakeDirectory(*Staging, true))
+			{
+				return Finish(ERouteArtifactRecoveryStatus::Unrecoverable,
+					ERouteArtifactRecoveryErrorCode::FilesystemOperationFailed,
+					TEXT("Recovery staging directory creation failed."), false);
+			}
+			const FString InvalidHold = FPaths::Combine(
+				Staging, FGuid::NewGuid().ToString(EGuidFormats::Digits).ToLower());
+			if (!MoveDirectory(InvalidHold, Current))
+			{
+				return Finish(ERouteArtifactRecoveryStatus::RecoveryRequired,
+					ERouteArtifactRecoveryErrorCode::FilesystemOperationFailed,
+					TEXT("Invalid Current could not be isolated for replacement."), true);
+			}
+			Impl->CurrentStatus = ERouteArtifactCurrentStatus::None;
+			Impl->CurrentInfo = FRouteArtifactCurrentInfo{};
+			return Finish(
+				Entries.UnknownCount > 0 || bCleanupFailure
+					? ERouteArtifactRecoveryStatus::RecoveryRequired
+					: ERouteArtifactRecoveryStatus::Recovered,
+				ERouteArtifactRecoveryErrorCode::InvalidCurrent,
+				Entries.UnknownCount > 0 || bCleanupFailure
+					? TEXT("Invalid Current was isolated, but other Workspace entries require review.")
+					: TEXT("Invalid Current was isolated; replacement generation is available."),
+				true);
+		}
 		CleanupAttempts();
 		return Finish(ERouteArtifactRecoveryStatus::RecoveryRequired,
 			ValidPrevious.Num() > 1

@@ -35,7 +35,7 @@ request_timeout_ms=750
 terminate_timeout_ms=2500
 request_retry_count=3
 write_window=16
-global_write_outstanding_cap=16
+global_write_outstanding_cap=800
 
 [max_flight]
 # Positive values in meters. Missing keys fall back to 5.0m.

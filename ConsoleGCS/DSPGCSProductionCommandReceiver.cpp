@@ -1,8 +1,8 @@
-/**
- * @brief ÊµÏÖ DSP ÃüÁî½âÂë¡¢Ð£Ñé¡¢ÁìÓòÓ³ÉäºÍ½á¹û»Ø´«×¼±¸¡£
+ï»¿/**
+ * @brief å®žçŽ° DSP å‘½ä»¤è§£ç ã€æ ¡éªŒã€é¢†åŸŸæ˜ å°„å’Œç»“æžœå›žä¼ å‡†å¤‡ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * ±¾ÎÄ¼þ²»Ö±½ÓÑ¡Ôñ UDP Endpoint£»CommandManager ¾­ DroneID ÕÒµ½Ô­ DroneSession ºó·¢ËÍ¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * æœ¬æ–‡ä»¶ä¸ç›´æŽ¥é€‰æ‹© UDP Endpointï¼›CommandManager ç» DroneID æ‰¾åˆ°åŽŸ DroneSession åŽå‘é€ã€‚
  */
 #include "DSPGCSProductionCommandReceiver.h"
 
@@ -37,6 +37,8 @@ namespace
         case dspgcs::CommandType::SetMode: result = DroneCommandType::SetMode; return true;
         case dspgcs::CommandType::HoverTest: result = DroneCommandType::HoverTest; return true;
         case dspgcs::CommandType::SetLedColor: result = DroneCommandType::SetLedColor; return true;
+        case dspgcs::CommandType::TimeStart: result = DroneCommandType::TimeStart; return true;
+        case dspgcs::CommandType::TimeStop: result = DroneCommandType::TimeStop; return true;
         }
         return false;
     }
@@ -53,6 +55,8 @@ namespace
         case dspgcs::CommandType::SetMode:
         case dspgcs::CommandType::HoverTest:
         case dspgcs::CommandType::SetLedColor:
+        case dspgcs::CommandType::TimeStart:
+        case dspgcs::CommandType::TimeStop:
             return true;
         default:
             return false;
@@ -189,6 +193,26 @@ DSPGCSProductionCommandReceiver::ValidateRealCommand(
         return validation;
     }
 
+    if ((request.commandType == dspgcs::CommandType::TimeStart ||
+         request.commandType == dspgcs::CommandType::TimeStop) &&
+        request.parameters.timeControlMask != 1)
+    {
+        validation.errorCode = "TIME_CONTROL_MASK_NOT_ALLOWED";
+        validation.errorMessage =
+            "MP_TIME_CONTROL flight scheduling requires control_mask=1";
+        return validation;
+    }
+    if (request.commandType == dspgcs::CommandType::TimeStart &&
+        (request.parameters.scheduledHour > 23 ||
+         request.parameters.scheduledMinute > 59 ||
+         request.parameters.scheduledSecond > 59))
+    {
+        validation.errorCode = "TIME_CONTROL_TIME_INVALID";
+        validation.errorMessage =
+            "Scheduled local time must be within 00:00:00-23:59:59";
+        return validation;
+    }
+
     float altitude = 0.0f;
     float altitudeLimit = 0.0f;
     if (request.commandType == dspgcs::CommandType::Takeoff)
@@ -318,6 +342,18 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
                 std::to_string(request.parameters.hoverDurationSeconds) +
                 "s");
         }
+        else if (request.commandType == dspgcs::CommandType::TimeStart ||
+            request.commandType == dspgcs::CommandType::TimeStop)
+        {
+            ConsoleUI::AddLog(
+                "DSP-GCS MP_TIME_CONTROL received Control=" +
+                std::to_string(request.commandType == dspgcs::CommandType::TimeStart ? 1 : 0) +
+                " Mask=" + std::to_string(request.parameters.timeControlMask) +
+                " LocalTime=" + std::to_string(request.parameters.scheduledHour) + ":" +
+                std::to_string(request.parameters.scheduledMinute) + ":" +
+                std::to_string(request.parameters.scheduledSecond) +
+                " Targets=" + std::to_string(request.targetDroneIds.size()));
+        }
 
         dspgcs::CommandResultBatchDTO resultBatch;
         bool sendImmediateResult = true;
@@ -363,6 +399,10 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
                     parameters.red = request.parameters.red;
                     parameters.green = request.parameters.green;
                     parameters.blue = request.parameters.blue;
+                    parameters.timeControlMask = request.parameters.timeControlMask;
+                    parameters.scheduledHour = request.parameters.scheduledHour;
+                    parameters.scheduledMinute = request.parameters.scheduledMinute;
+                    parameters.scheduledSecond = request.parameters.scheduledSecond;
 
                     const std::uint64_t internalCommandId = commandManager.Submit(
                         internalType,
@@ -405,6 +445,10 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
                 parameters.red = request.parameters.red;
                 parameters.green = request.parameters.green;
                 parameters.blue = request.parameters.blue;
+                parameters.timeControlMask = request.parameters.timeControlMask;
+                parameters.scheduledHour = request.parameters.scheduledHour;
+                parameters.scheduledMinute = request.parameters.scheduledMinute;
+                parameters.scheduledSecond = request.parameters.scheduledSecond;
 
                 const std::uint64_t internalCommandId = commandManager.Submit(
                     internalType,

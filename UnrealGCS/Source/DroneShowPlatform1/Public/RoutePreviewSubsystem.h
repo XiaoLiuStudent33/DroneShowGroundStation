@@ -25,6 +25,9 @@ class DRONESHOWPLATFORM1_API URoutePreviewSubsystem final : public UGameInstance
 	GENERATED_BODY()
 
 public:
+	/** Operator-confirmed show execution rate (2026-08-28), not inferred from NPZ metadata. */
+	static constexpr double ScheduledShowSampleRateHz = 10.0;
+
 	virtual void Deinitialize() override;
 
 	UFUNCTION(BlueprintCallable, Category = "Drone GCS|Route Preview")
@@ -135,6 +138,7 @@ public:
 	int64 GetRouteDatasetGeneration() const { return RouteDatasetGeneration; }
 
 private:
+	friend class FGCSScheduledShowPreviewTest;
 	TSharedPtr<FRoutePreviewData, ESPMode::ThreadSafe> ActiveRouteData;
 	FRoutePreviewData PreparedRouteData;
 	FString PreparedRouteFilePath;

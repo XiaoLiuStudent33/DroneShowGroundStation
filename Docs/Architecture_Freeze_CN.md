@@ -118,6 +118,7 @@ FleetManager / RoutePreview
 - Route Preview 与 Live telemetry 使用明确的 Visualization Mode，不能同时写同一组视觉数组。
 - Live 模式可以通过同一个 `ADroneFleetVisualizationActor` / Niagara System 显示独立 Route Target overlay；Overlay 不拥有 Assignment。
 - SampleRate 必须显式配置；unset 为合法状态，禁止猜 24/25/30/50/60 Hz。
+- 2026-08-28 操作员明确确认本项目表演按 **10 帧/秒** 执行：航线管理导入及授时预览显式使用 `ScheduledShowSampleRateHz=10`；普通独立 Preview 导入仍支持显式自定帧率。该值不是从 NPZ 猜测出的元数据。
 - RouteAssignment、Freeze/Revision、Artifact Workspace、Manifest/READY、Waypoint Generator/Validator 已实现。
 - Frozen Assignment 与 Upload Job 已通过 DSP-GCS 版本化协议连接 UE 和 Console。
 - Console Artifact Consumer、Upload Job Authority、`RouteUploadManager`、Mission Preparation 与 `IMissionTransport` 已实现。

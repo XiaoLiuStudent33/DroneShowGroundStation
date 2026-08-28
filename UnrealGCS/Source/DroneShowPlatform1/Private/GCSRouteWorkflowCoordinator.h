@@ -87,6 +87,12 @@ struct FGCSConfirmedNpzMappingSnapshot
 	TArray<FString> SelectedDroneIDs;
 	FString FleetSessionID;
 	TArray<FGCSConfirmedNpzMappingEntry> Entries;
+	/** Selected participants without an executable one-to-one RouteSlot match. */
+	TArray<FString> UnassignedDroneIDs;
+	/** Subset of UnassignedDroneIDs classified as excess/spare by the matcher. */
+	TArray<FString> SpareDroneIDs;
+	/** RouteSlots left vacant by this degraded confirmation. */
+	TArray<int32> VacantRouteSlots;
 	bool bValid = false;
 	FString InvalidReason;
 };
@@ -264,6 +270,7 @@ class UGCSRouteWorkflowCoordinator final : public UObject
 	GENERATED_BODY()
 
 public:
+	static constexpr int32 DefaultMaxConcurrentTargets = 50;
 	bool Initialize(UGameInstance* InGameInstance, UUserWidget* InRightPanelWidget);
 	void Shutdown();
 	bool ShowRouteWorkflow(FString& OutError);
@@ -584,7 +591,7 @@ private:
 	bool bBindingValid = false;
 	bool bViewVisible = false;
 	int32 SelectedPageIndex = 0;
-	int32 AppliedMaxConcurrentTargets = 1;
+	int32 AppliedMaxConcurrentTargets = DefaultMaxConcurrentTargets;
 	EGCSRouteAutoStartState AutoStartState = EGCSRouteAutoStartState::Idle;
 	FGCSRouteAutoStartSnapshot AutoStartSnapshot;
 	FString AutoStartDiagnostic;

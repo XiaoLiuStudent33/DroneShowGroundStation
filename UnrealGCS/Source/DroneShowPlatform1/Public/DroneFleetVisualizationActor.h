@@ -73,6 +73,9 @@ public:
 	/** Display-only zero-based RouteSlot override keyed by the unchanged network DroneID. */
 	void SetConfirmedRouteSlotDisplayOverrides(const TMap<FString, int32>& OverridesByDroneID);
 	void ClearConfirmedRouteSlotDisplayOverrides();
+	/** Display-only degraded assignment state: red marker and hidden number label. */
+	void SetNpzNumberingAnomalyDroneIDs(const TArray<FString>& DroneIDs);
+	void ClearNpzNumberingAnomalyDroneIDs();
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Visualization|Geo")
 	bool IsOriginWorldPositionInitialized() const { return bOriginWorldPositionInitialized; }
@@ -186,6 +189,8 @@ private:
 	TSet<FString> CommandSelectedDroneIDs;
 	/** Display-only cache; keys are real DroneIDs and values are zero-based RouteSlots. */
 	TMap<FString, int32> ConfirmedRouteSlotDisplayOverrides;
+	/** Display-only cache; these live drones are deliberately excluded from upload targets. */
+	TSet<FString> NpzNumberingAnomalyDroneIDs;
 	EGCSVisualizationMode VisualizationMode = EGCSVisualizationMode::Live;
 
 	/**

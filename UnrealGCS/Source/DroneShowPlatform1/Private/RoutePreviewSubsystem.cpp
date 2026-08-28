@@ -157,6 +157,9 @@ bool URoutePreviewSubsystem::CommitPreparedRouteForWorkflow(
 	PreparedRouteData.ShowOriginLongitude = Longitude;
 	PreparedRouteData.ShowOriginAltitude = Altitude;
 	PreparedRouteData.bShowOriginSet = true;
+	// The production workflow uses the operator-confirmed 10 Hz show profile.
+	// Standalone preview imports still require their own explicit sample rate.
+	PreparedRouteData.SampleRateHz = ScheduledShowSampleRateHz;
 	StopPlaybackTicker();
 	PlaybackState = ERoutePreviewPlaybackState::Stopped;
 	CurrentTimeSeconds = 0.0;

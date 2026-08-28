@@ -1,8 +1,8 @@
 /**
- * @brief ¶¨Òåµ±Ç° Production UI Óë DSP Command Provider Ê¹ÓÃµÄ UE ÁìÓòÃüÁîÀàĞÍ¡£
+ * @brief å®šä¹‰å½“å‰ Production UI ä¸ DSP Command Provider ä½¿ç”¨çš„ UE é¢†åŸŸå‘½ä»¤ç±»å‹ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * HoverTest ÊÇÓ¦ÓÃ¼¶¹¤×÷Á÷£»SetMode Í¨¹ı MAVLink #11£¬²»Ó¦Îó¼ÇÎª MAV_CMD¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * HoverTest æ˜¯åº”ç”¨çº§å·¥ä½œæµï¼›SetMode é€šè¿‡ MAVLink #11ï¼Œä¸åº”è¯¯è®°ä¸º MAV_CMDã€‚
  */
 #pragma once
 
@@ -19,7 +19,9 @@ enum class EGCSProductionCommandType : uint8
 	RTL,
 	SetMode,
 	HoverTest,
-	SetLedColor
+	SetLedColor,
+	TimeStart,
+	TimeStop
 };
 
 /** Ground-station workflow mode; intentionally independent of APM flight mode. */
@@ -63,6 +65,19 @@ struct DRONESHOWPLATFORM1_API FGCSProductionCommandParameters
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
 	uint8 Blue = 0;
+
+	/** MP_TIME_CONTROL action mask. Flight scheduling uses mask 1. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	uint8 TimeControlMask = 1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	uint8 ScheduledHour = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	uint8 ScheduledMinute = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	uint8 ScheduledSecond = 0;
 };
 
 USTRUCT(BlueprintType)

@@ -568,6 +568,43 @@ void ADroneFleetVisualizationActor::ClearConfirmedRouteSlotDisplayOverrides()
 	PushDroneLabelAttributesToNiagara();
 }
 
+void ADroneFleetVisualizationActor::SetNpzNumberingAnomalyDroneIDs(
+	const TArray<FString>& DroneIDs)
+{
+	TSet<FString> Validated;
+	Validated.Reserve(DroneIDs.Num());
+	for (const FString& DroneID : DroneIDs)
+	{
+		if (!DroneID.TrimStartAndEnd().IsEmpty())
+		{
+			Validated.Add(DroneID);
+		}
+	}
+	if (NpzNumberingAnomalyDroneIDs.Num() == Validated.Num()
+		&& NpzNumberingAnomalyDroneIDs.Includes(Validated))
+	{
+		return;
+	}
+	NpzNumberingAnomalyDroneIDs = MoveTemp(Validated);
+	RebuildDroneLabelAttributes();
+	bDroneColorsDirty = true;
+	PushDroneLabelAttributesToNiagara();
+	PushDroneColorsToNiagara();
+}
+
+void ADroneFleetVisualizationActor::ClearNpzNumberingAnomalyDroneIDs()
+{
+	if (NpzNumberingAnomalyDroneIDs.IsEmpty())
+	{
+		return;
+	}
+	NpzNumberingAnomalyDroneIDs.Reset();
+	RebuildDroneLabelAttributes();
+	bDroneColorsDirty = true;
+	PushDroneLabelAttributesToNiagara();
+	PushDroneColorsToNiagara();
+}
+
 void ADroneFleetVisualizationActor::RefreshFromFleet()
 {
 	// Telemetry continues to update FleetManager during preview. Only the render
@@ -954,16 +991,21 @@ void ADroneFleetVisualizationActor::RebuildDroneLabelAttributes()
 	DroneSelectedMasks.SetNumUninitialized(ParticleCount);
 	for (int32 Index = 0; Index < ParticleCount; ++Index)
 	{
+		const bool bNumberingAnomaly = ParticleDroneIDs.IsValidIndex(Index)
+			&& NpzNumberingAnomalyDroneIDs.Contains(ParticleDroneIDs[Index]);
 		const int32* ConfirmedRouteSlot = ParticleDroneIDs.IsValidIndex(Index)
 			? ConfirmedRouteSlotDisplayOverrides.Find(ParticleDroneIDs[Index])
 			: nullptr;
 		DroneDisplayIDs[Index] = static_cast<float>(
-			ConfirmedRouteSlot ? *ConfirmedRouteSlot : Index);
-		DroneSelectedMasks[Index] = VisualizationMode == EGCSVisualizationMode::Live
+			bNumberingAnomaly ? 0 : (ConfirmedRouteSlot ? *ConfirmedRouteSlot : Index));
+		// -1 is a per-particle label-hidden sentinel consumed by M_DroneIdLabel.
+		DroneSelectedMasks[Index] = bNumberingAnomaly
+			? -1.0f
+			: (VisualizationMode == EGCSVisualizationMode::Live
 			&& ParticleDroneIDs.IsValidIndex(Index)
 			&& CommandSelectedDroneIDs.Contains(ParticleDroneIDs[Index])
 			? 1.0f
-			: 0.0f;
+			: 0.0f);
 	}
 	bDroneLabelAttributesDirty = true;
 }
@@ -1003,10 +1045,24 @@ bool ADroneFleetVisualizationActor::PushDroneColorsToNiagara()
 		return false;
 	}
 
+	TArray<FLinearColor> EffectiveColors;
+	const TArray<FLinearColor>* ColorsToPush = &DroneColors;
+	if (!NpzNumberingAnomalyDroneIDs.IsEmpty())
+	{
+		EffectiveColors = DroneColors;
+		for (int32 Index = 0; Index < EffectiveColors.Num() && Index < ParticleDroneIDs.Num(); ++Index)
+		{
+			if (NpzNumberingAnomalyDroneIDs.Contains(ParticleDroneIDs[Index]))
+			{
+				EffectiveColors[Index] = FLinearColor::Red;
+			}
+		}
+		ColorsToPush = &EffectiveColors;
+	}
 	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayColor(
 		DroneFleetNiagara,
 		DroneColorsParameter,
-		DroneColors);
+		*ColorsToPush);
 	bDroneColorsDirty = false;
 	return true;
 }

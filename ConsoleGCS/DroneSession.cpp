@@ -25,6 +25,32 @@ namespace
     {
         return "[" + droneId + "] ";
     }
+
+    const char* MavSeverityName(const std::uint8_t severity)
+    {
+        switch (severity)
+        {
+        case MAV_SEVERITY_EMERGENCY: return "EMERGENCY";
+        case MAV_SEVERITY_ALERT: return "ALERT";
+        case MAV_SEVERITY_CRITICAL: return "CRITICAL";
+        case MAV_SEVERITY_ERROR: return "ERROR";
+        case MAV_SEVERITY_WARNING: return "WARNING";
+        case MAV_SEVERITY_NOTICE: return "NOTICE";
+        case MAV_SEVERITY_INFO: return "INFO";
+        case MAV_SEVERITY_DEBUG: return "DEBUG";
+        default: return "UNKNOWN";
+        }
+    }
+
+    std::string StatusTextString(const mavlink_statustext_t& status)
+    {
+        std::size_t length = 0;
+        while (length < sizeof(status.text) && status.text[length] != '\0')
+        {
+            ++length;
+        }
+        return std::string(status.text, status.text + length);
+    }
 }
 
 const char* DroneSessionStateName(DroneSessionState state)
@@ -352,7 +378,9 @@ DroneSessionCommandSubmission DroneSession::SubmitCommand(
 
     case DroneCommandType::RTL:
         flightControl.StopHoverMission();
-        ConsoleUI::AddLog(requestPrefix + "RTL Command");
+        ConsoleUI::AddLog(
+            requestPrefix +
+            "RTL SET_MODE custom_mode=6 awaiting HEARTBEAT confirmation");
         submission.dispatchRequestIds.push_back(dispatcher.QueueRTL(
             commandTarget.systemID,
             commandTarget.componentID));
@@ -381,6 +409,63 @@ DroneSessionCommandSubmission DroneSession::SubmitCommand(
             request.parameters.red,
             request.parameters.green,
             request.parameters.blue));
+        submission.accepted = true;
+        return submission;
+
+    case DroneCommandType::TimeStart:
+        if (request.parameters.timeControlMask != 1 ||
+            request.parameters.scheduledHour > 23 ||
+            request.parameters.scheduledMinute > 59 ||
+            request.parameters.scheduledSecond > 59)
+        {
+            ConsoleUI::AddLog(
+                requestPrefix + "TIME_START blocked: invalid mask or local time");
+            submission.error = "invalid scheduled time control parameters";
+            return submission;
+        }
+
+        ConsoleUI::AddLog(
+            requestPrefix + "MP_TIME_CONTROL START RemoteEndpoint=" +
+            config.remoteIp + ":" + std::to_string(config.remotePort) +
+            " control=1 mask=" +
+            std::to_string(request.parameters.timeControlMask) +
+            " local_time=" +
+            std::to_string(request.parameters.scheduledHour) + ":" +
+            std::to_string(request.parameters.scheduledMinute) + ":" +
+            std::to_string(request.parameters.scheduledSecond));
+        submission.dispatchRequestIds.push_back(dispatcher.QueueTimeControl(
+            commandTarget.systemID,
+            commandTarget.componentID,
+            1,
+            request.parameters.timeControlMask,
+            request.parameters.scheduledHour,
+            request.parameters.scheduledMinute,
+            request.parameters.scheduledSecond));
+        submission.accepted = true;
+        return submission;
+
+    case DroneCommandType::TimeStop:
+        if (request.parameters.timeControlMask != 1)
+        {
+            ConsoleUI::AddLog(
+                requestPrefix + "TIME_STOP blocked: invalid mask");
+            submission.error = "invalid scheduled time control mask";
+            return submission;
+        }
+
+        ConsoleUI::AddLog(
+            requestPrefix + "MP_TIME_CONTROL STOP RemoteEndpoint=" +
+            config.remoteIp + ":" + std::to_string(config.remotePort) +
+            " control=0 mask=" +
+            std::to_string(request.parameters.timeControlMask));
+        submission.dispatchRequestIds.push_back(dispatcher.QueueTimeControl(
+            commandTarget.systemID,
+            commandTarget.componentID,
+            0,
+            request.parameters.timeControlMask,
+            0,
+            0,
+            0));
         submission.accepted = true;
         return submission;
 
@@ -489,6 +574,7 @@ bool DroneSession::ApplyDiscoveredHeartbeat(
     parser.Parse(message, workingData);
     dataManager.Update(workingData);
     SetState(DroneSessionState::Online);
+    dispatcher.HandleHeartbeat(message);
     if (previousMode != workingData.mode || previousModeName != workingData.modeName)
     {
         ConsoleUI::AddLog(
@@ -517,6 +603,17 @@ bool DroneSession::ApplyDiscoveredTelemetry(
 
     switch (message.msgid)
     {
+    case MAVLINK_MSG_ID_STATUSTEXT:
+    {
+        mavlink_statustext_t status{};
+        mavlink_msg_statustext_decode(&message, &status);
+        ConsoleUI::AddLog(
+            SessionPrefix(config.droneId) +
+            "STATUSTEXT severity=" + MavSeverityName(status.severity) +
+            "(" + std::to_string(static_cast<unsigned int>(status.severity)) +
+            ") text=" + StatusTextString(status));
+        return true;
+    }
     case MAVLINK_MSG_ID_ATTITUDE:
     case MAVLINK_MSG_ID_GLOBAL_POSITION_INT:
     case MAVLINK_MSG_ID_GPS_RAW_INT:
@@ -868,11 +965,31 @@ void DroneSession::ProcessDispatchResults(
     for (const CommandDispatchResult& result : results)
     {
         completedCommandResults.push_back(result);
+        std::string ackDiagnostic;
+        if (result.modeConfirmationRequired)
+        {
+            ackDiagnostic =
+                " mode_confirmation=" +
+                std::string(result.outcome == CommandOutcome::Accepted
+                    ? "CONFIRMED"
+                    : "NOT_CONFIRMED") +
+                " custom_mode=" + std::to_string(
+                    static_cast<unsigned int>(result.expectedCustomMode));
+        }
+        else if (result.outcome == CommandOutcome::Accepted ||
+            result.outcome == CommandOutcome::Rejected)
+        {
+            ackDiagnostic =
+                " ack=" + std::string(MavResultName(result.ackResult)) +
+                "(" + std::to_string(
+                    static_cast<unsigned int>(result.ackResult)) + ")";
+        }
         ConsoleUI::AddLog(
             SessionPrefix(config.droneId) +
             "CMD request=" + std::to_string(result.requestId) +
             " command=" + std::to_string(result.command) +
             " result=" + CommandOutcomeName(result.outcome) +
+            ackDiagnostic +
             " attempts=" + std::to_string(result.attempts));
     }
 }

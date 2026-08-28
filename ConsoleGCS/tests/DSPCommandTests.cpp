@@ -1,4 +1,4 @@
-#include "../AppConfig.h"
+﻿#include "../AppConfig.h"
 #include "../CommandManager.h"
 #include "../ConsoleDSPGCSLoopbackTransport.h"
 #include "../DSPGCSProductionCommandReceiver.h"
@@ -245,6 +245,26 @@ int RunDSPCommandTests()
     passed &= Check(
         !DSPGCSProductionCommandReceiver::ValidateRealCommand(invalidModeRequest).allowed,
         "unsupported Copter custom mode rejected by safety policy");
+
+    dspgcs::CommandRequestDTO validTimeStart;
+    validTimeStart.commandType = dspgcs::CommandType::TimeStart;
+    validTimeStart.targetDroneIds = fiveTargets;
+    validTimeStart.parameters.timeControlMask = 1;
+    validTimeStart.parameters.scheduledHour = 14;
+    validTimeStart.parameters.scheduledMinute = 5;
+    validTimeStart.parameters.scheduledSecond = 38;
+    passed &= Check(
+        DSPGCSProductionCommandReceiver::ValidateRealCommand(validTimeStart).allowed,
+        "valid MP_TIME_CONTROL start accepted by safety policy");
+
+    dspgcs::CommandRequestDTO invalidTimeStart = validTimeStart;
+    invalidTimeStart.parameters.scheduledSecond = 60;
+    const DSPGCSRealCommandValidation invalidTimeValidation =
+        DSPGCSProductionCommandReceiver::ValidateRealCommand(invalidTimeStart);
+    passed &= Check(
+        !invalidTimeValidation.allowed &&
+        invalidTimeValidation.errorCode == "TIME_CONTROL_TIME_INVALID",
+        "invalid MP_TIME_CONTROL local time rejected");
 
     passed &= Check(
         ueTransport->Send(MakeCommandFrame(

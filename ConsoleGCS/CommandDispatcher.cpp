@@ -1,9 +1,9 @@
-/**
- * @brief  µœ÷µ• Session √¸¡Ó≈≈∂”°¢∑¢ÀÕ°¢≥¨ ±÷ÿ ‘∫Õ COMMAND_ACK ∆•≈‰°£
+Ôªø/**
+ * @brief ÂÆûÁé∞Âçï Session ÂëΩ‰ª§ÊéíÈòü„ÄÅÂèëÈÄÅ„ÄÅË∂ÖÊó∂ÈáçËØïÂíå COMMAND_ACK ÂåπÈÖç„ÄÇ
  *
- * ∑÷¿‡£∫Production°£
- * µ˜”√¡¥£∫DroneSession -> CommandDispatcher -> MavlinkCommand£ª#77 ACK ∑¥œÚÕÍ≥… pending request°£
- * SYSID ÷ª”√”⁄–≠“È ACK ∆•≈‰£¨≤ª≥–µ£ Fleet Œ®“ª…Ì∑›÷∞‘°£
+ * ÂàÜÁ±ªÔºöProduction„ÄÇ
+ * Ë∞ÉÁî®ÈìæÔºöDroneSession -> CommandDispatcher -> MavlinkCommandÔºõ#77 ACK ÂèçÂêëÂÆåÊàê pending request„ÄÇ
+ * SYSID Âè™Áî®‰∫éÂçèËÆÆ ACK ÂåπÈÖçÔºå‰∏çÊâøÊãÖ Fleet ÂîØ‰∏ÄË∫´‰ªΩËÅåË¥£„ÄÇ
  */
 #include "CommandDispatcher.h"
 
@@ -61,7 +61,11 @@ std::uint64_t CommandDispatcher::QueueSetMode(
         0,
         0.0f,
         false,
-        customMode);
+        customMode,
+        0,
+        0,
+        0,
+        true);
 }
 
 std::uint64_t CommandDispatcher::QueueTakeoff(
@@ -95,12 +99,18 @@ std::uint64_t CommandDispatcher::QueueRTL(
     std::uint8_t system,
     std::uint8_t component)
 {
+    constexpr std::uint8_t RtlCustomMode = 6;
     return Queue(
         Action::RTL,
         system,
         component,
-        MAV_CMD_NAV_RETURN_TO_LAUNCH,
+        0,
         0.0f,
+        true,
+        RtlCustomMode,
+        0,
+        0,
+        0,
         true);
 }
 
@@ -137,6 +147,34 @@ std::uint64_t CommandDispatcher::QueueSetLedColor(
         blue);
 }
 
+std::uint64_t CommandDispatcher::QueueTimeControl(
+    std::uint8_t system,
+    std::uint8_t component,
+    std::uint8_t control,
+    std::uint8_t controlMask,
+    std::uint8_t hour,
+    std::uint8_t minute,
+    std::uint8_t second)
+{
+    return Queue(
+        Action::TimeControl,
+        system,
+        component,
+        0,
+        0.0f,
+        control == 0,
+        0,
+        0,
+        0,
+        0,
+        false,
+        control,
+        controlMask,
+        hour,
+        minute,
+        second);
+}
+
 std::uint64_t CommandDispatcher::Queue(
     Action action,
     std::uint8_t system,
@@ -147,7 +185,13 @@ std::uint64_t CommandDispatcher::Queue(
     std::uint8_t customMode,
     std::uint8_t red,
     std::uint8_t green,
-    std::uint8_t blue)
+    std::uint8_t blue,
+    bool waitForModeConfirmation,
+    std::uint8_t timeControl,
+    std::uint8_t timeControlMask,
+    std::uint8_t scheduledHour,
+    std::uint8_t scheduledMinute,
+    std::uint8_t scheduledSecond)
 {
     std::lock_guard<std::mutex> lock(mutex);
 
@@ -162,6 +206,12 @@ std::uint64_t CommandDispatcher::Queue(
     request.red = red;
     request.green = green;
     request.blue = blue;
+    request.waitForModeConfirmation = waitForModeConfirmation;
+    request.timeControl = timeControl;
+    request.timeControlMask = timeControlMask;
+    request.scheduledHour = scheduledHour;
+    request.scheduledMinute = scheduledMinute;
+    request.scheduledSecond = scheduledSecond;
 
     if (system == 0 ||
         component == 0 ||
@@ -234,13 +284,41 @@ void CommandDispatcher::Tick(
         return;
     }
 
-    if (pending->expectedAckCommand == 0)
+    if (pending->expectedAckCommand == 0 &&
+        !pending->waitForModeConfirmation)
     {
         CompleteLocked(
             *pending,
             CommandOutcome::Sent);
         pending.reset();
     }
+}
+
+void CommandDispatcher::HandleHeartbeat(
+    const mavlink_message_t& message)
+{
+    if (message.msgid != MAVLINK_MSG_ID_HEARTBEAT)
+    {
+        return;
+    }
+
+    mavlink_heartbeat_t heartbeat{};
+    mavlink_msg_heartbeat_decode(&message, &heartbeat);
+
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!pending ||
+        !pending->waitForModeConfirmation ||
+        pending->system != message.sysid ||
+        (heartbeat.base_mode & MAV_MODE_FLAG_CUSTOM_MODE_ENABLED) == 0 ||
+        heartbeat.custom_mode != pending->customMode)
+    {
+        return;
+    }
+
+    CompleteLocked(
+        *pending,
+        CommandOutcome::Accepted);
+    pending.reset();
 }
 
 void CommandDispatcher::HandleAck(
@@ -258,9 +336,10 @@ void CommandDispatcher::HandleAck(
 
     std::lock_guard<std::mutex> lock(mutex);
 
-    // #77 ACK ±ÿ–Î Ù”⁄±æ Session µ±«∞µ»¥˝µƒƒø±Í sysid£¨≤¢–Ø¥¯∆⁄Õ˚µƒ
-    // MAV_CMD°£’‚¿Ôµƒ SYSID Ωˆ”√”⁄–≠“È”¶¥πÿ¡™£¨≤ªƒ‹ÃÊ¥˙ Endpoint Fleet …Ì∑›°£
+    // #77 ACK ÂøÖÈ°ªÂ±û‰∫éÊú¨ Session ÂΩìÂâçÁ≠âÂæÖÁöÑÁõÆÊ†á sysidÔºåÂπ∂Êê∫Â∏¶ÊúüÊúõÁöÑ
+    // MAV_CMD„ÄÇËøôÈáåÁöÑ SYSID ‰ªÖÁî®‰∫éÂçèËÆÆÂ∫îÁ≠îÂÖ≥ËÅîÔºå‰∏çËÉΩÊõø‰ª£ Endpoint Fleet Ë∫´‰ªΩ„ÄÇ
     if (!pending ||
+        pending->waitForModeConfirmation ||
         pending->system != message.sysid ||
         pending->expectedAckCommand != ack.command)
     {
@@ -340,10 +419,10 @@ bool CommandDispatcher::Send(
             request.component);
 
     case Action::RTL:
-        return MavlinkCommand::RTL(
+        return MavlinkCommand::SetMode(
             udp,
             request.system,
-            request.component);
+            request.customMode);
 
     case Action::Loiter:
         return MavlinkCommand::Loiter(
@@ -357,6 +436,15 @@ bool CommandDispatcher::Send(
             request.red,
             request.green,
             request.blue);
+
+    case Action::TimeControl:
+        return MavlinkCommand::TimeControl(
+            udp,
+            request.timeControl,
+            request.timeControlMask,
+            request.scheduledHour,
+            request.scheduledMinute,
+            request.scheduledSecond);
     }
 
     return false;
@@ -373,6 +461,8 @@ void CommandDispatcher::CompleteLocked(
     result.outcome = outcome;
     result.ackResult = ackResult;
     result.attempts = request.attempts;
+    result.modeConfirmationRequired = request.waitForModeConfirmation;
+    result.expectedCustomMode = request.customMode;
 
     completed.push_back(result);
 }
@@ -418,4 +508,33 @@ const char* CommandOutcomeName(
     }
 
     return "UNKNOWN";
+}
+
+const char* MavResultName(const std::uint8_t result)
+{
+    switch (result)
+    {
+    case MAV_RESULT_ACCEPTED:
+        return "MAV_RESULT_ACCEPTED";
+    case MAV_RESULT_TEMPORARILY_REJECTED:
+        return "MAV_RESULT_TEMPORARILY_REJECTED";
+    case MAV_RESULT_DENIED:
+        return "MAV_RESULT_DENIED";
+    case MAV_RESULT_UNSUPPORTED:
+        return "MAV_RESULT_UNSUPPORTED";
+    case MAV_RESULT_FAILED:
+        return "MAV_RESULT_FAILED";
+    case MAV_RESULT_IN_PROGRESS:
+        return "MAV_RESULT_IN_PROGRESS";
+    case MAV_RESULT_CANCELLED:
+        return "MAV_RESULT_CANCELLED";
+    case MAV_RESULT_COMMAND_LONG_ONLY:
+        return "MAV_RESULT_COMMAND_LONG_ONLY";
+    case MAV_RESULT_COMMAND_INT_ONLY:
+        return "MAV_RESULT_COMMAND_INT_ONLY";
+    case MAV_RESULT_COMMAND_UNSUPPORTED_MAV_FRAME:
+        return "MAV_RESULT_COMMAND_UNSUPPORTED_MAV_FRAME";
+    default:
+        return "MAV_RESULT_UNKNOWN";
+    }
 }

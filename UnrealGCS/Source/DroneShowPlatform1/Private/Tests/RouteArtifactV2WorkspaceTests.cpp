@@ -292,6 +292,7 @@ namespace
 		FString RouteFile;
 		FString WorkspaceRoot;
 		double DeadlineSeconds = 0.0;
+		int32 CompletedGenerations = 0;
 
 		void Cleanup()
 		{
@@ -333,6 +334,19 @@ namespace
 				State->Test->TestEqual(TEXT("Production manifest schema v2"),
 					Manifest.ArtifactSchemaVersion,
 					RouteArtifactContractV2::ArtifactSchemaVersion);
+				if (Progress.GenerationState == ERouteWaypointBatchState::Succeeded
+					&& ++State->CompletedGenerations == 1)
+				{
+					// Exercise the actual worker-thread Finalize over an existing Current.
+					URoutePreviewSubsystem* Preview = State->GameInstance->GetSubsystem<URoutePreviewSubsystem>();
+					if (Preview->SetShowOrigin(30.50001, 120.25, 50.0, Error)
+						&& State->Generator->StartGeneration(1, Error))
+					{
+						State->DeadlineSeconds = FPlatformTime::Seconds() + 30.0;
+						return false;
+					}
+					State->Test->AddError(TEXT("Repeated production generation failed: ") + Error);
+				}
 				State->Cleanup();
 				return true;
 			}
@@ -502,6 +516,120 @@ bool FRouteArtifactV2LegacyReplacementTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRouteArtifactV2RuntimeReplacementTest,
+	"DroneGCS.RouteArtifactV2B.RuntimeReplacement",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRouteArtifactV2RuntimeReplacementTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FString DefaultRoot;
+	FString Error;
+	const bool bDefaultResolved = RouteArtifactWorkspacePaths::ResolveDefaultRoot(
+		ERouteArtifactWorkspaceRootKind::Development, DefaultRoot, Error);
+	AddInfo(FString::Printf(TEXT("SavedDir=%s DefaultRoot=%s ResolveError=%s"),
+		*FPaths::ProjectSavedDir(), *DefaultRoot, *Error));
+	TestTrue(TEXT("Default workspace resolves without selecting an output folder"), bDefaultResolved);
+
+	// Work only in an isolated test directory, never rename the operator's Current.
+	const FString Root = V2TempRoot(TEXT("RuntimeReplacement"));
+	FRouteArtifactWorkspaceManager Manager;
+	if (!TestTrue(TEXT("Configure isolated workspace"), Manager.SetConfiguredWorkspaceRoot(Root, Error)))
+		return false;
+	for (int32 Attempt = 0; Attempt < 2; ++Attempt)
+	{
+		FRouteArtifactBuildIdentityV2 Build = V2Build(*this);
+		Build.SourceDatasetDigest = V2Hash(*this, FString::Printf(TEXT("source-%d"), Attempt));
+		const FRouteArtifactWorkspaceSourceGate Gate = V2Gate(*this, Build, Attempt + 1);
+		FRouteArtifactGenerationHandle Handle;
+		FRouteArtifactManifestV2 Manifest;
+		if (!TestTrue(TEXT("Begin new source generation"), Manager.BeginGeneration(Build, Gate, Handle, Error))
+			|| !WriteV2Draft(*this, Manager, Build, Gate, Handle, 1700000000000 + Attempt, Manifest))
+			return false;
+		const bool bFinalized = Manager.FinalizeGeneration(Manifest, Gate, Error);
+		AddInfo(FString::Printf(TEXT("Replacement attempt=%d finalized=%d error=%s"), Attempt, bFinalized, *Error));
+		if (!TestTrue(TEXT("Publish new source over previous Current"), bFinalized)) return false;
+		TestEqual(TEXT("Current source switches to the newly generated source"),
+			Manager.GetCurrentInfo().SourceDatasetDigest.ToLowerHex(), Build.SourceDatasetDigest.ToLowerHex());
+	}
+	Manager.Shutdown();
+	IFileManager::Get().DeleteDirectory(*Root, false, true);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRouteArtifactV2DeletedCurrentRecoveryTest,
+	"DroneGCS.RouteArtifactV2B.DeletedCurrentRecovery",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRouteArtifactV2DeletedCurrentRecoveryTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const FString Root = V2TempRoot(TEXT("DeletedCurrentRecovery"));
+	FString Error;
+	FRouteArtifactBuildIdentityV2 FirstBuild = V2Build(*this);
+	const FRouteArtifactWorkspaceSourceGate FirstGate = V2Gate(*this, FirstBuild, 1);
+	FRouteArtifactGenerationHandle FirstHandle;
+	FRouteArtifactManifestV2 FirstManifest;
+	{
+		FRouteArtifactWorkspaceManager Writer;
+		if (!TestTrue(TEXT("Configure damaged Current fixture"),
+				Writer.SetConfiguredWorkspaceRoot(Root, Error))
+			|| !TestTrue(TEXT("Begin damaged Current fixture"),
+				Writer.BeginGeneration(FirstBuild, FirstGate, FirstHandle, Error))
+			|| !WriteV2Draft(*this, Writer, FirstBuild, FirstGate,
+				FirstHandle, 1700000000100, FirstManifest)
+			|| !TestTrue(TEXT("Publish Current before manual deletion"),
+				Writer.FinalizeGeneration(FirstManifest, FirstGate, Error)))
+		{
+			IFileManager::Get().DeleteDirectory(*Root, false, true);
+			return false;
+		}
+		Writer.Shutdown();
+	}
+	const FString DeletedRoute = FPaths::Combine(
+		Root, TEXT("Current"), FirstManifest.Routes[0].RelativePath);
+	if (!TestTrue(TEXT("Simulate operator deleting a waypoint file"),
+		IFileManager::Get().Delete(*DeletedRoute, false, true)))
+	{
+		IFileManager::Get().DeleteDirectory(*Root, false, true);
+		return false;
+	}
+
+	FRouteArtifactWorkspaceManager Recovery;
+	if (!TestTrue(TEXT("Damaged Current is isolated during recovery"),
+			Recovery.SetConfiguredWorkspaceRoot(Root, Error))
+		|| !TestEqual(TEXT("Recovery permits replacement generation"),
+			Recovery.GetLastRecoveryResult().Status, ERouteArtifactRecoveryStatus::Recovered)
+		|| !TestEqual(TEXT("Damaged Current is no longer uploadable"),
+			Recovery.GetCurrentStatus(), ERouteArtifactCurrentStatus::None))
+	{
+		IFileManager::Get().DeleteDirectory(*Root, false, true);
+		return false;
+	}
+	FRouteArtifactBuildIdentityV2 ReplacementBuild = V2Build(*this);
+	ReplacementBuild.SourceDatasetDigest = V2Hash(*this, TEXT("replacement-after-delete"));
+	const FRouteArtifactWorkspaceSourceGate ReplacementGate =
+		V2Gate(*this, ReplacementBuild, 2);
+	FRouteArtifactGenerationHandle ReplacementHandle;
+	FRouteArtifactManifestV2 ReplacementManifest;
+	const bool bReplacementReady =
+		TestTrue(TEXT("Begin replacement after manual deletion"),
+			Recovery.BeginGeneration(ReplacementBuild, ReplacementGate,
+				ReplacementHandle, Error))
+		&& WriteV2Draft(*this, Recovery, ReplacementBuild, ReplacementGate,
+			ReplacementHandle, 1700000000200, ReplacementManifest)
+		&& TestTrue(TEXT("Publish replacement after manual deletion"),
+			Recovery.FinalizeGeneration(ReplacementManifest, ReplacementGate, Error));
+	if (!bReplacementReady && !Error.IsEmpty()) AddError(Error);
+	TestEqual(TEXT("Replacement becomes the uploadable Current"),
+		Recovery.GetCurrentStatus(), ERouteArtifactCurrentStatus::Ready);
+	Recovery.Shutdown();
+	IFileManager::Get().DeleteDirectory(*Root, false, true);
+	return bReplacementReady;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRouteArtifactV2OfflineProductionGenerationTest,
 	"DroneGCS.RouteArtifactV2B.OfflineProductionGeneration",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -558,7 +686,9 @@ bool FRouteArtifactV2OfflineProductionGenerationTest::RunTest(const FString& Par
 		ERouteAssignmentState::Empty);
 	TestTrue(TEXT("Console is not accepted"),
 		Sync->GetSyncState() != EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted);
-
+	AddInfo(FString::Printf(TEXT("Default workspace recovery=%d summary=%s"),
+		static_cast<int32>(State->Workspace->GetLastRecoveryResult().Status),
+		*State->Workspace->GetLastRecoveryResult().RecoverySummary));
 	FString Error;
 	if (!TestTrue(TEXT("offline Workspace root configured"),
 		State->Workspace->SetConfiguredWorkspaceRoot(State->WorkspaceRoot, Error))

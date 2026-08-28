@@ -164,8 +164,10 @@ bool RouteWaypointValidator::ValidateAndHashFileStreaming(
 		return false;
 	}
 
-	TUniquePtr<IFileHandle> Handle(
-		FPlatformFileManager::Get().GetPlatformFile().OpenRead(*FilePath));
+	FFileOpenResult OpenResult = FPlatformFileManager::Get().GetPlatformFile().OpenRead(
+		*FilePath, EOpenReadFlags::AllowDelete);
+	TUniquePtr<IFileHandle> Handle;
+	if (OpenResult.IsValid()) Handle = OpenResult.StealValue();
 	if (!Handle)
 	{
 		OutResult.ErrorCode = ERouteWaypointValidationErrorCode::FileOpenFailed;

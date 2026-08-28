@@ -1,9 +1,9 @@
-/**
- * @brief ¹ÜÀíµ¥¸ö DroneSession µÄ MAVLink ÃüÁî¶ÓÁĞ¡¢ÖØÊÔºÍ ACK ×´Ì¬¡£
+ï»¿/**
+ * @brief ç®¡ç†å•ä¸ª DroneSession çš„ MAVLink å‘½ä»¤é˜Ÿåˆ—ã€é‡è¯•å’Œ ACK çŠ¶æ€ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * ÊäÈë£ºÁìÓò¶¯×÷ºÍÄ¿±ê MAVLink Â·ÓÉĞÅÏ¢£»Êä³ö£ºMavlinkCommand µ÷ÓÃ¼°Íê³É½á¹û¡£
- * ¹Ø¼üÔ¼Êø£ºACK ±ØĞëÆ¥Åäµ±Ç° Session¡¢Ä¿±ê sysid ºÍÆÚÍû MAV_CMD¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è¾“å…¥ï¼šé¢†åŸŸåŠ¨ä½œå’Œç›®æ ‡ MAVLink è·¯ç”±ä¿¡æ¯ï¼›è¾“å‡ºï¼šMavlinkCommand è°ƒç”¨åŠå®Œæˆç»“æœã€‚
+ * å…³é”®çº¦æŸï¼šACK å¿…é¡»åŒ¹é…å½“å‰ Sessionã€ç›®æ ‡ sysid å’ŒæœŸæœ› MAV_CMDã€‚
  */
 #pragma once
 
@@ -40,6 +40,8 @@ struct CommandDispatchResult
     CommandOutcome outcome = CommandOutcome::SendFailed;
     std::uint8_t ackResult = 0;
     int attempts = 0;
+    bool modeConfirmationRequired = false;
+    std::uint8_t expectedCustomMode = 0;
 };
 
 class CommandDispatcher
@@ -88,10 +90,22 @@ public:
         std::uint8_t green,
         std::uint8_t blue);
 
+    std::uint64_t QueueTimeControl(
+        std::uint8_t system,
+        std::uint8_t component,
+        std::uint8_t control,
+        std::uint8_t controlMask,
+        std::uint8_t hour,
+        std::uint8_t minute,
+        std::uint8_t second);
+
     void Tick(
         std::chrono::steady_clock::time_point now);
 
     void HandleAck(
+        const mavlink_message_t& message);
+
+    void HandleHeartbeat(
         const mavlink_message_t& message);
 
     std::vector<CommandDispatchResult> ConsumeResults();
@@ -106,7 +120,8 @@ private:
         Land,
         RTL,
         Loiter,
-        SetLedColor
+        SetLedColor,
+        TimeControl
     };
 
     struct Request
@@ -121,8 +136,14 @@ private:
         std::uint8_t red = 0;
         std::uint8_t green = 0;
         std::uint8_t blue = 0;
+        std::uint8_t timeControl = 0;
+        std::uint8_t timeControlMask = 1;
+        std::uint8_t scheduledHour = 0;
+        std::uint8_t scheduledMinute = 0;
+        std::uint8_t scheduledSecond = 0;
         int attempts = 0;
         bool sent = false;
+        bool waitForModeConfirmation = false;
         std::chrono::steady_clock::time_point sentAt{};
     };
 
@@ -136,7 +157,13 @@ private:
         std::uint8_t customMode = 0,
         std::uint8_t red = 0,
         std::uint8_t green = 0,
-        std::uint8_t blue = 0);
+        std::uint8_t blue = 0,
+        bool waitForModeConfirmation = false,
+        std::uint8_t timeControl = 0,
+        std::uint8_t timeControlMask = 1,
+        std::uint8_t scheduledHour = 0,
+        std::uint8_t scheduledMinute = 0,
+        std::uint8_t scheduledSecond = 0);
 
     bool Send(const Request& request);
 
@@ -162,3 +189,6 @@ private:
 };
 
 const char* CommandOutcomeName(CommandOutcome outcome);
+
+/** Human-readable MAV_RESULT name for COMMAND_ACK diagnostics. */
+const char* MavResultName(std::uint8_t result);

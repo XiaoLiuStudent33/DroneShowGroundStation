@@ -21,6 +21,7 @@ class UGCSRouteWorkflowCoordinator;
 class UEditableTextBox;
 class UEditableText;
 class USlider;
+class USpinBox;
 class UTextBlock;
 class UUserWidget;
 class UWidget;
@@ -122,6 +123,7 @@ public:
 
 private:
 	friend class FGCSMarqueeInputProcessor;
+	friend class FGCSScheduledShowPreviewTest;
 
 	UFUNCTION()
 	void HandleMenuClicked();
@@ -271,6 +273,12 @@ private:
 	void HandleAutonomousModeClicked();
 
 	UFUNCTION()
+	void HandleTimeStartClicked();
+
+	UFUNCTION()
+	void HandleTimeStopClicked();
+
+	UFUNCTION()
 	void HandleProductionCommandResult(
 		const FGCSProductionCommandResult& Result);
 
@@ -308,6 +316,8 @@ private:
 	UButton* FindFleetButton(const FName Name) const;
 	UButton* FindToolbarButton(const FName Name) const;
 	UButton* FindRightPanelButton(const FName Name) const;
+	USpinBox* FindRightPanelSpinBox(const FName Name) const;
+	UTextBlock* FindRightPanelText(const FName Name) const;
 	UTextBlock* FindText(const FName Name) const;
 	UTextBlock* FindFleetText(const FName Name) const;
 	UTextBlock* FindTopBarText(const FName Name) const;
@@ -318,6 +328,7 @@ private:
 		const FString& Value,
 		const FLinearColor& Color) const;
 	void SetTopBarText(const FName Name, const FString& Value) const;
+	void SetRightPanelText(const FName Name, const FString& Value) const;
 	void RefreshFromFleet();
 	void RefreshProductionCommandAvailability();
 	EDSPGCSTelemetryLinkState GetProductionTelemetryLinkState() const;
@@ -340,8 +351,12 @@ private:
 		int32 RowIndex,
 		const FString& DroneID,
 		const FString& CurrentSelectedDroneID);
-	void SubmitSelectedProductionCommand(
+	FString SubmitSelectedProductionCommand(
 		EGCSProductionCommandType CommandType,
+		const FGCSProductionCommandParameters& Parameters = {});
+	FString SubmitProductionCommandForTargets(
+		EGCSProductionCommandType CommandType,
+		const TArray<FString>& TargetDroneIDs,
 		const FGCSProductionCommandParameters& Parameters = {});
 	TArray<FString> GetCommandTargetDroneIDs() const;
 	void SyncCommandSelectionToVisualization() const;
@@ -352,6 +367,12 @@ private:
 	void UnregisterMarqueeInputProcessor();
 	void PollMarqueePlayerControllerInput();
 	void TickRoutePlaybackUI(float DeltaSeconds);
+	void TickTimeControlUI(float DeltaSeconds);
+	void BeginTimeControlArmStage();
+	void BeginTimeControlAutoStage();
+	bool BeginScheduledRoutePreview(FString& OutError);
+	void ResetTimeControlPreparationState();
+	void RefreshTimeControlPreparationStatus(const FString& Prefix = {});
 	void BeginMarqueeCameraLock(APlayerController* PlayerController);
 	void EndMarqueeCameraLock();
 	void UpdateTopDownViewInput(APlayerController* PlayerController);
@@ -372,6 +393,7 @@ private:
 		const FVector2D& EndPosition);
 	void BindExistingButtons();
 	void BindColorPaletteButtons();
+	void BindTimeControlControls();
 	void BindRoutePlaybackControls();
 	bool BindRouteImportControls(UUserWidget* RouteImportWidget);
 	void OpenRouteImport();
@@ -479,6 +501,30 @@ private:
 	bool bTopDownPanning = false;
 	bool bUpdatingRouteTimelineFromState = false;
 	float RouteUIRefreshAccumulator = 0.0f;
+	float TimeControlUIRefreshAccumulator = 0.0f;
+	bool bTimeControlCountdownActive = false;
+	bool bTimeControlPerformanceActive = false;
+	double TimeControlPerformanceElapsedSeconds = 0.0;
+	int64 TimeControlPreviewDatasetGeneration = INDEX_NONE;
+	FDateTime ScheduledTimeLocal;
+	TArray<FString> TimeControlTargetDroneIDs;
+	TSet<FString> TimeControlScheduleSentDroneIDs;
+	TSet<FString> TimeControlArmedDroneIDs;
+	TSet<FString> TimeControlAutoDroneIDs;
+	TSet<FString> TimeControlFailedDroneIDs;
+	FString PendingTimeControlCommandID;
+	FString PendingTimeArmCommandID;
+	FString PendingTimeAutoCommandID;
+	EGCSProductionCommandType PendingTimeControlCommandType =
+		EGCSProductionCommandType::TimeStart;
+	int32 PendingTimeControlTargetCount = 0;
+	int32 PendingTimeControlResultCount = 0;
+	int32 PendingTimeControlSucceededCount = 0;
+	TSet<FString> PendingTimeControlCompletedDroneIDs;
+	TSet<FString> PendingTimeArmDroneIDs;
+	TSet<FString> PendingTimeAutoDroneIDs;
+	bool bTimeControlArmTriggered = false;
+	bool bTimeControlAutoTriggered = false;
 	FVector2D TopDownLastMousePosition = FVector2D::ZeroVector;
 	float TopDownFitOrthoWidth = 0.0f;
 	FVector TopDownLockedCameraLocation = FVector::ZeroVector;
@@ -522,6 +568,10 @@ private:
 	static constexpr float TopDownMinOrthoWidthFactor = 0.03f;
 	static constexpr float TopDownMaxOrthoWidthFactor = 8.0f;
 	static constexpr float RouteUIRefreshIntervalSeconds = 0.1f;
+	static constexpr float TimeControlUIRefreshIntervalSeconds = 0.1f;
+	static constexpr int32 TimeControlMinimumLeadSeconds = 45;
+	static constexpr int32 TimeControlArmLeadSeconds = 30;
+	static constexpr int32 TimeControlAutoLeadSeconds = 10;
 	static constexpr float UploadDashboardRefreshIntervalSeconds = 0.2f;
 	float HoverAltitudeMeters = 5.0f;
 };

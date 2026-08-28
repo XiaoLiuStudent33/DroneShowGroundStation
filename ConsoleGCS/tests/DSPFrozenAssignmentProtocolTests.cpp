@@ -1,4 +1,4 @@
-#include "DSPGCSFrozenAssignmentProtocol.h"
+﻿#include "DSPGCSFrozenAssignmentProtocol.h"
 
 #include <algorithm>
 #include <iomanip>
@@ -87,7 +87,7 @@ namespace
         Expect(static_cast<std::uint16_t>(dspgcs::MessageType::CommandResultBatch) == 3,
             "CommandResultBatch wire value changed");
         Expect(dspgcs::ProtocolMajor == 1 && dspgcs::ProtocolMinor == 0 &&
-            dspgcs::SchemaVersion == 3, "legacy envelope version changed");
+            dspgcs::SchemaVersion == 4, "protocol envelope version changed");
 
         dspgcs::MessageEnvelope envelope;
         envelope.sourceId = "COMPAT";

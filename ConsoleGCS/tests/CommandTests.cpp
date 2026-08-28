@@ -1,4 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
+﻿#define WIN32_LEAN_AND_MEAN
 
 #include "../CommandDispatcher.h"
 #include "../CommandManager.h"
@@ -49,14 +49,11 @@ namespace
 
         bool ConsumeMessage(mavlink_message_t& message)
         {
-            if (datagrams.empty())
+            std::vector<std::uint8_t> datagram;
+            if (!ConsumeDatagram(datagram))
             {
                 return false;
             }
-
-            const std::vector<std::uint8_t> datagram =
-                std::move(datagrams.front());
-            datagrams.erase(datagrams.begin());
             mavlink_status_t status{};
             for (const std::uint8_t byte : datagram)
             {
@@ -70,6 +67,17 @@ namespace
                 }
             }
             return false;
+        }
+
+        bool ConsumeDatagram(std::vector<std::uint8_t>& datagram)
+        {
+            if (datagrams.empty())
+            {
+                return false;
+            }
+            datagram = std::move(datagrams.front());
+            datagrams.erase(datagrams.begin());
+            return true;
         }
 
     private:
@@ -179,10 +187,65 @@ int RunCommandPacketTests()
 
         results = dispatcher.ConsumeResults();
         passed &= Check(
-            results.size() == 1 &&
-            results.front().outcome == CommandOutcome::Sent,
-            std::string(expected.name) + " SET_MODE is marked sent");
+            results.empty(),
+            std::string(expected.name) + " SET_MODE waits for HEARTBEAT confirmation");
+
+		mavlink_message_t modeHeartbeat{};
+		mavlink_msg_heartbeat_pack(
+			1,
+			1,
+			&modeHeartbeat,
+			MAV_TYPE_QUADROTOR,
+			MAV_AUTOPILOT_ARDUPILOTMEGA,
+			MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+			expected.customMode,
+			MAV_STATE_ACTIVE);
+		dispatcher.HandleHeartbeat(modeHeartbeat);
+		results = dispatcher.ConsumeResults();
+		passed &= Check(
+			results.size() == 1 &&
+			results.front().outcome == CommandOutcome::Accepted,
+			std::string(expected.name) + " SET_MODE is confirmed by HEARTBEAT");
     }
+
+    dispatcher.QueueRTL(1, 1);
+    dispatcher.Tick(now + std::chrono::milliseconds(10));
+    passed &= Check(
+        endpoint.ConsumeMessage(received),
+        "RTL SET_MODE packet is emitted");
+    passed &= Check(
+        received.msgid == MAVLINK_MSG_ID_SET_MODE,
+        "RTL uses MAVLink SET_MODE instead of MAV_CMD 20");
+    mavlink_set_mode_t rtlMode{};
+    mavlink_msg_set_mode_decode(&received, &rtlMode);
+    passed &= Check(
+        rtlMode.target_system == 1 &&
+        rtlMode.base_mode == MAV_MODE_FLAG_CUSTOM_MODE_ENABLED &&
+        rtlMode.custom_mode == 6,
+        "RTL requests ArduCopter custom_mode 6");
+    results = dispatcher.ConsumeResults();
+    passed &= Check(
+        results.empty(),
+        "RTL remains pending until HEARTBEAT confirms mode 6");
+
+    mavlink_message_t heartbeat{};
+    mavlink_msg_heartbeat_pack(
+        1,
+        1,
+        &heartbeat,
+        MAV_TYPE_QUADROTOR,
+        MAV_AUTOPILOT_ARDUPILOTMEGA,
+        MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+        6,
+        MAV_STATE_ACTIVE);
+    dispatcher.HandleHeartbeat(heartbeat);
+    results = dispatcher.ConsumeResults();
+    passed &= Check(
+        results.size() == 1 &&
+        results.front().outcome == CommandOutcome::Accepted &&
+        results.front().modeConfirmationRequired &&
+        results.front().expectedCustomMode == 6,
+        "RTL completes only after HEARTBEAT confirms custom_mode 6");
 
     dispatcher.QueueTakeoff(1, 1, 1.0f);
     dispatcher.QueueLand(1, 1);
@@ -259,6 +322,45 @@ int RunCommandPacketTests()
         results.front().outcome == CommandOutcome::Sent &&
         results.front().attempts == 1,
         "LED_CONTROL is fire-and-forget without ACK retry");
+
+    dispatcher.QueueTimeControl(1, 1, 1, 1, 14, 5, 38);
+    dispatcher.Tick(now + std::chrono::milliseconds(11));
+    std::vector<std::uint8_t> timeControlDatagram;
+    passed &= Check(
+        endpoint.ConsumeDatagram(timeControlDatagram),
+        "MP_TIME_CONTROL packet is emitted");
+    if (!timeControlDatagram.empty())
+    {
+        const bool mavlink2 = timeControlDatagram.front() == MAVLINK_STX;
+        const std::size_t payloadOffset = mavlink2 ? 10 : 6;
+        const std::uint32_t messageId = mavlink2
+            ? static_cast<std::uint32_t>(timeControlDatagram[7]) |
+                (static_cast<std::uint32_t>(timeControlDatagram[8]) << 8) |
+                (static_cast<std::uint32_t>(timeControlDatagram[9]) << 16)
+            : static_cast<std::uint32_t>(timeControlDatagram[5]);
+        passed &= Check(
+            timeControlDatagram.size() >= payloadOffset + 7,
+            "MP_TIME_CONTROL datagram contains 5-byte payload and checksum");
+        passed &= Check(
+            timeControlDatagram[1] == 5 && messageId == 78,
+            "MP_TIME_CONTROL uses message 78 with LEN 5");
+        if (timeControlDatagram.size() >= payloadOffset + 5)
+        {
+            passed &= Check(
+                timeControlDatagram[payloadOffset] == 1 &&
+                timeControlDatagram[payloadOffset + 1] == 1 &&
+                timeControlDatagram[payloadOffset + 2] == 14 &&
+                timeControlDatagram[payloadOffset + 3] == 5 &&
+                timeControlDatagram[payloadOffset + 4] == 38,
+                "MP_TIME_CONTROL payload is control/mask/hour/minute/second");
+        }
+    }
+    results = dispatcher.ConsumeResults();
+    passed &= Check(
+        results.size() == 1 &&
+        results.front().outcome == CommandOutcome::Sent &&
+        results.front().attempts == 1,
+        "MP_TIME_CONTROL is fire-and-forget without COMMAND_ACK retry");
     sender.Close();
 
     if (passed)

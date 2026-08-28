@@ -114,6 +114,15 @@ public:
         uint8_t green,
         uint8_t blue);
 
+    /** Sends custom MP_TIME_CONTROL message #78 (LEN=5, CRC_EXTRA=145). */
+    static bool TimeControl(
+        UdpClient& udp,
+        uint8_t control,
+        uint8_t controlMask,
+        uint8_t hour,
+        uint8_t minute,
+        uint8_t second);
+
     static bool SetMode(
 
         UdpClient& udp,

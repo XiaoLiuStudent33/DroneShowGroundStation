@@ -318,8 +318,10 @@ bool FRouteArtifactSha256::HashFileStreaming(
 	OutDigest.Reset();
 	OutFileByteSize = 0;
 	OutError.Reset();
-	TUniquePtr<IFileHandle> FileHandle(
-		FPlatformFileManager::Get().GetPlatformFile().OpenRead(*FilePath));
+	FFileOpenResult OpenResult = FPlatformFileManager::Get().GetPlatformFile().OpenRead(
+		*FilePath, EOpenReadFlags::AllowDelete);
+	TUniquePtr<IFileHandle> FileHandle;
+	if (OpenResult.IsValid()) FileHandle = OpenResult.StealValue();
 	if (!FileHandle)
 	{
 		OutError = FString::Printf(TEXT("Unable to open Artifact file: %s"), *FilePath);

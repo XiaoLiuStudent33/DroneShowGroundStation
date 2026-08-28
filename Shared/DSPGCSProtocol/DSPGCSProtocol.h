@@ -1,9 +1,9 @@
-/**
- * @brief ConsoleGCS Óë UnrealGCS ¹²ÏíµÄ DSP-GCS Wire Format ºÍ DTO ¶¨Òå¡£
+ï»¿/**
+ * @brief ConsoleGCS ä¸ UnrealGCS å…±äº«çš„ DSP-GCS Wire Format å’Œ DTO å®šä¹‰ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * ÊäÈë/Êä³ö£ºTelemetry Snapshot/Delta¡¢Command Request/Result µÄ¶ş½øÖÆ±àÂëÓë½âÂë¡£
- * ¹Ø¼üÔ¼Êø£ºÁ½¶Ë±ØĞëÊ¹ÓÃÏàÍ¬°æ±¾£»×¢ÊÍÕûÀí²»µÃ¸Ä±ä×Ö¶ÎË³Ğò¡¢ÀàĞÍ»ò±àÂë¸ñÊ½¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è¾“å…¥/è¾“å‡ºï¼šTelemetry Snapshot/Deltaã€Command Request/Result çš„äºŒè¿›åˆ¶ç¼–ç ä¸è§£ç ã€‚
+ * å…³é”®çº¦æŸï¼šä¸¤ç«¯å¿…é¡»ä½¿ç”¨ç›¸åŒç‰ˆæœ¬ï¼›æ³¨é‡Šæ•´ç†ä¸å¾—æ”¹å˜å­—æ®µé¡ºåºã€ç±»å‹æˆ–ç¼–ç æ ¼å¼ã€‚
  */
 #pragma once
 
@@ -17,8 +17,8 @@ namespace dspgcs
 {
     inline constexpr std::uint16_t ProtocolMajor = 1;
     inline constexpr std::uint16_t ProtocolMinor = 0;
-    // Schema 3 adds realtime selected-drone LED RGB command parameters.
-    inline constexpr std::uint16_t SchemaVersion = 3;
+    // Schema 4 adds scheduled local-time flight control command parameters.
+    inline constexpr std::uint16_t SchemaVersion = 4;
     inline constexpr std::uint32_t FrameMagic = 0x44535047; // DSPG
     inline constexpr std::size_t MaxFrameBytes = 256 * 1024;
     inline constexpr std::size_t MaxStringBytes = 16 * 1024;
@@ -44,7 +44,9 @@ namespace dspgcs
         RTL = 5,
         SetMode = 6,
         HoverTest = 7,
-        SetLedColor = 8
+        SetLedColor = 8,
+        TimeStart = 9,
+        TimeStop = 10
     };
     enum class AckState : std::uint8_t
     {
@@ -224,6 +226,10 @@ namespace dspgcs
         std::uint8_t red = 0;
         std::uint8_t green = 0;
         std::uint8_t blue = 0;
+        std::uint8_t timeControlMask = 1;
+        std::uint8_t scheduledHour = 0;
+        std::uint8_t scheduledMinute = 0;
+        std::uint8_t scheduledSecond = 0;
     };
     struct CommandSourceDTO
     {
@@ -402,6 +408,7 @@ namespace dspgcs
             w.Float(c.parameters.takeoffAltitudeMeters); w.Float(c.parameters.hoverAltitudeMeters); w.Float(c.parameters.hoverDurationSeconds);
             w.I32(c.parameters.customMode); w.String(c.parameters.modeName); w.Bool(c.parameters.start);
             w.U8(c.parameters.red); w.U8(c.parameters.green); w.U8(c.parameters.blue);
+            w.U8(c.parameters.timeControlMask); w.U8(c.parameters.scheduledHour); w.U8(c.parameters.scheduledMinute); w.U8(c.parameters.scheduledSecond);
             w.String(c.source.sourceType); w.String(c.source.sourceId); w.String(c.source.operatorId); w.String(c.source.stationId);
             w.I64(c.timestampUtcMs); w.U64(c.expectedFleetRevision); w.Bool(c.safeTestMode);
         }
@@ -414,6 +421,7 @@ namespace dspgcs
             return r.Float(c.parameters.takeoffAltitudeMeters) && r.Float(c.parameters.hoverAltitudeMeters) && r.Float(c.parameters.hoverDurationSeconds) &&
                 r.I32(c.parameters.customMode) && r.String(c.parameters.modeName) && r.Bool(c.parameters.start) &&
                 r.U8(c.parameters.red) && r.U8(c.parameters.green) && r.U8(c.parameters.blue) &&
+                r.U8(c.parameters.timeControlMask) && r.U8(c.parameters.scheduledHour) && r.U8(c.parameters.scheduledMinute) && r.U8(c.parameters.scheduledSecond) &&
                 r.String(c.source.sourceType) && r.String(c.source.sourceId) && r.String(c.source.operatorId) && r.String(c.source.stationId) &&
                 r.I64(c.timestampUtcMs) && r.U64(c.expectedFleetRevision) && r.Bool(c.safeTestMode) && r.Done();
         }

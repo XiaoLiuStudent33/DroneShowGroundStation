@@ -225,6 +225,48 @@ bool MavlinkCommand::SetLedColor(
     return sent;
 }
 
+bool MavlinkCommand::TimeControl(
+    UdpClient& udp,
+    uint8_t control,
+    uint8_t controlMask,
+    uint8_t hour,
+    uint8_t minute,
+    uint8_t second)
+{
+    constexpr uint32_t MessageId = 78;
+    constexpr uint8_t PayloadLength = 5;
+    constexpr uint8_t CrcExtra = 145;
+
+    mavlink_message_t message{};
+    char* payload = _MAV_PAYLOAD_NON_CONST(&message);
+    _mav_put_uint8_t(payload, 0, control);
+    _mav_put_uint8_t(payload, 1, controlMask);
+    _mav_put_uint8_t(payload, 2, hour);
+    _mav_put_uint8_t(payload, 3, minute);
+    _mav_put_uint8_t(payload, 4, second);
+    message.msgid = MessageId;
+    mavlink_finalize_message(
+        &message,
+        255,
+        MAV_COMP_ID_MISSIONPLANNER,
+        PayloadLength,
+        PayloadLength,
+        CrcExtra);
+
+    uint8_t buffer[MAVLINK_MAX_PACKET_LEN]{};
+    const uint16_t length = mavlink_msg_to_send_buffer(buffer, &message);
+    const bool sent = udp.Send(buffer, length);
+    ConsoleUI::AddLog(
+        std::string("MP_TIME_CONTROL #78 ") + (sent ? "sent" : "send failed") +
+        " RemoteEndpoint=" + udp.GetRemoteEndpoint() +
+        " Control=" + std::to_string(control) +
+        " Mask=" + std::to_string(controlMask) +
+        " LocalTime=" + std::to_string(hour) + ":" +
+        std::to_string(minute) + ":" + std::to_string(second) +
+        " Len=5 CRC=145");
+    return sent;
+}
+
 bool MavlinkCommand::SetMode(
 
     UdpClient& udp,

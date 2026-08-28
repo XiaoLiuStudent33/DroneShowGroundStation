@@ -875,19 +875,6 @@ bool UGCSRouteWorkflowCoordinator::BuildConfirmedNpzMapping(
 	{
 		return false;
 	}
-	if (!Candidate.Conflicts.IsEmpty() || !Candidate.UnresolvedDrones.IsEmpty() ||
-		!Candidate.ExcludedDrones.IsEmpty() || !Candidate.SpareDrones.IsEmpty() ||
-		Candidate.MatchedEntries.Num() != Selection.Num())
-	{
-		OutError = TEXT("NPZ numbering did not produce one unambiguous RouteSlot for every selected drone.");
-		return false;
-	}
-	if (Candidate.MatchedEntries.IsEmpty())
-	{
-		OutError = TEXT("Selected GPS positions did not match any Frame-0 RouteSlot.");
-		return false;
-	}
-
 	if (LastIssuedConfirmationRevision == MAX_int64)
 	{
 		OutError = TEXT("Confirmed NPZ Mapping revision space is exhausted.");
@@ -909,6 +896,7 @@ bool UGCSRouteWorkflowCoordinator::BuildConfirmedNpzMapping(
 	Mapping.SelectedDroneIDs = Selection;
 	Mapping.FleetSessionID = NumberingSource.SourceIdentity.FleetSessionID;
 	Mapping.Entries.Reserve(Candidate.MatchedEntries.Num());
+	TSet<FString> MatchedDroneIDs;
 	for (const FRouteAssignmentEntry& Match : Candidate.MatchedEntries)
 	{
 		const FString* Endpoint = EndpointByDroneID.Find(Match.DroneID);
@@ -923,7 +911,23 @@ bool UGCSRouteWorkflowCoordinator::BuildConfirmedNpzMapping(
 		Entry.RouteSlotIndex = Match.RouteSlotIndex;
 		Entry.MatchDistanceMeters = Match.HorizontalDistanceMeters;
 		Mapping.Entries.Add(MoveTemp(Entry));
+		MatchedDroneIDs.Add(Match.DroneID);
 	}
+	for (const FString& DroneID : Selection)
+	{
+		if (!MatchedDroneIDs.Contains(DroneID))
+		{
+			Mapping.UnassignedDroneIDs.Add(DroneID);
+		}
+	}
+	for (const FRouteAssignmentSpareDrone& Spare : Candidate.SpareDrones)
+	{
+		Mapping.SpareDroneIDs.Add(Spare.DroneID);
+	}
+	Mapping.UnassignedDroneIDs.Sort();
+	Mapping.SpareDroneIDs.Sort();
+	Mapping.VacantRouteSlots = Candidate.VacantRouteSlots;
+	Mapping.VacantRouteSlots.Sort();
 	Mapping.Entries.Sort([](const FGCSConfirmedNpzMappingEntry& Left,
 		const FGCSConfirmedNpzMappingEntry& Right)
 	{
@@ -963,38 +967,20 @@ bool UGCSRouteWorkflowCoordinator::ValidateConfirmedNpzMappingCurrent(
 		return false;
 	}
 	const UGameInstance* GI = GameInstanceRef.Get();
-	const UGCSUIBridgeSubsystem* Bridge = GI->GetSubsystem<UGCSUIBridgeSubsystem>();
 	const UFleetManagerSubsystem* Fleet = GI->GetSubsystem<UFleetManagerSubsystem>();
 	const URouteAssignmentSubsystem* Assignment = GI->GetSubsystem<URouteAssignmentSubsystem>();
-	if (!Bridge || !Fleet || !Assignment)
+	if (!Fleet || !Assignment)
 	{
 		OutError = TEXT("Confirmed NPZ Mapping authority dependencies are unavailable.");
 		return false;
 	}
-	TArray<FString> Selection = Bridge->GetSelectedCommandDroneIDs();
-	Selection.Sort();
-	if (Selection != ConfirmedNpzMapping.SelectedDroneIDs)
-	{
-		OutError = TEXT("Confirmed NPZ Mapping was invalidated by a Command Selection change.");
-		return false;
-	}
+	// Confirmation freezes its own participant set and F.1 capture provenance for
+	// the lifetime of this UE session. Command selection is only an operator input
+	// after that point; selection changes and the selection-bound F.1 snapshot must
+	// not erase an already confirmed DroneID -> RouteSlot mapping.
 	if (Fleet->GetActiveFleetSessionID() != ConfirmedNpzMapping.FleetSessionID)
 	{
 		OutError = TEXT("Confirmed NPZ Mapping was invalidated by a Fleet session change.");
-		return false;
-	}
-	const URouteGpsCaptureSubsystem* CaptureAuthority =
-		GI->GetSubsystem<URouteGpsCaptureSubsystem>();
-	FRouteGpsCaptureSnapshot Capture;
-	if (!CaptureAuthority || !CaptureAuthority->GetLatestCommandSelectionSnapshot(Capture) ||
-		Capture.State != ERouteGpsCaptureState::Ready ||
-		Capture.CaptureAuthoritySessionID != ConfirmedNpzMapping.F1CaptureAuthoritySessionID ||
-		Capture.CaptureRequestID != ConfirmedNpzMapping.F1CaptureRequestID ||
-		Capture.CaptureRevision != ConfirmedNpzMapping.F1CaptureRevision ||
-		Capture.SelectionDigest != ConfirmedNpzMapping.SelectionDigest ||
-		Capture.FleetSessionID != ConfirmedNpzMapping.FleetSessionID)
-	{
-		OutError = TEXT("Confirmed NPZ Mapping F.1 GPS Capture is stale or no longer Ready.");
 		return false;
 	}
 	FRouteAssignmentSourceSnapshot Source;
@@ -1032,7 +1018,7 @@ bool UGCSRouteWorkflowCoordinator::ValidateConfirmedNpzMappingCurrent(
 		DroneIDs.Add(Entry.DroneID);
 		RouteSlots.Add(Entry.RouteSlotIndex);
 	}
-	return !ConfirmedNpzMapping.Entries.IsEmpty();
+	return true;
 }
 
 void UGCSRouteWorkflowCoordinator::ApplyConfirmedRouteSlotDisplayOverride() const
@@ -1051,6 +1037,9 @@ void UGCSRouteWorkflowCoordinator::ApplyConfirmedRouteSlotDisplayOverride() cons
 	for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
 	{
 		It->SetConfirmedRouteSlotDisplayOverrides(Overrides);
+		It->SetNpzNumberingAnomalyDroneIDs(
+			bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid
+				? ConfirmedNpzMapping.UnassignedDroneIDs : TArray<FString>{});
 	}
 }
 
@@ -1062,6 +1051,7 @@ void UGCSRouteWorkflowCoordinator::ClearConfirmedRouteSlotDisplayOverride() cons
 	for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
 	{
 		It->ClearConfirmedRouteSlotDisplayOverrides();
+		It->ClearNpzNumberingAnomalyDroneIDs();
 	}
 }
 
@@ -1180,10 +1170,12 @@ void UGCSRouteWorkflowCoordinator::HandleApplyNpzNumberingClicked()
 	ApplyConfirmedRouteSlotDisplayOverride();
 	ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview);
 	UE_LOG(LogGCSRouteWorkflow, Display,
-		TEXT("[NPZ_NUMBERING] Confirmed Revision=%lld Authority=StableF1Capture Frame=FixedShowOriginENU Snapshot=%s Entries=%d RouteSlots=%d"),
+		TEXT("[NPZ_NUMBERING] Confirmed Revision=%lld Authority=StableF1Capture Frame=FixedShowOriginENU Snapshot=%s Matched=%d Abnormal=%d Vacant=%d Spare=%d RouteSlots=%d"),
 		ConfirmedNpzMapping.ConfirmationRevision,
 		*ConfirmedNpzMapping.F1CaptureRequestID,
-		ConfirmedNpzMapping.Entries.Num(), ConfirmedNpzMapping.RouteCount);
+		ConfirmedNpzMapping.Entries.Num(), ConfirmedNpzMapping.UnassignedDroneIDs.Num(),
+		ConfirmedNpzMapping.VacantRouteSlots.Num(), ConfirmedNpzMapping.SpareDroneIDs.Num(),
+		ConfirmedNpzMapping.RouteCount);
 	RefreshReadOnlyState();
 }
 
@@ -1997,8 +1989,16 @@ void UGCSRouteWorkflowCoordinator::HandleLoadPreviewClicked()
 void UGCSRouteWorkflowCoordinator::HandleGenerateWaypointsClicked()
 {
 	if (!IsInGameThread() || bCommandInFlight || !GameInstanceRef.IsValid()) return;
-	const FGCSRouteWorkflowCommandGate Gate = ComputeCommandGate(GatherCommandGateInputs());
-	if (!Gate.bGenerateWaypointsEnabled) return;
+	const FGCSRouteWorkflowCommandGateInputs Inputs = GatherCommandGateInputs();
+	const FGCSRouteWorkflowCommandGate Gate = ComputeCommandGate(Inputs);
+	if (!Gate.bGenerateWaypointsEnabled)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[RouteWorkflow] Generate click rejected. Prepared=%d Loaded=%d Origin=%d Workspace=%d Generation=%d Command=%d"),
+			Inputs.bHasPreparedRoute, Inputs.bRouteLoaded, Inputs.bShowOriginSet,
+			Inputs.bWorkspaceReady, Inputs.bGenerationActive, Inputs.bCommandInFlight);
+		return;
+	}
 
 	URouteWaypointGenerationSubsystem* Generator =
 		GameInstanceRef->GetSubsystem<URouteWaypointGenerationSubsystem>();
@@ -2084,11 +2084,6 @@ bool UGCSRouteWorkflowCoordinator::CaptureAutoStartSnapshot(
 
 	OutSnapshot.SelectedDroneIDs = Bridge->GetSelectedCommandDroneIDs();
 	OutSnapshot.SelectedDroneIDs.Sort();
-	if (OutSnapshot.SelectedDroneIDs.IsEmpty())
-	{
-		OutError = TEXT("No drones selected.");
-		return false;
-	}
 	OutSnapshot.FleetSessionID = Fleet->GetActiveFleetSessionID();
 	OutSnapshot.FleetRevision = Fleet->GetFleetRevision();
 	if (OutSnapshot.FleetSessionID.TrimStartAndEnd().IsEmpty() ||
@@ -2143,6 +2138,16 @@ bool UGCSRouteWorkflowCoordinator::CaptureAutoStartSnapshot(
 		OutSnapshot.bUsesConfirmedNpzMapping = true;
 		OutSnapshot.ConfirmedMappingRevision = ConfirmedNpzMapping.ConfirmationRevision;
 	}
+	if (TargetDroneIDs.IsEmpty())
+	{
+		OutError = bHasConfirmedNpzMapping
+			? TEXT("Confirmed NPZ Mapping contains no executable matched drones; abnormal drones are excluded from upload.")
+			: TEXT("No drones selected.");
+		return false;
+	}
+	// A confirmed mapping owns the upload target set. Keep the captured snapshot
+	// coherent even when the operator has since cleared or changed UI selection.
+	OutSnapshot.SelectedDroneIDs = TargetDroneIDs;
 
 	TSet<int32> NumericIDs;
 	TSet<int32> RouteSlots;
@@ -2821,7 +2826,28 @@ void UGCSRouteWorkflowCoordinator::UpdateCommandControlState()
 	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_LoadPreview")))
 		Button->SetIsEnabled(Gate.bLoadPreviewEnabled);
 	if (UButton* Button = Get<UButton>(ConvertWidgets, TEXT("BTN_GenerateWaypoints")))
+	{
 		Button->SetIsEnabled(Gate.bGenerateWaypointsEnabled);
+		FString Hint = TEXT("Generate and validate a new Waypoints package for the loaded NPZ.");
+		if (!Gate.bGenerateWaypointsEnabled)
+		{
+			if (Inputs.bGenerationActive) Hint = TEXT("Waypoints generation is already running.");
+			else if (Inputs.bCommandInFlight) Hint = TEXT("Another route command is still running.");
+			else if (Inputs.bHasPreparedRoute) Hint = TEXT("Load/commit the selected NPZ preview before generation.");
+			else if (!Inputs.bRouteLoaded) Hint = TEXT("Import an NPZ route before generation.");
+			else if (!Inputs.bShowOriginSet) Hint = TEXT("Set the Show Origin before generation.");
+			else if (!Inputs.bWorkspaceReady)
+			{
+				const URouteArtifactWorkspaceSubsystem* Workspace = GameInstanceRef.IsValid()
+					? GameInstanceRef->GetSubsystem<URouteArtifactWorkspaceSubsystem>() : nullptr;
+				Hint = Workspace
+					? TEXT("Artifact Workspace is not ready: ")
+						+ Workspace->GetLastRecoveryResult().RecoverySummary
+					: TEXT("Artifact Workspace is unavailable.");
+			}
+		}
+		Button->SetToolTipText(FText::FromString(Hint));
+	}
 	FString NumberingGateError;
 	const bool bNumberingMutationAllowed =
 		!IsConfirmedMappingMutationBlocked(NumberingGateError);
@@ -3124,22 +3150,27 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	}
 	const int32 MatchedCount = bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid
 		? ConfirmedNpzMapping.Entries.Num() : 0;
+	const int32 AbnormalCount = bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid
+		? ConfirmedNpzMapping.UnassignedDroneIDs.Num() : 0;
 	int32 RouteSlotCount = 0;
 	if (const URoutePreviewSubsystem* Preview = GI->GetSubsystem<URoutePreviewSubsystem>())
 	{
 		RouteSlotCount = Preview->HasPreparedRoute()
 			? Preview->GetPreparedDroneCount() : Preview->GetDroneCount();
 	}
-	const int32 VacantCount = FMath::Max(0, RouteSlotCount - MatchedCount);
-	const int32 SpareCount = 0;
+	const int32 VacantCount = bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid
+		? ConfirmedNpzMapping.VacantRouteSlots.Num()
+		: FMath::Max(0, RouteSlotCount - MatchedCount);
+	const int32 SpareCount = bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid
+		? ConfirmedNpzMapping.SpareDroneIDs.Num() : 0;
 	const FString MappingState = bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid
-		? TEXT("Confirmed")
+		? (AbnormalCount > 0 ? TEXT("Confirmed / Degraded") : TEXT("Confirmed"))
 		: (bHasGpsCapture ? GpsCaptureState(GpsCapture.State) : TEXT("Not Captured"));
 	SetText(ConvertWidgets, TEXT("TXT_NpzGpsMappingStatusValue"), MappingState);
 	SetText(ConvertWidgets, TEXT("TXT_NpzGpsMappingCounts"), FString::Printf(
-		TEXT("GPS Ready %d/%d | Matched %d | Vacant %d | Spare %d"),
+		TEXT("GPS Ready %d/%d | Matched %d | Vacant %d | Spare %d | Abnormal %d"),
 		GpsReady, bHasGpsCapture ? GpsCapture.SelectedDroneIDs.Num() : 0,
-		MatchedCount, VacantCount, SpareCount));
+		MatchedCount, VacantCount, SpareCount, AbnormalCount));
 	TArray<FString> MappingDetails = GpsExceptions;
 	if (bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid)
 	{
@@ -3147,6 +3178,11 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 		{
 			MappingDetails.Add(FString::Printf(TEXT("%s -> Slot %d (%.3f m)"),
 				*Match.DroneID, Match.RouteSlotIndex, Match.MatchDistanceMeters));
+		}
+		for (const FString& DroneID : ConfirmedNpzMapping.UnassignedDroneIDs)
+		{
+			MappingDetails.Add(FString::Printf(
+				TEXT("%s -> ABNORMAL (no RouteSlot; upload skipped)"), *DroneID));
 		}
 	}
 	const FString MappingDetailsText = MappingDetails.IsEmpty()
@@ -3162,8 +3198,9 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	if (bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid)
 	{
 		MappingDescription = FString::Printf(
-			TEXT("Confirmed fixed-frame NPZ Mapping: %d drones | Revision %lld"),
-			ConfirmedNpzMapping.Entries.Num(), ConfirmedNpzMapping.ConfirmationRevision);
+			TEXT("Confirmed fixed-frame NPZ Mapping: %d executable | %d abnormal/skipped | Revision %lld"),
+			ConfirmedNpzMapping.Entries.Num(), ConfirmedNpzMapping.UnassignedDroneIDs.Num(),
+			ConfirmedNpzMapping.ConfirmationRevision);
 	}
 	SetText(ConvertWidgets, TEXT("TXT_NpzGpsMappingDescription"), MappingDescription);
 	SetTooltip(ConvertWidgets, TEXT("TXT_NpzGpsMappingDescription"), MappingDescription);
@@ -3177,6 +3214,12 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	}
 	else MappingWarning = FString::Printf(TEXT("Hardware-validated GPS profile: %s"),
 		*ConfiguredGpsPolicy.ProfileName);
+	if (AbnormalCount > 0)
+	{
+		MappingWarning += FString::Printf(
+			TEXT(" | DEGRADED: %d abnormal drone(s) are red, unnumbered, and excluded from upload."),
+			AbnormalCount);
+	}
 	SetText(ConvertWidgets, TEXT("TXT_NpzMappingWarning"), MappingWarning);
 	URouteArtifactWorkspaceSubsystem* Workspace = GI->GetSubsystem<URouteArtifactWorkspaceSubsystem>(); ERouteArtifactCurrentStatus C=ERouteArtifactCurrentStatus::None; ERouteArtifactGenerationStatus G=ERouteArtifactGenerationStatus::None; ERouteArtifactRecoveryStatus R=ERouteArtifactRecoveryStatus::Stable; FRouteArtifactCurrentInfo Info; FString Root;
 	if (Workspace) { C=Workspace->GetCurrentStatus(); G=Workspace->GetGenerationStatus(); R=Workspace->GetLastRecoveryResult().Status; Info=Workspace->GetCurrentInfo(); FString Error; if(!Workspace->ResolveWorkspaceRoot(Root,Error)) Root.Reset(); }

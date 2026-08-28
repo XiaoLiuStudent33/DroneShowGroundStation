@@ -1,7 +1,7 @@
-/**
- * @brief Ìá¹©ÁìÓòÃüÁîÀàĞÍµÄÎÈ¶¨ÎÄ±¾Ãû³Æ¡£
+ï»¿/**
+ * @brief æä¾›é¢†åŸŸå‘½ä»¤ç±»å‹çš„ç¨³å®šæ–‡æœ¬åç§°ã€‚
  *
- * ·ÖÀà£ºProduction£»¹©ÈÕÖ¾ºÍ DSP ÃüÁî½á¹ûÊ¹ÓÃ£¬²»¸ºÔğ MAVLink ÃüÁî±àÂë¡£
+ * åˆ†ç±»ï¼šProductionï¼›ä¾›æ—¥å¿—å’Œ DSP å‘½ä»¤ç»“æœä½¿ç”¨ï¼Œä¸è´Ÿè´£ MAVLink å‘½ä»¤ç¼–ç ã€‚
  */
 #include "DroneCommandRequest.h"
 
@@ -25,6 +25,10 @@ const char* DroneCommandTypeName(DroneCommandType type)
         return "HOVER_TEST";
     case DroneCommandType::SetLedColor:
         return "SET_LED_COLOR";
+    case DroneCommandType::TimeStart:
+        return "TIME_START";
+    case DroneCommandType::TimeStop:
+        return "TIME_STOP";
     }
 
     return "UNKNOWN";

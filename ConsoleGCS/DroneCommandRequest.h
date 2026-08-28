@@ -1,9 +1,9 @@
-/**
- * @brief ¶¨ÒåÓë UE/MAVLink ½âñîµÄ Console ÁìÓòÃüÁîÄ£ĞÍ¡£
+ï»¿/**
+ * @brief å®šä¹‰ä¸ UE/MAVLink è§£è€¦çš„ Console é¢†åŸŸå‘½ä»¤æ¨¡å‹ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * ÊäÈë£ºDSP-GCS ÃüÁî DTO£»Êä³ö£ºCommandManager/DroneSession ¿ÉÖ´ĞĞÇëÇó¡£
- * Ö§³Ö Arm¡¢Disarm¡¢Takeoff¡¢Land¡¢RTL¡¢SetMode ºÍÓ¦ÓÃ¼¶ HoverTest¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è¾“å…¥ï¼šDSP-GCS å‘½ä»¤ DTOï¼›è¾“å‡ºï¼šCommandManager/DroneSession å¯æ‰§è¡Œè¯·æ±‚ã€‚
+ * æ”¯æŒ Armã€Disarmã€Takeoffã€Landã€RTLã€SetMode å’Œåº”ç”¨çº§ HoverTestã€‚
  */
 #pragma once
 
@@ -21,7 +21,9 @@ enum class DroneCommandType
     RTL,
     SetMode,
     HoverTest,
-    SetLedColor
+    SetLedColor,
+    TimeStart,
+    TimeStop
 };
 
 // ArduPilot Copter custom_mode values used by the current GCS mode controls.
@@ -62,6 +64,10 @@ struct DroneCommandParameters
     std::uint8_t red = 0;
     std::uint8_t green = 0;
     std::uint8_t blue = 0;
+    std::uint8_t timeControlMask = 1;
+    std::uint8_t scheduledHour = 0;
+    std::uint8_t scheduledMinute = 0;
+    std::uint8_t scheduledSecond = 0;
 };
 
 // ConsoleGCS command-domain model. It is deliberately independent of UE and
