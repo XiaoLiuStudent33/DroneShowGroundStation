@@ -14,6 +14,8 @@
 #include "Components/CanvasPanelSlot.h"
 #include "Components/EditableText.h"
 #include "Components/EditableTextBox.h"
+#include "Components/ListView.h"
+#include "Components/ScrollBox.h"
 #include "Components/Slider.h"
 #include "Components/SpinBox.h"
 #include "Components/TextBlock.h"
@@ -23,6 +25,7 @@
 #include "DSPGCSFrozenAssignmentSyncSubsystem.h"
 #include "DSPGCSUploadJobSubsystem.h"
 #include "DroneFleetVisualizationActor.h"
+#include "Engine/GameViewportClient.h"
 #include "EngineUtils.h"
 #include "UObject/ConstructorHelpers.h"
 #include "FleetManagerSubsystem.h"
@@ -57,6 +60,16 @@ namespace
 	constexpr TCHAR UploadDashboardClassPath[] =
 		TEXT("/Game/UI/WBP_GCS_UploadDashboard.WBP_GCS_UploadDashboard_C");
 	constexpr float UploadDashboardToolbarGap = 12.0f;
+
+	FString FormatTimeControlDuration(const int32 TotalSeconds)
+	{
+		const int32 ClampedSeconds = FMath::Max(0, TotalSeconds);
+		return FString::Printf(
+			TEXT("%02d:%02d:%02d"),
+			ClampedSeconds / 3600,
+			(ClampedSeconds % 3600) / 60,
+			ClampedSeconds % 60);
+	}
 
 	template <typename T>
 	T* FindDashboardWidget(UUserWidget* Dashboard, const FName Name)
@@ -359,6 +372,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	UnbindUploadDashboardControls();
 
 	MainWidgetRef = MainWidget;
+	ConfigureGroundStationInputPolicy(MainWidget);
 	TopBarWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_TopBar"));
 	LeftToolbarWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_LeftToolbar"));
 	FleetPanelWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_FleetPanel"));
@@ -1650,9 +1664,14 @@ void UGCSUIBridgeSubsystem::HandleAutonomousModeClicked()
 
 void UGCSUIBridgeSubsystem::HandleTimeStartClicked()
 {
-	if (bTimeControlCountdownActive || bTimeControlPerformanceActive)
+	if (bTimeControlCountdownActive || bTimeControlPerformanceActive
+		|| !PendingTimeControlCommandID.IsEmpty())
 	{
-		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("已有授时任务，请先结束当前任务，勿重复授时"));
+		SetRightPanelText(
+			TEXT("TXT_TimeControlStatus"),
+			PendingTimeControlCommandType == EGCSProductionCommandType::TimeStop
+				? TEXT("正在取消授时任务，请等待取消完成")
+				: TEXT("已有授时任务，请先结束当前任务，勿重复授时"));
 		return;
 	}
 	USpinBox* HourInput = FindRightPanelSpinBox(TEXT("SPN_TimeHour"));
@@ -1714,7 +1733,10 @@ void UGCSUIBridgeSubsystem::HandleTimeStartClicked()
 	ResetTimeControlPreparationState();
 	ScheduledTimeLocal = RequestedTimeLocal;
 	TimeControlPreviewDatasetGeneration = RoutePreview->GetRouteDatasetGeneration();
-	SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("00:00:00"));
+	SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("倒计时"));
+	SetRightPanelText(
+		TEXT("TXT_TimeCountdown"),
+		FormatTimeControlDuration(FMath::CeilToInt(LeadSeconds)));
 	TimeControlTargetDroneIDs = Targets;
 	TArray<FString> OnlineTargets;
 	if (const UFleetManagerSubsystem* Fleet =
@@ -1735,6 +1757,7 @@ void UGCSUIBridgeSubsystem::HandleTimeStartClicked()
 	}
 	if (OnlineTargets.IsEmpty())
 	{
+		SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("--:--:--"));
 		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("授时失败：所选无人机均不在线"));
 		return;
 	}
@@ -1751,6 +1774,7 @@ void UGCSUIBridgeSubsystem::HandleTimeStartClicked()
 	if (CommandID.IsEmpty())
 	{
 		bTimeControlCountdownActive = false;
+		SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("--:--:--"));
 		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("授时飞行发送失败"));
 		return;
 	}
@@ -1784,6 +1808,13 @@ void UGCSUIBridgeSubsystem::HandleTimeStartClicked()
 
 void UGCSUIBridgeSubsystem::HandleTimeStopClicked()
 {
+	if (!PendingTimeControlCommandID.IsEmpty()
+		&& PendingTimeControlCommandType == EGCSProductionCommandType::TimeStop)
+	{
+		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("正在取消授时任务，请勿重复操作"));
+		return;
+	}
+
 	const TArray<FString> Targets = TimeControlTargetDroneIDs.IsEmpty()
 		? GetCommandTargetDroneIDs()
 		: TimeControlTargetDroneIDs;
@@ -1810,6 +1841,8 @@ void UGCSUIBridgeSubsystem::HandleTimeStopClicked()
 	bTimeControlPerformanceActive = false;
 	bTimeControlArmTriggered = true;
 	bTimeControlAutoTriggered = true;
+	SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("倒计时"));
+	SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("--:--:--"));
 	PendingTimeArmCommandID.Reset();
 	PendingTimeAutoCommandID.Reset();
 	PendingTimeArmDroneIDs.Reset();
@@ -1830,7 +1863,7 @@ void UGCSUIBridgeSubsystem::HandleTimeStopClicked()
 	PendingTimeControlCompletedDroneIDs.Reset();
 	SetRightPanelText(
 		TEXT("TXT_TimeControlStatus"),
-		FString::Printf(TEXT("正在发送授时结束：0/%d"), Targets.Num()));
+		FString::Printf(TEXT("正在取消授时任务：0/%d"), Targets.Num()));
 	UE_LOG(
 		LogTemp,
 		Display,
@@ -1896,25 +1929,38 @@ void UGCSUIBridgeSubsystem::HandleProductionCommandResult(
 		{
 			const bool bStart = PendingTimeControlCommandType ==
 				EGCSProductionCommandType::TimeStart;
-			if (bStart && PendingTimeControlSucceededCount == 0)
-			{
-				bTimeControlCountdownActive = false;
-				SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("00:00:00"));
-			}
 			if (bStart)
 			{
-				RefreshTimeControlPreparationStatus(TEXT("授时已发送（飞控未确认）"));
+				if (PendingTimeControlSucceededCount == 0)
+				{
+					bTimeControlCountdownActive = false;
+					SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("倒计时"));
+					SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("--:--:--"));
+					SetRightPanelText(
+						TEXT("TXT_TimeControlStatus"),
+						FString::Printf(
+							TEXT("授时飞行发送失败 0/%d，任务未建立"),
+							PendingTimeControlTargetCount));
+				}
+				else
+				{
+					RefreshTimeControlPreparationStatus(TEXT("授时已发送（飞控未确认）"));
+				}
 			}
 			else
 			{
 				SetRightPanelText(
 					TEXT("TXT_TimeControlStatus"),
 					FString::Printf(
-						TEXT("授时结束已发送 %d/%d"),
+						TEXT("授时任务已取消 %d/%d"),
 						PendingTimeControlSucceededCount,
 						PendingTimeControlTargetCount));
 			}
 			PendingTimeControlCommandID.Reset();
+			if (!bStart)
+			{
+				ResetTimeControlPreparationState();
+			}
 		}
 		else
 		{
@@ -1924,7 +1970,7 @@ void UGCSUIBridgeSubsystem::HandleProductionCommandResult(
 					TEXT("%s：%d/%d"),
 					PendingTimeControlCommandType == EGCSProductionCommandType::TimeStart
 						? TEXT("正在发送授时飞行")
-						: TEXT("正在发送授时结束"),
+						: TEXT("正在取消授时任务"),
 					PendingTimeControlResultCount,
 					PendingTimeControlTargetCount));
 		}
@@ -2359,6 +2405,12 @@ void UGCSUIBridgeSubsystem::UpdateTopDownViewInput(APlayerController* PlayerCont
 		? TopDownCamera->GetCameraComponent()
 		: nullptr;
 	if (!TopDownCamera || !CameraComponent || TopDownFitOrthoWidth <= KINDA_SMALL_NUMBER)
+	{
+		ResetTopDownViewInputState();
+		return;
+	}
+
+	if (IsPointerOverBlockingGCSUI(FSlateApplication::Get().GetCursorPos()))
 	{
 		ResetTopDownViewInputState();
 		return;
@@ -4069,10 +4121,10 @@ void UGCSUIBridgeSubsystem::BindTimeControlControls()
 	HourInput->SetValue(static_cast<float>(InitialTime.GetHour()));
 	MinuteInput->SetValue(static_cast<float>(InitialTime.GetMinute()));
 	SecondInput->SetValue(static_cast<float>(InitialTime.GetSecond()));
-	DurationLabel->SetText(FText::FromString(TEXT("表演时长")));
-	CountdownText->SetText(FText::FromString(TEXT("00:00:00")));
+	DurationLabel->SetText(FText::FromString(TEXT("倒计时")));
+	CountdownText->SetText(FText::FromString(TEXT("--:--:--")));
 	CountdownText->SetToolTipText(FText::FromString(
-		TEXT("授时时刻开始按NPZ计划正计时；不是飞控任务完成回执。预览结束不代表所有真机已完成飞行。")));
+		TEXT("授时任务等待期间显示剩余倒计时；到点后切换为表演时间并按NPZ计划正计时。")));
 	StatusText->SetText(FText::FromString(TEXT("未设置授时任务")));
 
 	UE_LOG(
@@ -4542,6 +4594,7 @@ bool UGCSUIBridgeSubsystem::BeginScheduledRoutePreview(FString& OutError)
 
 	bTimeControlPerformanceActive = true;
 	TimeControlPerformanceElapsedSeconds = 0.0;
+	SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("表演时间"));
 	SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("00:00:00"));
 	RefreshRoutePlaybackUI();
 	UE_LOG(
@@ -4583,16 +4636,6 @@ void UGCSUIBridgeSubsystem::TickTimeControlUI(const float DeltaSeconds)
 		TimeControlUIRefreshAccumulator,
 		TimeControlUIRefreshIntervalSeconds);
 
-	const auto FormatDuration = [](const double ValueSeconds)
-	{
-		const int32 TotalSeconds = FMath::Max(0, FMath::FloorToInt(ValueSeconds));
-		return FString::Printf(
-			TEXT("%02d:%02d:%02d"),
-			TotalSeconds / 3600,
-			(TotalSeconds % 3600) / 60,
-			TotalSeconds % 60);
-	};
-
 	if (bTimeControlPerformanceActive)
 	{
 		URoutePreviewSubsystem* RoutePreview =
@@ -4618,7 +4661,7 @@ void UGCSUIBridgeSubsystem::TickTimeControlUI(const float DeltaSeconds)
 		TimeControlPerformanceElapsedSeconds = RoutePreview->GetCurrentTime();
 		SetRightPanelText(
 			TEXT("TXT_TimeCountdown"),
-			FormatDuration(TimeControlPerformanceElapsedSeconds));
+			FormatTimeControlDuration(FMath::FloorToInt(TimeControlPerformanceElapsedSeconds)));
 
 		if (State == ERoutePreviewPlaybackState::Completed)
 		{
@@ -4626,7 +4669,7 @@ void UGCSUIBridgeSubsystem::TickTimeControlUI(const float DeltaSeconds)
 			TimeControlPerformanceElapsedSeconds = RoutePreview->GetDurationSeconds();
 			SetRightPanelText(
 				TEXT("TXT_TimeCountdown"),
-				FormatDuration(TimeControlPerformanceElapsedSeconds));
+				FormatTimeControlDuration(FMath::FloorToInt(TimeControlPerformanceElapsedSeconds)));
 			RefreshTimeControlPreparationStatus(TEXT("NPZ计划播放完成，真机完成状态未确认"));
 			UE_LOG(
 				LogTemp,
@@ -4643,9 +4686,10 @@ void UGCSUIBridgeSubsystem::TickTimeControlUI(const float DeltaSeconds)
 	const int32 TotalSeconds = FMath::Max(
 		0,
 		FMath::CeilToInt(Remaining.GetTotalSeconds()));
-	// The top display is now performance elapsed time, not the preparation
-	// countdown. Keep it at zero until the scheduled route actually starts.
-	SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("00:00:00"));
+	SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("倒计时"));
+	SetRightPanelText(
+		TEXT("TXT_TimeCountdown"),
+		FormatTimeControlDuration(TotalSeconds));
 
 	if (TotalSeconds > 0
 		&& TotalSeconds <= TimeControlArmLeadSeconds
@@ -4666,6 +4710,8 @@ void UGCSUIBridgeSubsystem::TickTimeControlUI(const float DeltaSeconds)
 	if (TotalSeconds == 0)
 	{
 		bTimeControlCountdownActive = false;
+		SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("表演时间"));
+		SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("00:00:00"));
 		for (const FString& DroneID : TimeControlTargetDroneIDs)
 		{
 			if (!TimeControlAutoDroneIDs.Contains(DroneID))
@@ -4906,6 +4952,71 @@ void UGCSUIBridgeSubsystem::CreateNavigationPages()
 		TEXT("/Game/UI/WBP_GCS_PageSettings.WBP_GCS_PageSettings_C"));
 	LogsPageWidget = CreateNavigationPage(
 		TEXT("/Game/UI/WBP_GCS_PageLogs.WBP_GCS_PageLogs_C"));
+	ConfigureTelemetryTableInput();
+}
+
+void UGCSUIBridgeSubsystem::ConfigureGroundStationInputPolicy(UUserWidget* MainWidget) const
+{
+	APlayerController* PlayerController = MainWidget ? MainWidget->GetOwningPlayer() : nullptr;
+	if (!PlayerController)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("GCS input policy skipped: no owning PlayerController."));
+		return;
+	}
+
+	PlayerController->bShowMouseCursor = true;
+	FInputModeGameAndUI InputMode;
+	InputMode.SetHideCursorDuringCapture(false);
+	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	PlayerController->SetInputMode(InputMode);
+
+	if (UWorld* World = PlayerController->GetWorld())
+	{
+		if (UGameViewportClient* ViewportClient = World->GetGameViewport())
+		{
+			// Marquee selection and top-down panning poll left/middle button state
+			// through the PlayerController, so all mouse buttons must update game
+			// input. Camera movement is gated separately by button and UI geometry.
+			ViewportClient->SetMouseCaptureMode(EMouseCaptureMode::CaptureDuringMouseDown);
+			ViewportClient->SetMouseLockMode(EMouseLockMode::DoNotLock);
+		}
+	}
+}
+
+void UGCSUIBridgeSubsystem::ConfigureTelemetryTableInput() const
+{
+	UUserWidget* LogsPage = LogsPageWidget.Get();
+	if (!LogsPage || !LogsPage->WidgetTree)
+	{
+		return;
+	}
+
+	UScrollBox* HorizontalScroll = Cast<UScrollBox>(
+		LogsPage->WidgetTree->FindWidget(TEXT("SB_Table_H")));
+	UListView* TelemetryList = Cast<UListView>(
+		LogsPage->WidgetTree->FindWidget(TEXT("LV_Telemetry")));
+
+	if (!HorizontalScroll || !TelemetryList)
+	{
+		UE_LOG(
+			LogTemp,
+			Error,
+			TEXT("Telemetry table input setup failed: SB_Table_H or LV_Telemetry is missing."));
+		return;
+	}
+
+	HorizontalScroll->SetOrientation(Orient_Horizontal);
+	HorizontalScroll->SetConsumeMouseWheel(EConsumeMouseWheel::Never);
+	HorizontalScroll->SetAllowRightClickDragScrolling(false);
+	HorizontalScroll->SetScrollBarVisibility(ESlateVisibility::Visible);
+
+	if (TelemetryList->GetOrientation() != Orient_Vertical)
+	{
+		UE_LOG(
+			LogTemp,
+			Error,
+			TEXT("LV_Telemetry must remain vertical so it owns the mouse wheel."));
+	}
 }
 
 void UGCSUIBridgeSubsystem::ResetNavigationPages()

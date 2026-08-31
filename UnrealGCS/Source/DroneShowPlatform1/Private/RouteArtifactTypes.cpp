@@ -319,7 +319,7 @@ bool FRouteArtifactSha256::HashFileStreaming(
 	OutFileByteSize = 0;
 	OutError.Reset();
 	FFileOpenResult OpenResult = FPlatformFileManager::Get().GetPlatformFile().OpenRead(
-		*FilePath, EOpenReadFlags::AllowDelete);
+		*FilePath, IPlatformFile::EOpenReadFlags::AllowDelete);
 	TUniquePtr<IFileHandle> FileHandle;
 	if (OpenResult.IsValid()) FileHandle = OpenResult.StealValue();
 	if (!FileHandle)

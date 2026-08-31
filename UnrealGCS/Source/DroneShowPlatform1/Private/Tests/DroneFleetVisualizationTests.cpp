@@ -106,6 +106,8 @@ bool FDroneFleetVisualizationBridgeTest::RunTest(const FString& Parameters)
 	Visualization->RefreshFromFleet();
 	TestEqual(TEXT("One drone produces one position"), Visualization->GetVisualizationDroneCount(), 1);
 	TestEqual(TEXT("Particle zero maps to Drone001"), Visualization->GetParticleDroneIDs()[0], FString(TEXT("Drone001")));
+	TestEqual(TEXT("Default label uses numeric DroneID without subtracting one"),
+		Visualization->GetDroneDisplayIDsForTest()[0], 1.0f);
 	TestEqual(TEXT("Phase 3 position is UE origin"), Visualization->GetDronePositions()[0], FVector::ZeroVector);
 
 	TestTrue(TEXT("100-drone snapshot applied"), Fleet->ApplySnapshot(MakeSnapshot(100, 3)));
@@ -127,8 +129,8 @@ bool FDroneFleetVisualizationBridgeTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Confirmed display survives Fleet refresh"),
 		Visualization->GetDroneDisplayIDsForTest()[4], 37.0f);
 	Visualization->ClearConfirmedRouteSlotDisplayOverrides();
-	TestEqual(TEXT("Clear restores zero-based particle-index display"),
-		Visualization->GetDroneDisplayIDsForTest()[4], 4.0f);
+	TestEqual(TEXT("Clear restores direct numeric DroneID display"),
+		Visualization->GetDroneDisplayIDsForTest()[4], 5.0f);
 	TestEqual(TEXT("Clear still preserves Drone005 identity"),
 		Visualization->GetParticleDroneIDs()[4], FString(TEXT("Drone005")));
 	for (const FVector& Position : Visualization->GetDronePositions())

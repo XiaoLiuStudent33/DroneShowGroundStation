@@ -884,9 +884,9 @@ RemotePort=12002
         Expect(
             heartbeatStats.heartbeatsApplied == 3 && manager.GetDroneCount() == 3,
             "shared endpoint did not register three heartbeats");
-        const DroneSession* sharedDrone1 = manager.FindDrone("Drone001");
-        const DroneSession* sharedDrone2 = manager.FindDrone("Drone002");
-        const DroneSession* sharedDrone3 = manager.FindDrone("Drone003");
+        const DroneSession* sharedDrone1 = manager.FindDrone("Drone000");
+        const DroneSession* sharedDrone2 = manager.FindDrone("Drone001");
+        const DroneSession* sharedDrone3 = manager.FindDrone("Drone002");
         Expect(
             sharedDrone1 != nullptr && sharedDrone2 != nullptr &&
                 sharedDrone3 != nullptr,
@@ -933,9 +933,9 @@ RemotePort=12002
             PumpSharedEndpoint(endpoint, ingress, 3);
         Expect(telemetryStats.telemetryApplied == 3, "three-way telemetry routing failed");
         Expect(
-            manager.FindDrone("Drone001")->GetFlightData().batteryRemaining == 81 &&
-            manager.FindDrone("Drone002")->GetFlightData().batteryRemaining == 82 &&
-            manager.FindDrone("Drone003")->GetFlightData().batteryRemaining == 83,
+            manager.FindDrone("Drone000")->GetFlightData().batteryRemaining == 81 &&
+            manager.FindDrone("Drone001")->GetFlightData().batteryRemaining == 82 &&
+            manager.FindDrone("Drone002")->GetFlightData().batteryRemaining == 83,
             "telemetry reached the wrong Session");
 
         CommandManager commandManager(manager);
@@ -1059,27 +1059,27 @@ int RunConsolePipelineTests()
             static_cast<const DroneManager&>(manager).GetAllDrones();
         Expect(initialSessions.size() == 3, "GetAllDrones did not return 3");
 
+        DroneSession* drone000 = manager.FindDrone("Drone000");
         DroneSession* drone001 = manager.FindDrone("Drone001");
         DroneSession* drone002 = manager.FindDrone("Drone002");
-        DroneSession* drone003 = manager.FindDrone("Drone003");
         Expect(
-            drone001 != nullptr && drone002 != nullptr && drone003 != nullptr,
+            drone000 != nullptr && drone001 != nullptr && drone002 != nullptr,
             "endpoint to sequential DroneID mapping failed");
         Expect(
-            drone001 != drone002 && drone001 != drone003 && drone002 != drone003,
+            drone000 != drone001 && drone000 != drone002 && drone001 != drone002,
             "discovered drones do not have isolated sessions");
         Expect(
+            drone000->GetConfig().discoveredSystemId == 1 &&
             drone001->GetConfig().discoveredSystemId == 1 &&
             drone002->GetConfig().discoveredSystemId == 1 &&
-            drone003->GetConfig().discoveredSystemId == 1 &&
-            drone001->GetConfig().remoteIp == "192.168.1.145" &&
-            drone002->GetConfig().remoteIp == "192.168.1.231" &&
-            drone003->GetConfig().remoteIp == "192.168.1.232",
+            drone000->GetConfig().remoteIp == "192.168.1.145" &&
+            drone001->GetConfig().remoteIp == "192.168.1.231" &&
+            drone002->GetConfig().remoteIp == "192.168.1.232",
             "same SYSID endpoints were not preserved as independent Sessions");
+        ExpectOnline(manager, "Drone000", true);
         ExpectOnline(manager, "Drone001", true);
         ExpectOnline(manager, "Drone002", true);
-        ExpectOnline(manager, "Drone003", true);
-        std::cout << "Drone001 online\nDrone002 online\nDrone003 online\n";
+        std::cout << "Drone000 online\nDrone001 online\nDrone002 online\n";
 
         mavlink_message_t gps{};
         mavlink_msg_gps_raw_int_pack(
@@ -1105,9 +1105,9 @@ int RunConsolePipelineTests()
         Expect(
             SubmitMessage(ingress, gps, "192.168.1.145")
                 .telemetryApplied == 1,
-            "GPS_RAW_INT was not routed to Drone001");
+            "GPS_RAW_INT was not routed to Drone000");
 
-        FlightData telemetry = drone001->GetFlightData();
+        FlightData telemetry = drone000->GetFlightData();
         Expect(telemetry.gpsValid, "GPS_RAW_INT valid Fix was rejected");
         Expect(
             telemetry.latitude > 31.9327549 &&
@@ -1146,9 +1146,9 @@ int RunConsolePipelineTests()
         Expect(
             SubmitMessage(ingress, position, "192.168.1.145")
                 .telemetryApplied == 1,
-            "GLOBAL_POSITION_INT was not routed to Drone001");
+            "GLOBAL_POSITION_INT was not routed to Drone000");
 
-        telemetry = drone001->GetFlightData();
+        telemetry = drone000->GetFlightData();
         Expect(
             telemetry.latitude > 31.9327549 &&
                 telemetry.latitude < 31.9327551 &&
@@ -1190,8 +1190,8 @@ int RunConsolePipelineTests()
         Expect(
             SubmitMessage(ingress, invalidGps, "192.168.1.145")
                 .telemetryApplied == 1,
-            "invalid GPS_RAW_INT was not routed to Drone001");
-        telemetry = drone001->GetFlightData();
+            "invalid GPS_RAW_INT was not routed to Drone000");
+        telemetry = drone000->GetFlightData();
         Expect(!telemetry.gpsValid, "GPS_RAW_INT fix_type=1 remained valid");
 		Expect(
 			telemetry.gpsFixType == 1 && telemetry.satellitesVisible == 5 &&
@@ -1199,14 +1199,14 @@ int RunConsolePipelineTests()
 			telemetry.lastGpsReceiveUtcMs >= firstGpsReceiveUtcMs,
 			"fix downgrade did not update raw GPS fields and sample identity");
         Expect(
-            manager.FindDrone("Drone001") == drone001 &&
+            manager.FindDrone("Drone000") == drone000 &&
                 manager.GetDroneCount() == 3,
-            "invalid GPS_RAW_INT removed or replaced Drone001 session");
+            "invalid GPS_RAW_INT removed or replaced Drone000 session");
 
         Expect(
             SubmitMessage(ingress, gps, "192.168.1.145")
                 .telemetryApplied == 1,
-            "valid GPS_RAW_INT recovery was not routed to Drone001");
+            "valid GPS_RAW_INT recovery was not routed to Drone000");
 
         mavlink_message_t positionBeforeGps{};
         mavlink_msg_global_position_int_pack(
@@ -1225,10 +1225,10 @@ int RunConsolePipelineTests()
         Expect(
             SubmitMessage(ingress, positionBeforeGps, "192.168.1.231")
                 .telemetryApplied == 1,
-            "GLOBAL_POSITION_INT was not routed to Drone002");
+            "GLOBAL_POSITION_INT was not routed to Drone001");
         Expect(
-            drone002->GetFlightData().latitude == 0.0 &&
-                drone002->GetFlightData().longitude == 0.0,
+            drone001->GetFlightData().latitude == 0.0 &&
+                drone001->GetFlightData().longitude == 0.0,
             "GLOBAL_POSITION_INT unexpectedly became the primary GPS source");
 
         mavlink_message_t gpsAfterPosition{};
@@ -1255,16 +1255,16 @@ int RunConsolePipelineTests()
         Expect(
             SubmitMessage(ingress, gpsAfterPosition, "192.168.1.231")
                 .telemetryApplied == 1,
-            "GPS_RAW_INT was not routed to Drone002 after GLOBAL_POSITION_INT");
+            "GPS_RAW_INT was not routed to Drone001 after GLOBAL_POSITION_INT");
         Expect(
-            drone002->GetFlightData().latitude > 31.9327649 &&
-                drone002->GetFlightData().latitude < 31.9327651 &&
-                drone002->GetFlightData().longitude > 118.6382568 &&
-                drone002->GetFlightData().longitude < 118.6382570,
+            drone001->GetFlightData().latitude > 31.9327649 &&
+                drone001->GetFlightData().latitude < 31.9327651 &&
+                drone001->GetFlightData().longitude > 118.6382568 &&
+                drone001->GetFlightData().longitude < 118.6382570,
             "GPS_RAW_INT did not win after GLOBAL_POSITION_INT");
         Expect(
-            drone002->GetFlightData().altitude > 99.9f &&
-                drone002->GetFlightData().altitude < 100.1f,
+            drone001->GetFlightData().altitude > 99.9f &&
+                drone001->GetFlightData().altitude < 100.1f,
             "GPS_RAW_INT AMSL did not win after GLOBAL_POSITION_INT");
 
         mavlink_message_t seaLevelGps{};
@@ -1291,11 +1291,11 @@ int RunConsolePipelineTests()
         Expect(
             SubmitMessage(ingress, seaLevelGps, "192.168.1.231")
                 .telemetryApplied == 1,
-            "sea-level GPS_RAW_INT was not routed to Drone002");
+            "sea-level GPS_RAW_INT was not routed to Drone001");
         Expect(
-            drone002->GetFlightData().gpsValid &&
-                drone002->GetFlightData().altitudeValid &&
-                drone002->GetFlightData().altitude == 0.0f,
+            drone001->GetFlightData().gpsValid &&
+                drone001->GetFlightData().altitudeValid &&
+                drone001->GetFlightData().altitude == 0.0f,
             "valid GPS_RAW_INT alt=0 was treated as invalid");
 
         mavlink_message_t battery{};
@@ -1322,23 +1322,23 @@ int RunConsolePipelineTests()
         Expect(
             SubmitMessage(ingress, battery, "192.168.1.145")
                 .telemetryApplied == 1,
-            "SYS_STATUS was not routed to Drone001");
+            "SYS_STATUS was not routed to Drone000");
 
-        telemetry = drone001->GetFlightData();
-        Expect(telemetry.gpsValid, "Drone001 GPS did not become valid");
-        Expect(telemetry.altitudeValid, "Drone001 altitude did not become valid");
+        telemetry = drone000->GetFlightData();
+        Expect(telemetry.gpsValid, "Drone000 GPS did not become valid");
+        Expect(telemetry.altitudeValid, "Drone000 altitude did not become valid");
         Expect(
             telemetry.latitude > 31.9327549 && telemetry.latitude < 31.9327551,
-            "Drone001 latitude conversion failed");
+            "Drone000 latitude conversion failed");
         Expect(
             telemetry.longitude > 118.6382468 && telemetry.longitude < 118.6382470,
-            "Drone001 longitude conversion failed");
+            "Drone000 longitude conversion failed");
         Expect(
             telemetry.altitude > 123.4f && telemetry.altitude < 123.5f,
-            "Drone001 altitude conversion failed");
-        Expect(telemetry.batteryRemaining == 87, "Drone001 battery failed");
-        Expect(telemetry.modeName == "LOITER", "Drone001 mode failed");
-        std::cout << "Drone001 telemetry GPS/Altitude/Battery/Mode applied\n";
+            "Drone000 altitude conversion failed");
+        Expect(telemetry.batteryRemaining == 87, "Drone000 battery failed");
+        Expect(telemetry.modeName == "LOITER", "Drone000 mode failed");
+        std::cout << "Drone000 telemetry GPS/Altitude/Battery/Mode applied\n";
 
         struct ExpectedHeartbeatMode
         {
@@ -1361,7 +1361,7 @@ int RunConsolePipelineTests()
                     10001,
                     expected.customMode) == MavlinkDiscoveryResult::Refreshed,
                 std::string(expected.name) + " heartbeat was not routed");
-            const FlightData modeTelemetry = drone001->GetFlightData();
+            const FlightData modeTelemetry = drone000->GetFlightData();
             Expect(
                 modeTelemetry.mode == static_cast<int>(expected.customMode) &&
                 modeTelemetry.modeName == expected.name,
@@ -1369,7 +1369,7 @@ int RunConsolePipelineTests()
             std::cout
                 << "HEARTBEAT MODE " << expected.name
                 << " custom_mode=" << expected.customMode
-                << " applied to Drone001\n";
+                << " applied to Drone000\n";
         }
 
         dspgcs::DSPGCSTransportConfig receiverConfig;
@@ -1439,18 +1439,18 @@ int RunConsolePipelineTests()
             "production TelemetryDTO frame decode failed");
         Expect(batch.items.size() == 3, "production DTO batch did not contain 3 drones");
         Expect(
-            batch.items.front().droneId == "Drone001" &&
+            batch.items.front().droneId == "Drone000" &&
                 batch.items.front().sysId == 1 &&
 				batch.items.front().sampleTimestampUtcMs ==
-					drone001->GetFlightData().lastGpsReceiveUtcMs &&
+					drone000->GetFlightData().lastGpsReceiveUtcMs &&
                 batch.items.front().connection.online &&
                 batch.items.front().gps.valid &&
                 batch.items.front().battery.remainingPercent == 87.0f,
-            "production Drone001 TelemetryDTO values failed");
+            "production Drone000 TelemetryDTO values failed");
         Expect(
-            batch.items[1].droneId == "Drone002" &&
+            batch.items[1].droneId == "Drone001" &&
                 batch.items[1].sysId == 1 &&
-                batch.items[2].droneId == "Drone003" &&
+                batch.items[2].droneId == "Drone002" &&
                 batch.items[2].sysId == 1,
             "DSP-GCS display IDs were not independent from SYSID");
         std::cout << "Production TelemetryDTO -> DSP-GCS Transport passed for 3 drones\n";
@@ -1460,9 +1460,9 @@ int RunConsolePipelineTests()
                 MavlinkDiscoveryResult::Refreshed,
             "same endpoint did not refresh its session");
         Expect(
-            manager.FindDrone("Drone001") == drone001 &&
+            manager.FindDrone("Drone000") == drone000 &&
                 manager.GetDroneCount() == 3,
-            "refresh created a duplicate Drone001 session");
+            "refresh created a duplicate Drone000 session");
 
         std::cout << "Same SYSID on three endpoints registered without conflict\n";
 
@@ -1470,31 +1470,31 @@ int RunConsolePipelineTests()
         Expect(
             SendHeartbeat(discovery, 1, "192.168.1.145") ==
                 MavlinkDiscoveryResult::Refreshed,
-            "Drone001 refresh before timeout evaluation failed");
+            "Drone000 refresh before timeout evaluation failed");
         Expect(
             SendHeartbeat(discovery, 1, "192.168.1.232") ==
                 MavlinkDiscoveryResult::Refreshed,
-            "Drone003 refresh before timeout evaluation failed");
+            "Drone002 refresh before timeout evaluation failed");
         discovery.Update(std::chrono::steady_clock::now());
 
-        ExpectOnline(manager, "Drone001", true);
-        ExpectOnline(manager, "Drone002", false);
-        ExpectOnline(manager, "Drone003", true);
+        ExpectOnline(manager, "Drone000", true);
+        ExpectOnline(manager, "Drone001", false);
+        ExpectOnline(manager, "Drone002", true);
         Expect(
-            drone002->GetState() == DroneSessionState::HeartbeatTimeout,
-            "Drone002 did not enter HeartbeatTimeout");
-        std::cout << "Drone002 offline; Drone001/Drone003 remain online\n";
+            drone001->GetState() == DroneSessionState::HeartbeatTimeout,
+            "Drone001 did not enter HeartbeatTimeout");
+        std::cout << "Drone001 offline; Drone000/Drone002 remain online\n";
 
         Expect(
             SendHeartbeat(discovery, 1, "192.168.1.231") ==
                 MavlinkDiscoveryResult::Refreshed,
-            "Drone002 recovery heartbeat did not refresh its session");
-        ExpectOnline(manager, "Drone002", true);
+            "Drone001 recovery heartbeat did not refresh its session");
+        ExpectOnline(manager, "Drone001", true);
         Expect(
-            manager.FindDrone("Drone002") == drone002 &&
+            manager.FindDrone("Drone001") == drone001 &&
                 manager.GetDroneCount() == 3,
-            "Drone002 recovery created a duplicate session");
-        std::cout << "Drone002 online again using original session\n";
+            "Drone001 recovery created a duplicate session");
+        std::cout << "Drone001 online again using original session\n";
 
         // Scale regression: a 1000-aircraft snapshot must not be emitted as
         // one oversized UDP datagram. All chunks retain stable order and the

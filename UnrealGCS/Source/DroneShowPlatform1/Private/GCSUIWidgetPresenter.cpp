@@ -124,14 +124,14 @@ FLinearColor FGCSUIWidgetPresenter::DisplayStatusColor(
 void FGCSUIWidgetPresenter::SetWidgetVisible(
 	const TWeakObjectPtr<UUserWidget>& Widget,
 	const bool bVisible,
-	const bool bHitTestInvisibleWhenVisible)
+	const bool bSelfHitTestInvisibleWhenVisible)
 {
 	if (UUserWidget* ResolvedWidget = Widget.Get())
 	{
 		ResolvedWidget->SetVisibility(
 			bVisible
-				? (bHitTestInvisibleWhenVisible
-					? ESlateVisibility::HitTestInvisible
+				? (bSelfHitTestInvisibleWhenVisible
+					? ESlateVisibility::SelfHitTestInvisible
 					: ESlateVisibility::Visible)
 				: ESlateVisibility::Collapsed);
 	}

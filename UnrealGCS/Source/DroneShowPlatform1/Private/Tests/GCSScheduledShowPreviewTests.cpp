@@ -47,8 +47,8 @@ bool FGCSScheduledShowPreviewTest::RunTest(const FString& Parameters)
 	UTextBlock* Elapsed = Bridge->FindRightPanelText(TEXT("TXT_TimeCountdown"));
 	if (!TestNotNull(TEXT("Duration label"), Label) || !TestNotNull(TEXT("Duration value"), Elapsed)
 		|| !TestTrue(TEXT("Timeline is bound"), Bridge->RouteTimelineSlider.IsValid())) return false;
-	TestEqual(TEXT("Label renamed"), Label->GetText().ToString(), FString(TEXT("表演时长")));
-	TestEqual(TEXT("Initial elapsed time"), Elapsed->GetText().ToString(), FString(TEXT("00:00:00")));
+	TestEqual(TEXT("Idle label is countdown"), Label->GetText().ToString(), FString(TEXT("倒计时")));
+	TestEqual(TEXT("Idle countdown is unset"), Elapsed->GetText().ToString(), FString(TEXT("--:--:--")));
 
 	// Tiny in-memory route only. No TimeStart/ARM/AUTO handler is invoked and
 	// no command is submitted to Console or to physical aircraft by this test.
@@ -75,12 +75,18 @@ bool FGCSScheduledShowPreviewTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("21 frames span 2 seconds"), Preview->GetDurationSeconds(), 2.0);
 	TestTrue(TEXT("Earlier manual inspection"), Preview->SeekToFrame(15, Error));
 	Bridge->TimeControlPreviewDatasetGeneration = Preview->GetRouteDatasetGeneration();
-	Bridge->ScheduledTimeLocal = FDateTime::Now() - FTimespan::FromSeconds(1.0);
+	Bridge->ScheduledTimeLocal = FDateTime::Now() + FTimespan::FromSeconds(3.0);
 	Bridge->bTimeControlCountdownActive = true;
+	Bridge->TickTimeControlUI(0.2f);
+	TestEqual(TEXT("Waiting task keeps countdown label"), Label->GetText().ToString(), FString(TEXT("倒计时")));
+	TestEqual(TEXT("Waiting task displays real remaining time"), Elapsed->GetText().ToString(), FString(TEXT("00:00:03")));
+	Bridge->ScheduledTimeLocal = FDateTime::Now() - FTimespan::FromSeconds(1.0);
 	Bridge->TickTimeControlUI(0.2f);
 	TestTrue(TEXT("Scheduled tick starts playback without pressing Play"),
 		Preview->GetPlaybackState() == ERoutePreviewPlaybackState::Playing);
 	TestEqual(TEXT("Starts at Frame 0, not inspection cursor"), Preview->GetCurrentFrame(), 0);
+	TestEqual(TEXT("At scheduled time label switches to performance"), Label->GetText().ToString(), FString(TEXT("表演时间")));
+	TestEqual(TEXT("Performance starts at zero"), Elapsed->GetText().ToString(), FString(TEXT("00:00:00")));
 	TestEqual(TEXT("Both planned drones rendered"), Visualization->GetVisualizationDroneCount(), 2);
 	const FVector InitialPosition = Visualization->GetDronePositions()[0];
 	Preview->TickPlayback(1.0f);

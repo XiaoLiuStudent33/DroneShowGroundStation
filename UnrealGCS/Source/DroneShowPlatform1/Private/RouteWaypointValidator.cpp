@@ -165,7 +165,7 @@ bool RouteWaypointValidator::ValidateAndHashFileStreaming(
 	}
 
 	FFileOpenResult OpenResult = FPlatformFileManager::Get().GetPlatformFile().OpenRead(
-		*FilePath, EOpenReadFlags::AllowDelete);
+		*FilePath, IPlatformFile::EOpenReadFlags::AllowDelete);
 	TUniquePtr<IFileHandle> Handle;
 	if (OpenResult.IsValid()) Handle = OpenResult.StealValue();
 	if (!Handle)

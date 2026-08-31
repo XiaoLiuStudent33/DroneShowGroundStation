@@ -56,5 +56,5 @@ private:
     std::unordered_map<std::string, std::unique_ptr<DroneSession>> sessions;
     std::unordered_map<std::string, std::string> discoveredEndpointIndex;
     std::vector<std::string> sessionOrder;
-    std::size_t nextDiscoveredDroneNumber = 1;
+    std::size_t nextDiscoveredDroneNumber = 0;
 };

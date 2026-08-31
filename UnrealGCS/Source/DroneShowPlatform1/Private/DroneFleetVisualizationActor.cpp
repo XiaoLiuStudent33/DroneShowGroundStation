@@ -10,6 +10,7 @@
 #include "Camera/PlayerCameraManager.h"
 #include "CesiumGeoreference.h"
 #include "Components/SceneComponent.h"
+#include "DroneLogicalId.h"
 #include "EngineUtils.h"
 #include "FleetManagerSubsystem.h"
 #include "GameFramework/PlayerController.h"
@@ -743,7 +744,7 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 			UE_LOG(
 				LogTemp,
 				Display,
-				TEXT("[DroneFleetViz Debug] CameraWorld=(%.3f,%.3f,%.3f) CameraToDrone001=%.3fcm (%.3fkm)"),
+				TEXT("[DroneFleetViz Debug] CameraWorld=(%.3f,%.3f,%.3f) CameraToFirstDrone=%.3fcm (%.3fkm)"),
 				CameraWorldPosition.X,
 				CameraWorldPosition.Y,
 				CameraWorldPosition.Z,
@@ -991,19 +992,33 @@ void ADroneFleetVisualizationActor::RebuildDroneLabelAttributes()
 	DroneSelectedMasks.SetNumUninitialized(ParticleCount);
 	for (int32 Index = 0; Index < ParticleCount; ++Index)
 	{
-		const bool bNumberingAnomaly = ParticleDroneIDs.IsValidIndex(Index)
-			&& NpzNumberingAnomalyDroneIDs.Contains(ParticleDroneIDs[Index]);
-		const int32* ConfirmedRouteSlot = ParticleDroneIDs.IsValidIndex(Index)
-			? ConfirmedRouteSlotDisplayOverrides.Find(ParticleDroneIDs[Index])
+		const bool bHasDroneID = ParticleDroneIDs.IsValidIndex(Index);
+		const FString DroneID = bHasDroneID ? ParticleDroneIDs[Index] : FString();
+		const bool bNumberingAnomaly = bHasDroneID
+			&& NpzNumberingAnomalyDroneIDs.Contains(DroneID);
+		const int32* ConfirmedRouteSlot = bHasDroneID
+			? ConfirmedRouteSlotDisplayOverrides.Find(DroneID)
 			: nullptr;
+
+		std::uint64_t NumericDroneID = 0;
+		bool bHasCanonicalDroneID = false;
+		if (bHasDroneID)
+		{
+			FTCHARToUTF8 EncodedDroneID(*DroneID);
+			bHasCanonicalDroneID = dronegcs::identity::TryParseDroneLogicalId(
+				std::string_view(EncodedDroneID.Get(), EncodedDroneID.Length()),
+				NumericDroneID);
+		}
+		const bool bHideLabel = bNumberingAnomaly || !bHasCanonicalDroneID;
 		DroneDisplayIDs[Index] = static_cast<float>(
-			bNumberingAnomaly ? 0 : (ConfirmedRouteSlot ? *ConfirmedRouteSlot : Index));
+			bHideLabel ? 0 : (ConfirmedRouteSlot
+				? static_cast<std::uint64_t>(*ConfirmedRouteSlot)
+				: NumericDroneID));
 		// -1 is a per-particle label-hidden sentinel consumed by M_DroneIdLabel.
-		DroneSelectedMasks[Index] = bNumberingAnomaly
+		DroneSelectedMasks[Index] = bHideLabel
 			? -1.0f
 			: (VisualizationMode == EGCSVisualizationMode::Live
-			&& ParticleDroneIDs.IsValidIndex(Index)
-			&& CommandSelectedDroneIDs.Contains(ParticleDroneIDs[Index])
+			&& CommandSelectedDroneIDs.Contains(DroneID)
 			? 1.0f
 			: 0.0f);
 	}

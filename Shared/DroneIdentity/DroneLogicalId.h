@@ -11,11 +11,6 @@ namespace dronegcs::identity
 
     inline std::string FormatDroneLogicalId(const std::uint64_t numericId)
     {
-        if (numericId == 0)
-        {
-            return {};
-        }
-
         std::string digits = std::to_string(numericId);
         if (digits.size() < 3)
         {
@@ -50,7 +45,7 @@ namespace dronegcs::identity
             value = value * 10 + digit;
         }
 
-        if (value == 0 || FormatDroneLogicalId(value) != text)
+        if (FormatDroneLogicalId(value) != text)
         {
             return false;
         }
@@ -69,7 +64,7 @@ namespace dronegcs::identity
         {
             return false;
         }
-        const std::uint64_t routeSlotIndex = numericId - 1;
+        const std::uint64_t routeSlotIndex = numericId;
         if (routeSlotIndex >= routeSlotCount)
         {
             return false;

@@ -1194,7 +1194,7 @@ void UGCSRouteWorkflowCoordinator::HandleClearNpzNumberingClicked()
 	ClearConfirmedNpzMapping(true);
 	ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview);
 	UE_LOG(LogGCSRouteWorkflow, Display,
-		TEXT("[NPZ_NUMBERING] Cleared; legacy NumericDroneID-1 fallback is available for F.1.5."));
+		TEXT("[NPZ_NUMBERING] Cleared; default NumericDroneID RouteSlot mapping is available for F.1.5."));
 	RefreshReadOnlyState();
 }
 
@@ -2166,7 +2166,7 @@ bool UGCSRouteWorkflowCoordinator::CaptureAutoStartSnapshot(
 		const int32 NumericID = static_cast<int32>(NumericID64);
 		const FGCSConfirmedNpzMappingEntry* const* ConfirmedEntry =
 			ConfirmedEntries.Find(DroneID);
-		const int32 RouteSlot = ConfirmedEntry ? (*ConfirmedEntry)->RouteSlotIndex : NumericID - 1;
+		const int32 RouteSlot = ConfirmedEntry ? (*ConfirmedEntry)->RouteSlotIndex : NumericID;
 		if (NumericIDs.Contains(NumericID) || RouteSlots.Contains(RouteSlot))
 		{
 			OutError = FString::Printf(TEXT("Duplicate numeric DroneID or RouteSlot: %s"), *DroneID);

@@ -120,6 +120,7 @@ public:
 	static EGCSDroneDisplayStatus ResolveDroneDisplayStatus(
 		EDSPGCSTelemetryLinkState ServerState,
 		bool bDroneOnline);
+	bool IsPointerOverBlockingGCSUI(const FVector2D& ScreenPosition) const;
 
 private:
 	friend class FGCSMarqueeInputProcessor;
@@ -382,7 +383,6 @@ private:
 	void HandleMarqueeMouseButtonDown(const FPointerEvent& MouseEvent);
 	void HandleMarqueeMouseMove(const FPointerEvent& MouseEvent);
 	void HandleMarqueeMouseButtonUp(const FPointerEvent& MouseEvent);
-	bool IsPointerOverBlockingGCSUI(const FVector2D& ScreenPosition) const;
 	FVector2D ScreenToMainWidgetLocal(const FVector2D& ScreenPosition) const;
 	void UpdateSelectionRectangleVisual(
 		const FVector2D& StartPosition,
@@ -410,6 +410,8 @@ private:
 	void BindFleetPanelButtons();
 	void BindNavigationButtons();
 	void CreateNavigationPages();
+	void ConfigureGroundStationInputPolicy(UUserWidget* MainWidget) const;
+	void ConfigureTelemetryTableInput() const;
 	void ResetNavigationPages();
 	void ShowMainPage(EGCSMainPage Page);
 	void ApplyNavigationVisibility();

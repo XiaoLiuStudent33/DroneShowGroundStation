@@ -1312,6 +1312,7 @@ bool FGCSRouteWorkflowCanonicalDroneIdTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	for (const TPair<FString,uint64>& Value : {
+		TPair<FString,uint64>(TEXT("Drone000"),0),
 		TPair<FString,uint64>(TEXT("Drone001"),1),
 		TPair<FString,uint64>(TEXT("Drone010"),10),
 		TPair<FString,uint64>(TEXT("Drone999"),999),
@@ -1329,7 +1330,7 @@ bool FGCSRouteWorkflowCanonicalDroneIdTest::RunTest(const FString& Parameters)
 			Value.Key);
 	}
 	const TArray<FString> InvalidValues={FString(),TEXT("Drone1"),TEXT("Drone01"),
-		TEXT("Drone000"),TEXT("Drone0"),TEXT("Drone0001"),TEXT("DroneABC"),
+		TEXT("Drone0"),TEXT("Drone0001"),TEXT("DroneABC"),
 		TEXT("drone001"),TEXT("DRONE001"),TEXT(" Drone001"),TEXT("Drone001 "),
 		TEXT("Drone-1"),TEXT("Drone001x"),TEXT("Drone18446744073709551616")};
 	for (const FString& Invalid : InvalidValues)
@@ -1353,17 +1354,17 @@ bool FGCSRouteWorkflowAutoStartExactlyOnceTest::RunTest(const FString& Parameter
 	UGCSRouteWorkflowCoordinator* C=NewObject<UGCSRouteWorkflowCoordinator>();
 	C->SetAppliedMaxConcurrentTargetsForTest(6);
 	FGCSRouteAutoStartSnapshot Base;
-	Base.SelectedDroneIDs={TEXT("Drone001"),TEXT("Drone002"),TEXT("Drone010")};
+	Base.SelectedDroneIDs={TEXT("Drone000"),TEXT("Drone001"),TEXT("Drone010")};
 	Base.FleetSessionID=TEXT("fleet-a"); Base.FleetRevision=7;
 	Base.ArtifactSetID=TEXT("artifact-a"); Base.ArtifactSetDigest=FString::ChrN(64,TEXT('a'));
 	Base.SourceDatasetDigest=FString::ChrN(64,TEXT('b')); Base.RouteSlotCount=1000;
 	for(const TPair<FString,int32>& Mapping : {
-		TPair<FString,int32>(TEXT("Drone001"),0),TPair<FString,int32>(TEXT("Drone002"),1),
-		TPair<FString,int32>(TEXT("Drone010"),9)})
+		TPair<FString,int32>(TEXT("Drone000"),0),TPair<FString,int32>(TEXT("Drone001"),1),
+		TPair<FString,int32>(TEXT("Drone010"),10)})
 	{
 		FGCSRouteAutoStartTargetSnapshot Target; Target.DroneID=Mapping.Key;
 		Target.EndpointIdentity=TEXT("127.0.0.1:")+FString::FromInt(14550+Mapping.Value);
-		Target.NumericDroneID=Mapping.Value+1; Target.RouteSlotIndex=Mapping.Value;
+		Target.NumericDroneID=Mapping.Value; Target.RouteSlotIndex=Mapping.Value;
 		Target.RouteRelativePath=FString::Printf(TEXT("routes/%d.waypoints"),Mapping.Value);
 		Target.RouteFileByteSize=100; Target.RouteDigest=FString::ChrN(64,TEXT('c'));
 		Base.Targets.Add(Target);
@@ -1408,12 +1409,12 @@ bool FGCSRouteWorkflowAutoStartSingleTargetTest::RunTest(const FString& Paramete
 {
 	(void)Parameters;
 	UGCSRouteWorkflowCoordinator* C=NewObject<UGCSRouteWorkflowCoordinator>();
-	FGCSRouteAutoStartSnapshot Base; Base.SelectedDroneIDs={TEXT("Drone001")};
+	FGCSRouteAutoStartSnapshot Base; Base.SelectedDroneIDs={TEXT("Drone000")};
 	Base.FleetSessionID=TEXT("fleet-single"); Base.FleetRevision=3;
 	Base.ArtifactSetID=TEXT("artifact-single"); Base.ArtifactSetDigest=FString::ChrN(64,TEXT('a'));
 	Base.SourceDatasetDigest=FString::ChrN(64,TEXT('b')); Base.RouteSlotCount=1000;
-	FGCSRouteAutoStartTargetSnapshot Target; Target.DroneID=TEXT("Drone001");
-	Target.EndpointIdentity=TEXT("127.0.0.1:14550"); Target.NumericDroneID=1;
+	FGCSRouteAutoStartTargetSnapshot Target; Target.DroneID=TEXT("Drone000");
+	Target.EndpointIdentity=TEXT("127.0.0.1:14550"); Target.NumericDroneID=0;
 	Target.RouteSlotIndex=0; Target.RouteRelativePath=TEXT("manifest/routes/slot-zero.waypoints");
 	Target.RouteFileByteSize=100; Target.RouteDigest=FString::ChrN(64,TEXT('c'));
 	Base.Targets.Add(Target);
@@ -1444,7 +1445,7 @@ bool FGCSRouteWorkflowAutoStartSingleTargetTest::RunTest(const FString& Paramete
 	TestEqual(TEXT("Single target syncs once"),SyncCalls,1);
 	TestEqual(TEXT("Single target starts once"),StartCalls,1);
 	TestEqual(TEXT("Single target count"),C->GetAutoStartSnapshotForTest().Targets.Num(),1);
-	TestEqual(TEXT("Drone001 maps to RouteSlot 0"),C->GetAutoStartSnapshotForTest().Targets[0].RouteSlotIndex,0);
+	TestEqual(TEXT("Drone000 maps directly to RouteSlot 0"),C->GetAutoStartSnapshotForTest().Targets[0].RouteSlotIndex,0);
 	TestEqual(TEXT("Manifest record path is preserved"),
 		C->GetAutoStartSnapshotForTest().Targets[0].RouteRelativePath,
 		FString(TEXT("manifest/routes/slot-zero.waypoints")));
@@ -1461,10 +1462,10 @@ bool FGCSRouteWorkflowAutoStartFailClosedTest::RunTest(const FString& Parameters
 	auto RunScenario=[this](const FString& Name,const bool bSyncFailure,const bool bStaleAccepted)
 	{
 		UGCSRouteWorkflowCoordinator* C=NewObject<UGCSRouteWorkflowCoordinator>();
-		FGCSRouteAutoStartSnapshot Base; Base.SelectedDroneIDs={TEXT("Drone001")};
+		FGCSRouteAutoStartSnapshot Base; Base.SelectedDroneIDs={TEXT("Drone000")};
 		Base.FleetSessionID=TEXT("fleet-a"); Base.FleetRevision=1; Base.ArtifactSetID=TEXT("artifact-a");
 		Base.ArtifactSetDigest=FString::ChrN(64,TEXT('a')); Base.SourceDatasetDigest=FString::ChrN(64,TEXT('b')); Base.RouteSlotCount=1000;
-		FGCSRouteAutoStartTargetSnapshot Target; Target.DroneID=TEXT("Drone001");Target.EndpointIdentity=TEXT("127.0.0.1:14550");Target.NumericDroneID=1;Target.RouteSlotIndex=0;Target.RouteRelativePath=TEXT("routes/0.waypoints");Target.RouteFileByteSize=100;Target.RouteDigest=FString::ChrN(64,TEXT('c'));Base.Targets.Add(Target);
+		FGCSRouteAutoStartTargetSnapshot Target; Target.DroneID=TEXT("Drone000");Target.EndpointIdentity=TEXT("127.0.0.1:14550");Target.NumericDroneID=0;Target.RouteSlotIndex=0;Target.RouteRelativePath=TEXT("routes/0.waypoints");Target.RouteFileByteSize=100;Target.RouteDigest=FString::ChrN(64,TEXT('c'));Base.Targets.Add(Target);
 		int32 StartCalls=0; FGCSRouteAutoStartSyncObservation Observation;
 		Observation.State=static_cast<uint8>(EDSPGCSFrozenAssignmentSyncState::SyncingToConsole);
 		FGCSRouteAutoStartTestHooks Hooks;
@@ -1542,12 +1543,12 @@ bool FGCSRouteWorkflowAutoStartStaleMatrixTest::RunTest(const FString& Parameter
 	for(const FString& StaleReason : StaleReasons)
 	{
 		UGCSRouteWorkflowCoordinator* C=NewObject<UGCSRouteWorkflowCoordinator>();
-		FGCSRouteAutoStartSnapshot Base; Base.SelectedDroneIDs={TEXT("Drone001")};
+		FGCSRouteAutoStartSnapshot Base; Base.SelectedDroneIDs={TEXT("Drone000")};
 		Base.FleetSessionID=TEXT("fleet-a"); Base.FleetRevision=1;
 		Base.ArtifactSetID=TEXT("artifact-a"); Base.ArtifactSetDigest=FString::ChrN(64,TEXT('a'));
 		Base.SourceDatasetDigest=FString::ChrN(64,TEXT('b')); Base.RouteSlotCount=1000;
-		FGCSRouteAutoStartTargetSnapshot Target; Target.DroneID=TEXT("Drone001");
-		Target.EndpointIdentity=TEXT("127.0.0.1:14550"); Target.NumericDroneID=1;
+		FGCSRouteAutoStartTargetSnapshot Target; Target.DroneID=TEXT("Drone000");
+		Target.EndpointIdentity=TEXT("127.0.0.1:14550"); Target.NumericDroneID=0;
 		Target.RouteSlotIndex=0; Target.RouteRelativePath=TEXT("routes/0.waypoints");
 		Target.RouteFileByteSize=100; Target.RouteDigest=FString::ChrN(64,TEXT('c'));
 		Base.Targets.Add(Target);
@@ -1723,7 +1724,7 @@ bool FGCSRouteWorkflowConfirmedMappingPriorityTest::RunTest(const FString& Param
 	TestEqual(TEXT("Working is rebuilt from RouteSlot37"), BuiltRouteSlot, 37);
 	TestEqual(TEXT("Frozen mapping remains RouteSlot37"), FrozenRouteSlot, 37);
 	TestEqual(TEXT("Upload target remains RouteSlot37"), StartedRouteSlot, 37);
-	TestNotEqual(TEXT("Drone005 is never rewritten to legacy RouteSlot4"), StartedRouteSlot, 4);
+	TestNotEqual(TEXT("Drone005 confirmed override is never rewritten to default RouteSlot5"), StartedRouteSlot, 5);
 	TestTrue(TEXT("Confirmed authority marker remains frozen in transaction"),
 		Coordinator->GetAutoStartSnapshotForTest().bUsesConfirmedNpzMapping);
 	Coordinator->Shutdown();

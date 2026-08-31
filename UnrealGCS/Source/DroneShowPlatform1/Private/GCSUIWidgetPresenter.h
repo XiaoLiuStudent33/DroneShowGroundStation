@@ -31,5 +31,5 @@ struct FGCSUIWidgetPresenter final
 	static void SetWidgetVisible(
 		const TWeakObjectPtr<UUserWidget>& Widget,
 		bool bVisible,
-		bool bHitTestInvisibleWhenVisible = false);
+		bool bSelfHitTestInvisibleWhenVisible = false);
 };
