@@ -1,9 +1,9 @@
 /**
- * @brief UE Fleet ×´Ì¬È¨ÍşÔ´£¬Î¬»¤ DronesByID¡¢ÎÈ¶¨ DroneOrder ºÍÏêÇéÑ¡Ôñ¡£
+ * @brief UE Fleet çŠ¶æ€æƒå¨æºï¼Œç»´æŠ¤ DronesByIDã€ç¨³å®š DroneOrder å’Œè¯¦æƒ…é€‰æ‹©ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * ÊäÈë£ºGCSServerAdapter Ô­×ÓÌá½»µÄ Snapshot/Delta£»Êä³ö£ºUI ºÍ Fleet Visualization ÊÂ¼ş/²éÑ¯¡£
- * ¹Ø¼üÔ¼Êø£ºCurrentSelectedDroneID Ö»±íÊ¾ÏêÇéÑ¡Ôñ£»DroneOrder ÊÇ ParticleIndex ÎÈ¶¨Ó³Éä»ù´¡¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è¾“å…¥ï¼šGCSServerAdapter åŸå­æäº¤çš„ Snapshot/Deltaï¼›è¾“å‡ºï¼šUI å’Œ Fleet Visualization äº‹ä»¶/æŸ¥è¯¢ã€‚
+ * å…³é”®çº¦æŸï¼šCurrentSelectedDroneID åªè¡¨ç¤ºè¯¦æƒ…é€‰æ‹©ï¼›DroneOrder æ˜¯ ParticleIndex ç¨³å®šæ˜ å°„åŸºç¡€ã€‚
  */
 #pragma once
 
@@ -119,6 +119,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|Fleet|Geo")
 	FFleetGeoOrigin GetFleetGeoOrigin() const { return FleetGeoOrigin; }
+
+	/**
+	 * Locks the live fleet's local origin to one physical drone's current GPS
+	 * snapshot. Transport identity and telemetry values are never rewritten.
+	 */
+	bool SetGeoOriginFromDroneID(const FString& DroneID, FString& OutError);
 
 	UPROPERTY(BlueprintAssignable, Category = "Drone GCS|Fleet")
 	FFleetChangedEvent OnFleetChanged;

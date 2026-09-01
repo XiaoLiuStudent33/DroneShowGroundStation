@@ -73,6 +73,19 @@ public:
 	/** Display-only zero-based RouteSlot override keyed by the unchanged network DroneID. */
 	void SetConfirmedRouteSlotDisplayOverrides(const TMap<FString, int32>& OverridesByDroneID);
 	void ClearConfirmedRouteSlotDisplayOverrides();
+	/** Display-only pile numbering swap; confirmed NPZ RouteSlots always win. */
+	void SetFixedPileDroneID(const FString& DroneID);
+	void ClearFixedPileDroneID();
+	/** Resolves the number currently rendered on a particle back to its physical DroneID. */
+	bool TryResolveDroneIDFromDisplayID(int32 DisplayID, FString& OutDroneID) const;
+	/** Freezes the current live physical DroneID -> effective rendered number mapping. */
+	bool TryGetLiveDisplayIDSnapshot(
+		TMap<FString, int32>& OutDisplayIDsByDroneID,
+		FString& OutError) const;
+	bool HasConfirmedRouteSlotDisplayOverrides() const
+	{
+		return !ConfirmedRouteSlotDisplayOverrides.IsEmpty();
+	}
 	/** Display-only degraded assignment state: red marker and hidden number label. */
 	void SetNpzNumberingAnomalyDroneIDs(const TArray<FString>& DroneIDs);
 	void ClearNpzNumberingAnomalyDroneIDs();
@@ -189,6 +202,8 @@ private:
 	TSet<FString> CommandSelectedDroneIDs;
 	/** Display-only cache; keys are real DroneIDs and values are zero-based RouteSlots. */
 	TMap<FString, int32> ConfirmedRouteSlotDisplayOverrides;
+	/** Physical identity of the current pile; never replaces the transport DroneID. */
+	FString FixedPileDroneID;
 	/** Display-only cache; these live drones are deliberately excluded from upload targets. */
 	TSet<FString> NpzNumberingAnomalyDroneIDs;
 	EGCSVisualizationMode VisualizationMode = EGCSVisualizationMode::Live;
@@ -220,7 +235,10 @@ private:
 	bool bCesiumReadyLogged = false;
 	bool bCesiumMissingLogged = false;
 	bool bOriginWorldPositionInitialized = false;
+	/** Stable presentation anchor, normally this visualization actor's location. */
 	FVector OriginWorldPosition = FVector::ZeroVector;
+	/** Absolute Cesium position used only to derive live relative positions and orientation. */
+	FVector GeographicOriginWorldPosition = FVector::ZeroVector;
 	bool bRoutePreviewOriginWorldPositionInitialized = false;
 	FVector RoutePreviewOriginWorldPosition = FVector::ZeroVector;
 	bool bCachedFleetVisualCenterValid = false;

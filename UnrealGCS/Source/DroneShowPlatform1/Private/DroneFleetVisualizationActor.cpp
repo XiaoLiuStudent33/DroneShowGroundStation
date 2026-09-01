@@ -63,6 +63,11 @@ ADroneFleetVisualizationActor::ADroneFleetVisualizationActor()
 	DroneFleetNiagara->SetupAttachment(SceneRoot);
 	DroneFleetNiagara->SetAutoActivate(false);
 	DroneFleetNiagara->SetAutoDestroy(false);
+	// Keep the moving drone markers above the coordinate-axis world overlay.
+	// A spatial Z offset is insufficient because live drones can move above and
+	// below the axis plane; the foreground depth group provides stable ordering.
+	DroneFleetNiagara->SetDepthPriorityGroup(SDPG_Foreground);
+	DroneFleetNiagara->SetTranslucentSortPriority(10);
 }
 
 void ADroneFleetVisualizationActor::BeginPlay()
@@ -569,6 +574,111 @@ void ADroneFleetVisualizationActor::ClearConfirmedRouteSlotDisplayOverrides()
 	PushDroneLabelAttributesToNiagara();
 }
 
+void ADroneFleetVisualizationActor::SetFixedPileDroneID(const FString& DroneID)
+{
+	if (FixedPileDroneID.Equals(DroneID, ESearchCase::CaseSensitive))
+	{
+		return;
+	}
+	FixedPileDroneID = DroneID;
+	RebuildDroneLabelAttributes();
+	PushDroneLabelAttributesToNiagara();
+}
+
+void ADroneFleetVisualizationActor::ClearFixedPileDroneID()
+{
+	if (FixedPileDroneID.IsEmpty())
+	{
+		return;
+	}
+	FixedPileDroneID.Reset();
+	RebuildDroneLabelAttributes();
+	PushDroneLabelAttributesToNiagara();
+}
+
+bool ADroneFleetVisualizationActor::TryResolveDroneIDFromDisplayID(
+	const int32 DisplayID,
+	FString& OutDroneID) const
+{
+	OutDroneID.Reset();
+	if (DisplayID < 0)
+	{
+		return false;
+	}
+
+	const int32 Count = FMath::Min3(
+		ParticleDroneIDs.Num(),
+		DroneDisplayIDs.Num(),
+		DroneSelectedMasks.Num());
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		// A negative selection mask is the existing hidden-label sentinel.
+		if (DroneSelectedMasks[Index] < 0.0f
+			|| FMath::RoundToInt(DroneDisplayIDs[Index]) != DisplayID)
+		{
+			continue;
+		}
+		if (!OutDroneID.IsEmpty())
+		{
+			// A displayed number must identify exactly one particle.
+			OutDroneID.Reset();
+			return false;
+		}
+		OutDroneID = ParticleDroneIDs[Index];
+	}
+	return !OutDroneID.IsEmpty();
+}
+
+bool ADroneFleetVisualizationActor::TryGetLiveDisplayIDSnapshot(
+	TMap<FString, int32>& OutDisplayIDsByDroneID,
+	FString& OutError) const
+{
+	OutDisplayIDsByDroneID.Reset();
+	OutError.Reset();
+	if (VisualizationMode != EGCSVisualizationMode::Live)
+	{
+		OutError = TEXT("当前正在航线预览");
+		return false;
+	}
+	const int32 Count = ParticleDroneIDs.Num();
+	if (Count <= 0
+		|| DroneDisplayIDs.Num() != Count
+		|| DroneSelectedMasks.Num() != Count
+		|| DronePositions.Num() != Count)
+	{
+		OutError = TEXT("无人机显示快照尚未准备完成");
+		return false;
+	}
+
+	TSet<int32> SeenDisplayIDs;
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		const FString& DroneID = ParticleDroneIDs[Index];
+		const float DisplayValue = DroneDisplayIDs[Index];
+		if (DroneID.IsEmpty()
+			|| DroneSelectedMasks[Index] < 0.0f
+			|| !FMath::IsFinite(DisplayValue))
+		{
+			OutError = TEXT("存在隐藏或无效的无人机编号");
+			OutDisplayIDsByDroneID.Reset();
+			return false;
+		}
+		const int32 DisplayID = FMath::RoundToInt(DisplayValue);
+		if (DisplayID < 0
+			|| !FMath::IsNearlyEqual(DisplayValue, static_cast<float>(DisplayID))
+			|| SeenDisplayIDs.Contains(DisplayID)
+			|| OutDisplayIDsByDroneID.Contains(DroneID))
+		{
+			OutError = TEXT("存在重复或无效的无人机编号");
+			OutDisplayIDsByDroneID.Reset();
+			return false;
+		}
+		SeenDisplayIDs.Add(DisplayID);
+		OutDisplayIDsByDroneID.Add(DroneID, DisplayID);
+	}
+	return true;
+}
+
 void ADroneFleetVisualizationActor::SetNpzNumberingAnomalyDroneIDs(
 	const TArray<FString>& DroneIDs)
 {
@@ -837,14 +947,17 @@ bool ADroneFleetVisualizationActor::TryGetGeographicTangentBasis(
 		return false;
 	}
 
+	FVector GeographicBasisOriginWorld = FVector::ZeroVector;
 	if (VisualizationMode == EGCSVisualizationMode::RoutePreview
 		&& bRoutePreviewOriginWorldPositionInitialized)
 	{
 		OutOriginWorld = RoutePreviewOriginWorldPosition;
+		GeographicBasisOriginWorld = RoutePreviewOriginWorldPosition;
 	}
 	else if (bOriginWorldPositionInitialized)
 	{
 		OutOriginWorld = OriginWorldPosition;
+		GeographicBasisOriginWorld = GeographicOriginWorldPosition;
 	}
 	else
 	{
@@ -853,7 +966,7 @@ bool ADroneFleetVisualizationActor::TryGetGeographicTangentBasis(
 
 	const FTransform GeoreferenceActorTransform = Georeference->GetActorTransform();
 	const FVector OriginInGeoreference =
-		GeoreferenceActorTransform.InverseTransformPosition(OutOriginWorld);
+		GeoreferenceActorTransform.InverseTransformPosition(GeographicBasisOriginWorld);
 	const FMatrix EastSouthUpToGeoreference =
 		Georeference->ComputeEastSouthUpToUnrealTransformation(OriginInGeoreference);
 
@@ -900,6 +1013,7 @@ void ADroneFleetVisualizationActor::UpdateOriginWorldPosition(const FFleetGeoOri
 	{
 		bOriginWorldPositionInitialized = false;
 		OriginWorldPosition = FVector::ZeroVector;
+		GeographicOriginWorldPosition = FVector::ZeroVector;
 		CachedOriginDroneID.Reset();
 		return;
 	}
@@ -909,15 +1023,18 @@ void ADroneFleetVisualizationActor::UpdateOriginWorldPosition(const FFleetGeoOri
 	{
 		bOriginWorldPositionInitialized = false;
 		OriginWorldPosition = FVector::ZeroVector;
+		GeographicOriginWorldPosition = FVector::ZeroVector;
 		return;
 	}
 
+	const FVector DisplayAnchorWorld = GetActorLocation();
 	const bool bSameLockedOrigin = bOriginWorldPositionInitialized
 		&& CachedOriginDroneID == FleetGeoOrigin.OriginDroneID
 		&& CachedOriginLatitude == FleetGeoOrigin.OriginLatitude
 		&& CachedOriginLongitude == FleetGeoOrigin.OriginLongitude
 		&& CachedOriginAltitudeAMSL == FleetGeoOrigin.OriginAltitudeAMSL
-		&& bCachedOriginAltitudeValid == FleetGeoOrigin.bOriginAltitudeValid;
+		&& bCachedOriginAltitudeValid == FleetGeoOrigin.bOriginAltitudeValid
+		&& OriginWorldPosition.Equals(DisplayAnchorWorld);
 	if (bSameLockedOrigin)
 	{
 		return;
@@ -933,13 +1050,16 @@ void ADroneFleetVisualizationActor::UpdateOriginWorldPosition(const FFleetGeoOri
 			FleetGeoOrigin.OriginLongitude,
 			FleetGeoOrigin.OriginLatitude,
 			HeightMeters));
-	OriginWorldPosition = Georeference->GetActorTransform().TransformPosition(GeoreferencePosition);
-	if (OriginWorldPosition.ContainsNaN())
+	GeographicOriginWorldPosition =
+		Georeference->GetActorTransform().TransformPosition(GeoreferencePosition);
+	if (GeographicOriginWorldPosition.ContainsNaN())
 	{
 		OriginWorldPosition = FVector::ZeroVector;
+		GeographicOriginWorldPosition = FVector::ZeroVector;
 		bOriginWorldPositionInitialized = false;
 		return;
 	}
+	OriginWorldPosition = DisplayAnchorWorld;
 
 	CachedOriginDroneID = FleetGeoOrigin.OriginDroneID;
 	CachedOriginLatitude = FleetGeoOrigin.OriginLatitude;
@@ -980,9 +1100,13 @@ FVector ADroneFleetVisualizationActor::ConvertDroneGPSPosition(
 			Drone.GPSLon,
 			Drone.GPSLat,
 			HeightMeters));
-	const FVector WorldPosition =
+	const FVector GeographicWorldPosition =
 		Georeference->GetActorTransform().TransformPosition(GeoreferencePosition);
-	return WorldPosition.ContainsNaN() ? FVector::ZeroVector : WorldPosition;
+	if (GeographicWorldPosition.ContainsNaN() || !bOriginWorldPositionInitialized)
+	{
+		return FVector::ZeroVector;
+	}
+	return OriginWorldPosition + (GeographicWorldPosition - GeographicOriginWorldPosition);
 }
 
 void ADroneFleetVisualizationActor::RebuildDroneLabelAttributes()
@@ -990,6 +1114,36 @@ void ADroneFleetVisualizationActor::RebuildDroneLabelAttributes()
 	const int32 ParticleCount = DronePositions.Num();
 	DroneDisplayIDs.SetNumUninitialized(ParticleCount);
 	DroneSelectedMasks.SetNumUninitialized(ParticleCount);
+
+	std::uint64_t FixedPilePreviousDisplayID = 0;
+	bool bHasFixedPilePreviousDisplayID = false;
+	FString ZeroDisplayDroneID;
+	for (const FString& DroneID : ParticleDroneIDs)
+	{
+		if (NpzNumberingAnomalyDroneIDs.Contains(DroneID))
+		{
+			continue;
+		}
+		std::uint64_t NumericDroneID = 0;
+		FTCHARToUTF8 EncodedDroneID(*DroneID);
+		if (!dronegcs::identity::TryParseDroneLogicalId(
+			std::string_view(EncodedDroneID.Get(), EncodedDroneID.Length()),
+			NumericDroneID))
+		{
+			continue;
+		}
+		// Fixed-pile swapping is intentionally based on the non-NPZ number. NPZ
+		// RouteSlot overrides are applied later and always have higher priority.
+		if (NumericDroneID == 0 && ZeroDisplayDroneID.IsEmpty())
+		{
+			ZeroDisplayDroneID = DroneID;
+		}
+		if (DroneID.Equals(FixedPileDroneID, ESearchCase::CaseSensitive))
+		{
+			FixedPilePreviousDisplayID = NumericDroneID;
+			bHasFixedPilePreviousDisplayID = true;
+		}
+	}
 	for (int32 Index = 0; Index < ParticleCount; ++Index)
 	{
 		const bool bHasDroneID = ParticleDroneIDs.IsValidIndex(Index);
@@ -999,6 +1153,13 @@ void ADroneFleetVisualizationActor::RebuildDroneLabelAttributes()
 		const int32* ConfirmedRouteSlot = bHasDroneID
 			? ConfirmedRouteSlotDisplayOverrides.Find(DroneID)
 			: nullptr;
+		const bool bIsFixedPile = bHasDroneID
+			&& bHasFixedPilePreviousDisplayID
+			&& DroneID.Equals(FixedPileDroneID, ESearchCase::CaseSensitive);
+		const bool bIsZeroDisplayDrone = bHasDroneID
+			&& bHasFixedPilePreviousDisplayID
+			&& !ZeroDisplayDroneID.Equals(FixedPileDroneID, ESearchCase::CaseSensitive)
+			&& DroneID.Equals(ZeroDisplayDroneID, ESearchCase::CaseSensitive);
 
 		std::uint64_t NumericDroneID = 0;
 		bool bHasCanonicalDroneID = false;
@@ -1010,10 +1171,12 @@ void ADroneFleetVisualizationActor::RebuildDroneLabelAttributes()
 				NumericDroneID);
 		}
 		const bool bHideLabel = bNumberingAnomaly || !bHasCanonicalDroneID;
-		DroneDisplayIDs[Index] = static_cast<float>(
-			bHideLabel ? 0 : (ConfirmedRouteSlot
-				? static_cast<std::uint64_t>(*ConfirmedRouteSlot)
-				: NumericDroneID));
+		const std::uint64_t DisplayID = ConfirmedRouteSlot
+			? static_cast<std::uint64_t>(*ConfirmedRouteSlot)
+			: (bIsFixedPile
+				? 0
+				: (bIsZeroDisplayDrone ? FixedPilePreviousDisplayID : NumericDroneID));
+		DroneDisplayIDs[Index] = static_cast<float>(bHideLabel ? 0 : DisplayID);
 		// -1 is a per-particle label-hidden sentinel consumed by M_DroneIdLabel.
 		DroneSelectedMasks[Index] = bHideLabel
 			? -1.0f

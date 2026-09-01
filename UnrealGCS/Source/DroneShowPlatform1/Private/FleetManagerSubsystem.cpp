@@ -1,9 +1,9 @@
 /**
- * @brief ÊµÏÖ Fleet Snapshot/Delta µÄÔ­×ÓÓ¦ÓÃ¡¢ÎÈ¶¨Ë³ÐòºÍÏêÇéÑ¡Ôñ±£³Ö¡£
+ * @brief å®žçŽ° Fleet Snapshot/Delta çš„åŽŸå­åº”ç”¨ã€ç¨³å®šé¡ºåºå’Œè¯¦æƒ…é€‰æ‹©ä¿æŒã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * µ÷ÓÃÁ´£ºGCSServerAdapter -> FleetManager -> GCSUIBridge/DroneFleetVisualizationActor¡£
- * Offline Drone ÈÔ´æÔÚÓÚ Snapshot/DroneOrder ÖÐ£¬²»ÒòÔÚÏß×´Ì¬±ä»¯±»ÒÆ³ý»òÖØÅÅ¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è°ƒç”¨é“¾ï¼šGCSServerAdapter -> FleetManager -> GCSUIBridge/DroneFleetVisualizationActorã€‚
+ * Offline Drone ä»å­˜åœ¨äºŽ Snapshot/DroneOrder ä¸­ï¼Œä¸å› åœ¨çº¿çŠ¶æ€å˜åŒ–è¢«ç§»é™¤æˆ–é‡æŽ’ã€‚
  */
 #include "FleetManagerSubsystem.h"
 
@@ -141,8 +141,8 @@ bool UFleetManagerSubsystem::ApplySnapshot(const FGCSFleetSnapshot& Snapshot)
 	}
 
 	FString NewSelectedDroneID;
-	// CurrentSelectedDroneID Ö»ÓÃÓÚÏêÇé²é¿´/¸ßÁÁ£»¶à»úÃüÁî¹´Ñ¡ÓÉ UI Bridge µÄ
-	// SelectedCommandDroneIDs ¶ÀÁ¢Î¬»¤£¬Á½ÖÖÑ¡Ôñ×´Ì¬²»ÄÜ»¥Ïà¸²¸Ç¡£
+	// CurrentSelectedDroneID åªç”¨äºŽè¯¦æƒ…æŸ¥çœ‹/é«˜äº®ï¼›å¤šæœºå‘½ä»¤å‹¾é€‰ç”± UI Bridge çš„
+	// SelectedCommandDroneIDs ç‹¬ç«‹ç»´æŠ¤ï¼Œä¸¤ç§é€‰æ‹©çŠ¶æ€ä¸èƒ½äº’ç›¸è¦†ç›–ã€‚
 	if (NewDronesByID.Contains(CurrentSelectedDroneID))
 	{
 		NewSelectedDroneID = CurrentSelectedDroneID;
@@ -152,8 +152,8 @@ bool UFleetManagerSubsystem::ApplySnapshot(const FGCSFleetSnapshot& Snapshot)
 		NewSelectedDroneID = SnapshotSelectedDroneID;
 	}
 
-	// Snapshot Ë³ÐòÀ´×Ô Console ÎÈ¶¨ SessionOrder¡£ÕûÅúÌæ»»ºó±£³Ö
-	// DroneOrder[Index] -> Niagara ParticleIndex Ó³Éä£¬Offline ²»µ¥¶ÀÖØÅÅ¡£
+	// Snapshot é¡ºåºæ¥è‡ª Console ç¨³å®š SessionOrderã€‚æ•´æ‰¹æ›¿æ¢åŽä¿æŒ
+	// DroneOrder[Index] -> Niagara ParticleIndex æ˜ å°„ï¼ŒOffline ä¸å•ç‹¬é‡æŽ’ã€‚
 	DronesByID = MoveTemp(NewDronesByID);
 	DroneOrder = MoveTemp(NewDroneOrder);
 	CurrentSelectedDroneID = MoveTemp(NewSelectedDroneID);
@@ -267,6 +267,43 @@ bool UFleetManagerSubsystem::GetDroneByID(
 	}
 
 	OutDroneData = *DroneData;
+	return true;
+}
+
+bool UFleetManagerSubsystem::SetGeoOriginFromDroneID(
+	const FString& DroneID,
+	FString& OutError)
+{
+	check(IsInGameThread());
+	OutError.Reset();
+
+	const FDroneData* OriginDrone = DronesByID.Find(DroneID);
+	if (!OriginDrone)
+	{
+		OutError = FString::Printf(TEXT("æ— äººæœº %s ä¸å­˜åœ¨"), *DroneID);
+		return false;
+	}
+	if (!OriginDrone->bOnline)
+	{
+		OutError = FString::Printf(TEXT("æ— äººæœº %s å½“å‰ç¦»çº¿"), *DroneID);
+		return false;
+	}
+	if (!DroneGPS::IsValid(*OriginDrone))
+	{
+		OutError = FString::Printf(TEXT("æ— äººæœº %s æ²¡æœ‰æœ‰æ•ˆçš„ 3D GPS å®šä½"), *DroneID);
+		return false;
+	}
+
+	FleetGeoOrigin.bOriginInitialized = true;
+	FleetGeoOrigin.OriginDroneID = OriginDrone->DroneID;
+	FleetGeoOrigin.OriginLatitude = OriginDrone->GPSLat;
+	FleetGeoOrigin.OriginLongitude = OriginDrone->GPSLon;
+	FleetGeoOrigin.bOriginAltitudeValid = OriginDrone->bAltitudeValid;
+	FleetGeoOrigin.OriginAltitudeAMSL = OriginDrone->bAltitudeValid
+		? OriginDrone->AltitudeAMSL
+		: 0.0f;
+
+	OnFleetChanged.Broadcast();
 	return true;
 }
 

@@ -189,9 +189,16 @@ bool FDroneFleetVisualizationBridgeTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Origin world position initialized"), Visualization->IsOriginWorldPositionInitialized());
 	TestEqual(TEXT("100 GPS drones produce 100 positions"), InitialGPSPositions.Num(), 100);
 	TestNotEqual(TEXT("Different GPS values produce different Cesium positions"), InitialGPSPositions[0], InitialGPSPositions[1]);
-	for (const FVector& Position : InitialGPSPositions)
+	TestEqual(
+		TEXT("The locked origin drone is rebased to the visualization anchor"),
+		InitialGPSPositions[0],
+		Visualization->GetActorLocation());
+	for (int32 Index = 1; Index < InitialGPSPositions.Num(); ++Index)
 	{
-		TestNotEqual(TEXT("Valid GPS produces non-zero Cesium position"), Position, FVector::ZeroVector);
+		TestNotEqual(
+			TEXT("Other valid GPS drones retain non-zero relative offsets"),
+			InitialGPSPositions[Index],
+			Visualization->GetActorLocation());
 	}
 
 	FGCSTelemetryBatch MoveOriginDroneBatch;
@@ -245,6 +252,107 @@ bool FDroneFleetVisualizationBridgeTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Offline origin drone remains in fleet"), Visualization->GetVisualizationDroneCount(), 100);
 	TestEqual(TEXT("Offline origin drone keeps ParticleIndex zero"), Visualization->GetParticleDroneIDs()[0], FString(TEXT("Drone001")));
 	TestEqual(TEXT("Offline does not change OriginWorldPosition"), Visualization->GetOriginWorldPosition(), LockedOriginWorldPosition);
+
+	const TArray<FVector> PositionsBeforeFixedPile = Visualization->GetDronePositions();
+	FString FixedPileError;
+	TestFalse(
+		TEXT("An offline drone cannot become the fixed pile"),
+		Fleet->SetGeoOriginFromDroneID(TEXT("Drone001"), FixedPileError));
+	TestTrue(TEXT("Offline fixed-pile failure explains the cause"), FixedPileError.Contains(TEXT("离线")));
+	TestFalse(
+		TEXT("An unknown drone cannot become the fixed pile"),
+		Fleet->SetGeoOriginFromDroneID(TEXT("Drone999"), FixedPileError));
+	TestTrue(TEXT("Unknown fixed-pile failure explains the cause"), FixedPileError.Contains(TEXT("不存在")));
+	TestTrue(
+		TEXT("A valid online drone can become the fixed pile"),
+		Fleet->SetGeoOriginFromDroneID(TEXT("Drone050"), FixedPileError));
+	Visualization->SetFixedPileDroneID(TEXT("Drone050"));
+	Visualization->RefreshFromFleet();
+	TestEqual(
+		TEXT("Fixed pile becomes the authoritative fleet origin"),
+		Fleet->GetFleetGeoOrigin().OriginDroneID,
+		FString(TEXT("Drone050")));
+	TestEqual(
+		TEXT("Fixed-pile particle is rebased exactly to the coordinate origin"),
+		Visualization->GetDronePositions()[49],
+		Visualization->GetActorLocation());
+	TestNotEqual(
+		TEXT("Changing the pile rebases the rest of the fleet"),
+		Visualization->GetDronePositions()[0],
+		PositionsBeforeFixedPile[0]);
+	TestEqual(
+		TEXT("Fixed pile gets display number zero when no NPZ number exists"),
+		Visualization->GetDroneDisplayIDsForTest()[49],
+		0.0f);
+	TMap<FString, int32> NpzPriorityOverride;
+	NpzPriorityOverride.Add(TEXT("Drone050"), 12);
+	Visualization->SetConfirmedRouteSlotDisplayOverrides(NpzPriorityOverride);
+	TestEqual(
+		TEXT("Confirmed NPZ numbering has priority over fixed-pile numbering"),
+		Visualization->GetDroneDisplayIDsForTest()[49],
+		12.0f);
+	Visualization->ClearConfirmedRouteSlotDisplayOverrides();
+	TestEqual(
+		TEXT("Clearing NPZ numbering reveals fixed-pile numbering again"),
+		Visualization->GetDroneDisplayIDsForTest()[49],
+		0.0f);
+
+	FGCSFleetSnapshot PileSwapSnapshot;
+	PileSwapSnapshot.Header.SessionID = TEXT("FLEET-VIZ-TEST");
+	PileSwapSnapshot.FleetRevision = 13;
+	PileSwapSnapshot.Drones.Add(MakeGPSDrone(0, 31.932471, 118.638531, true));
+	PileSwapSnapshot.Drones.Add(MakeGPSDrone(50, 31.932961, 118.639021, true));
+	TestTrue(TEXT("Two-drone pile swap snapshot applied"), Fleet->ApplySnapshot(PileSwapSnapshot));
+	TestTrue(
+		TEXT("Drone050 reapplied as fixed pile for the swap test"),
+		Fleet->SetGeoOriginFromDroneID(TEXT("Drone050"), FixedPileError));
+	Visualization->SetFixedPileDroneID(TEXT("Drone050"));
+	Visualization->RefreshFromFleet();
+	TestEqual(
+		TEXT("The drone previously displaying zero receives the pile's old number"),
+		Visualization->GetDroneDisplayIDsForTest()[0],
+		50.0f);
+	TestEqual(
+		TEXT("The selected pile displays zero"),
+		Visualization->GetDroneDisplayIDsForTest()[1],
+		0.0f);
+	FString ResolvedDisplayDroneID;
+	TestTrue(
+		TEXT("A swapped display number resolves to the physical drone currently showing it"),
+		Visualization->TryResolveDroneIDFromDisplayID(50, ResolvedDisplayDroneID));
+	TestEqual(
+		TEXT("Display number 50 now belongs to physical Drone000"),
+		ResolvedDisplayDroneID,
+		FString(TEXT("Drone000")));
+	TestTrue(
+		TEXT("The currently displayed 50 can become the next fixed pile"),
+		Fleet->SetGeoOriginFromDroneID(ResolvedDisplayDroneID, FixedPileError));
+	Visualization->SetFixedPileDroneID(ResolvedDisplayDroneID);
+	Visualization->RefreshFromFleet();
+	TestEqual(
+		TEXT("Applying the swapped display number moves its physical drone to the origin"),
+		Visualization->GetDronePositions()[0],
+		Visualization->GetActorLocation());
+	TestEqual(
+		TEXT("The newly selected physical drone displays zero"),
+		Visualization->GetDroneDisplayIDsForTest()[0],
+		0.0f);
+	TestEqual(
+		TEXT("The previous pile receives the selected display number"),
+		Visualization->GetDroneDisplayIDsForTest()[1],
+		50.0f);
+	NpzPriorityOverride.Reset();
+	NpzPriorityOverride.Add(TEXT("Drone000"), 7);
+	NpzPriorityOverride.Add(TEXT("Drone050"), 12);
+	Visualization->SetConfirmedRouteSlotDisplayOverrides(NpzPriorityOverride);
+	TestEqual(
+		TEXT("NPZ number overrides the zero-holder side of the pile swap"),
+		Visualization->GetDroneDisplayIDsForTest()[0],
+		7.0f);
+	TestEqual(
+		TEXT("NPZ number overrides the selected-pile side of the pile swap"),
+		Visualization->GetDroneDisplayIDsForTest()[1],
+		12.0f);
 
 	UE_LOG(
 		LogTemp,

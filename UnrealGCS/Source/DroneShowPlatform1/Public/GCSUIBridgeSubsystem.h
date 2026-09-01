@@ -15,6 +15,8 @@
 
 class UButton;
 class ACameraActor;
+class AActor;
+class ADroneFleetVisualizationActor;
 class APlayerController;
 class UGCSDroneRowView;
 class UGCSRouteWorkflowCoordinator;
@@ -22,6 +24,7 @@ class UEditableTextBox;
 class UEditableText;
 class USlider;
 class USpinBox;
+class UCheckBox;
 class UTextBlock;
 class UUserWidget;
 class UWidget;
@@ -280,6 +283,15 @@ private:
 	void HandleTimeStopClicked();
 
 	UFUNCTION()
+	void HandleFixedPileApplyClicked();
+
+	UFUNCTION()
+	void HandleBenchmarkExportClicked();
+
+	UFUNCTION()
+	void HandleMapCheckStateChanged(bool bIsChecked);
+
+	UFUNCTION()
 	void HandleProductionCommandResult(
 		const FGCSProductionCommandResult& Result);
 
@@ -318,6 +330,7 @@ private:
 	UButton* FindToolbarButton(const FName Name) const;
 	UButton* FindRightPanelButton(const FName Name) const;
 	USpinBox* FindRightPanelSpinBox(const FName Name) const;
+	UCheckBox* FindRightPanelCheckBox(const FName Name) const;
 	UTextBlock* FindRightPanelText(const FName Name) const;
 	UTextBlock* FindText(const FName Name) const;
 	UTextBlock* FindFleetText(const FName Name) const;
@@ -394,6 +407,18 @@ private:
 	void BindExistingButtons();
 	void BindColorPaletteButtons();
 	void BindTimeControlControls();
+	void BindReferenceAndMapControls();
+	void UnbindReferenceAndMapControls();
+	ADroneFleetVisualizationActor* FindFleetVisualizationActor() const;
+	bool InitializeCoordinateAxes(
+		const FVector& OriginWorld,
+		const FVector& EastWorld,
+		const FVector& NorthWorld,
+		int32 OriginDroneNumber,
+		float AxisLengthMeters) const;
+	TArray<AActor*> FindSceneMapActors() const;
+	void SetSceneMapVisible(bool bVisible) const;
+	void SyncMapCheckBoxFromScene();
 	void BindRoutePlaybackControls();
 	bool BindRouteImportControls(UUserWidget* RouteImportWidget);
 	void OpenRouteImport();
@@ -502,6 +527,7 @@ private:
 	bool bTopDownMiddleMouseWasDown = false;
 	bool bTopDownPanning = false;
 	bool bUpdatingRouteTimelineFromState = false;
+	bool bUpdatingMapCheckBoxFromScene = false;
 	float RouteUIRefreshAccumulator = 0.0f;
 	float TimeControlUIRefreshAccumulator = 0.0f;
 	bool bTimeControlCountdownActive = false;

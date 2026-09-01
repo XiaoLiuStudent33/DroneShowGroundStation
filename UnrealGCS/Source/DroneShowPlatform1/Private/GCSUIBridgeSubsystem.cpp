@@ -12,9 +12,11 @@
 #include "Components/Button.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/CheckBox.h"
 #include "Components/EditableText.h"
 #include "Components/EditableTextBox.h"
 #include "Components/ListView.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/ScrollBox.h"
 #include "Components/Slider.h"
 #include "Components/SpinBox.h"
@@ -31,10 +33,12 @@
 #include "FleetManagerSubsystem.h"
 #include "Framework/Application/IInputProcessor.h"
 #include "Framework/Application/SlateApplication.h"
+#include "GCSBenchmarkExport.h"
 #include "GCSDroneRowView.h"
 #include "GCSRouteWorkflowCoordinator.h"
 #include "GCSUIWidgetPresenter.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/Actor.h"
 #include "GameFramework/PlayerController.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
@@ -42,8 +46,11 @@
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
 #include "Misc/App.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Math/RotationMatrix.h"
+#include "UObject/StructOnScope.h"
+#include "UObject/UnrealType.h"
 #include "RoutePreviewSubsystem.h"
 #include "RouteArtifactWorkspaceSubsystem.h"
 #include "Widgets/Input/SButton.h"
@@ -60,6 +67,33 @@ namespace
 	constexpr TCHAR UploadDashboardClassPath[] =
 		TEXT("/Game/UI/WBP_GCS_UploadDashboard.WBP_GCS_UploadDashboard_C");
 	constexpr float UploadDashboardToolbarGap = 12.0f;
+	constexpr float FixedPileAxisLengthMeters = 1000.0f;
+	constexpr float FixedPileAxisDepthOffsetUU = 300.0f;
+	const FName SceneMapActorTag(TEXT("GCS.SceneMap"));
+
+	bool IsSceneMapActor(const AActor* Actor)
+	{
+		return Actor
+			&& (Actor->ActorHasTag(SceneMapActorTag)
+				|| Actor->GetClass()->GetName().StartsWith(TEXT("BP_GCS_2DMapGround")));
+	}
+
+	bool SetVectorFunctionParameter(
+		UFunction* Function,
+		void* ParameterMemory,
+		const FName Name,
+		const FVector& Value)
+	{
+		FStructProperty* Property = FindFProperty<FStructProperty>(Function, Name);
+		if (!Property || Property->Struct != TBaseStructure<FVector>::Get())
+		{
+			return false;
+		}
+		Property->CopyCompleteValue(
+			Property->ContainerPtrToValuePtr<void>(ParameterMemory),
+			&Value);
+		return true;
+	}
 
 	FString FormatTimeControlDuration(const int32 TotalSeconds)
 	{
@@ -269,6 +303,87 @@ namespace
 #endif
 	}
 
+	enum class ERuntimeSaveDialogResult : uint8
+	{
+		Selected,
+		Cancelled,
+		Failed
+	};
+
+	ERuntimeSaveDialogResult OpenRuntimeBenchmarkSaveDialog(FString& OutFilePath)
+	{
+		OutFilePath.Reset();
+#if PLATFORM_WINDOWS
+		const HRESULT InitializeResult = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+		const bool bUninitializeCom = SUCCEEDED(InitializeResult);
+		if (FAILED(InitializeResult) && InitializeResult != RPC_E_CHANGED_MODE)
+		{
+			return ERuntimeSaveDialogResult::Failed;
+		}
+
+		ERuntimeSaveDialogResult Outcome = ERuntimeSaveDialogResult::Failed;
+		IFileSaveDialog* Dialog = nullptr;
+		HRESULT Result = ::CoCreateInstance(
+			CLSID_FileSaveDialog,
+			nullptr,
+			CLSCTX_INPROC_SERVER,
+			IID_PPV_ARGS(&Dialog));
+		if (SUCCEEDED(Result) && Dialog)
+		{
+			const COMDLG_FILTERSPEC Filters[] =
+			{
+				{ L"Benchmark text files (*.txt)", L"*.txt" }
+			};
+			Dialog->SetFileTypes(UE_ARRAY_COUNT(Filters), Filters);
+			Dialog->SetFileTypeIndex(1);
+			Dialog->SetDefaultExtension(L"txt");
+			Dialog->SetFileName(L"benchmark.txt");
+
+			FILEOPENDIALOGOPTIONS Options = {};
+			if (SUCCEEDED(Dialog->GetOptions(&Options)))
+			{
+				Dialog->SetOptions(
+					Options | FOS_OVERWRITEPROMPT | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM);
+			}
+
+			const HWND ParentWindow = FSlateApplication::IsInitialized()
+				? static_cast<HWND>(const_cast<void*>(
+					FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr)))
+				: nullptr;
+			Result = Dialog->Show(ParentWindow);
+			if (Result == HRESULT_FROM_WIN32(ERROR_CANCELLED))
+			{
+				Outcome = ERuntimeSaveDialogResult::Cancelled;
+			}
+			else if (SUCCEEDED(Result))
+			{
+				IShellItem* SelectedItem = nullptr;
+				if (SUCCEEDED(Dialog->GetResult(&SelectedItem)) && SelectedItem)
+				{
+					PWSTR SelectedPath = nullptr;
+					if (SUCCEEDED(SelectedItem->GetDisplayName(SIGDN_FILESYSPATH, &SelectedPath))
+						&& SelectedPath)
+					{
+						OutFilePath = SelectedPath;
+						::CoTaskMemFree(SelectedPath);
+						Outcome = ERuntimeSaveDialogResult::Selected;
+					}
+					SelectedItem->Release();
+				}
+			}
+			Dialog->Release();
+		}
+
+		if (bUninitializeCom)
+		{
+			::CoUninitialize();
+		}
+		return Outcome;
+#else
+		return ERuntimeSaveDialogResult::Failed;
+#endif
+	}
+
 	bool OpenRuntimeFolderDialog(FString& OutFolderPath)
 	{
 		OutFolderPath.Reset();
@@ -370,6 +485,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	UnregisterMarqueeInputProcessor();
 	ResetNavigationPages();
 	UnbindUploadDashboardControls();
+	UnbindReferenceAndMapControls();
 
 	MainWidgetRef = MainWidget;
 	ConfigureGroundStationInputPolicy(MainWidget);
@@ -468,6 +584,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	BindExistingButtons();
 	BindColorPaletteButtons();
 	BindTimeControlControls();
+	BindReferenceAndMapControls();
 	BindRoutePlaybackControls();
 	BindFleetPanelButtons();
 	SetLegacyHoverSelectionVisible(false);
@@ -522,6 +639,7 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 {
 	UnregisterMarqueeInputProcessor();
 	EndTopDownLocateLock();
+	UnbindReferenceAndMapControls();
 	ResetUploadDashboard();
 	if (UButton* SelectAllButton = FindFleetButton(TEXT("BTN_FleetSelectALL")))
 	{
@@ -3849,6 +3967,14 @@ USpinBox* UGCSUIBridgeSubsystem::FindRightPanelSpinBox(const FName Name) const
 		: nullptr;
 }
 
+UCheckBox* UGCSUIBridgeSubsystem::FindRightPanelCheckBox(const FName Name) const
+{
+	UUserWidget* Panel = RightPanelWidget.Get();
+	return Panel && Panel->WidgetTree
+		? Cast<UCheckBox>(Panel->WidgetTree->FindWidget(Name))
+		: nullptr;
+}
+
 UTextBlock* UGCSUIBridgeSubsystem::FindRightPanelText(const FName Name) const
 {
 	return FGCSUIWidgetPresenter::FindText(RightPanelWidget.Get(), Name);
@@ -4134,6 +4260,498 @@ void UGCSUIBridgeSubsystem::BindTimeControlControls()
 		InitialTime.GetHour(),
 		InitialTime.GetMinute(),
 		InitialTime.GetSecond());
+}
+
+void UGCSUIBridgeSubsystem::BindReferenceAndMapControls()
+{
+	UnbindReferenceAndMapControls();
+
+	UButton* ApplyPileButton = FindRightPanelButton(TEXT("BTN_ApplyFixedPile"));
+	UButton* BenchmarkExportButton = FindRightPanelButton(TEXT("BTN_DaoChu"));
+	USpinBox* PileInput = FindRightPanelSpinBox(TEXT("SPN_FixedPileDroneID"));
+	UTextBlock* PileStatus = FindRightPanelText(TEXT("TXT_FixedPileStatus"));
+	UTextBlock* BenchmarkExportStatus = FindRightPanelText(TEXT("TXT_BenchmarkExportStatus"));
+	UCheckBox* MapCheckBox = FindRightPanelCheckBox(TEXT("CheckBox_Map"));
+	if (!ApplyPileButton
+		|| !BenchmarkExportButton
+		|| !PileInput
+		|| !PileStatus
+		|| !BenchmarkExportStatus
+		|| !MapCheckBox)
+	{
+		UE_LOG(
+			LogTemp,
+			Error,
+			TEXT("[GCSReferenceUI] Asset mismatch Apply=%s Export=%s Input=%s PileStatus=%s ExportStatus=%s Map=%s"),
+			ApplyPileButton ? TEXT("YES") : TEXT("NO"),
+			BenchmarkExportButton ? TEXT("YES") : TEXT("NO"),
+			PileInput ? TEXT("YES") : TEXT("NO"),
+			PileStatus ? TEXT("YES") : TEXT("NO"),
+			BenchmarkExportStatus ? TEXT("YES") : TEXT("NO"),
+			MapCheckBox ? TEXT("YES") : TEXT("NO"));
+		return;
+	}
+
+	ApplyPileButton->OnClicked.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleFixedPileApplyClicked);
+	BenchmarkExportButton->OnClicked.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleBenchmarkExportClicked);
+	MapCheckBox->OnCheckStateChanged.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleMapCheckStateChanged);
+	PileInput->SetMinValue(0.0f);
+	PileInput->SetMaxValue(99999.0f);
+	PileInput->SetMinSliderValue(0.0f);
+	PileInput->SetMaxSliderValue(99999.0f);
+	PileInput->SetDelta(1.0f);
+	SyncMapCheckBoxFromScene();
+}
+
+void UGCSUIBridgeSubsystem::UnbindReferenceAndMapControls()
+{
+	if (UButton* ApplyPileButton = FindRightPanelButton(TEXT("BTN_ApplyFixedPile")))
+	{
+		ApplyPileButton->OnClicked.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleFixedPileApplyClicked);
+	}
+	if (UButton* BenchmarkExportButton = FindRightPanelButton(TEXT("BTN_DaoChu")))
+	{
+		BenchmarkExportButton->OnClicked.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleBenchmarkExportClicked);
+	}
+	if (UCheckBox* MapCheckBox = FindRightPanelCheckBox(TEXT("CheckBox_Map")))
+	{
+		MapCheckBox->OnCheckStateChanged.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleMapCheckStateChanged);
+	}
+}
+
+ADroneFleetVisualizationActor* UGCSUIBridgeSubsystem::FindFleetVisualizationActor() const
+{
+	UWorld* World = MainWidgetRef.IsValid() ? MainWidgetRef->GetWorld() : GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+	for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
+	{
+		return *It;
+	}
+	return nullptr;
+}
+
+bool UGCSUIBridgeSubsystem::InitializeCoordinateAxes(
+	const FVector& OriginWorld,
+	const FVector& EastWorld,
+	const FVector& NorthWorld,
+	const int32 OriginDroneNumber,
+	const float AxisLengthMeters) const
+{
+	UWorld* World = MainWidgetRef.IsValid() ? MainWidgetRef->GetWorld() : GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		AActor* Actor = *It;
+		UFunction* Function = Actor
+			? Actor->FindFunction(TEXT("InitializeCoordinateAxes"))
+			: nullptr;
+		if (!Function)
+		{
+			continue;
+		}
+
+		FStructOnScope Parameters(Function);
+		void* ParameterMemory = Parameters.GetStructMemory();
+		FNumericProperty* OriginIDProperty =
+			FindFProperty<FNumericProperty>(Function, TEXT("OriginDroneID"));
+		FNumericProperty* AxisLengthProperty =
+			FindFProperty<FNumericProperty>(Function, TEXT("AxisLengthMeters"));
+		const bool bSignatureMatches = ParameterMemory
+			&& SetVectorFunctionParameter(
+				Function,
+				ParameterMemory,
+				TEXT("OriginWorldLocation"),
+				OriginWorld)
+			&& SetVectorFunctionParameter(
+				Function,
+				ParameterMemory,
+				TEXT("EastWorldDirection"),
+				EastWorld)
+			&& SetVectorFunctionParameter(
+				Function,
+				ParameterMemory,
+				TEXT("NorthWorldDirection"),
+				NorthWorld)
+			&& OriginIDProperty
+			&& OriginIDProperty->IsInteger()
+			&& AxisLengthProperty
+			&& AxisLengthProperty->IsFloatingPoint();
+		if (!bSignatureMatches)
+		{
+			UE_LOG(
+				LogTemp,
+				Error,
+				TEXT("[GCSFixedPile] InitializeCoordinateAxes signature mismatch on %s"),
+				*Actor->GetName());
+			return false;
+		}
+
+		OriginIDProperty->SetIntPropertyValue(
+			OriginIDProperty->ContainerPtrToValuePtr<void>(ParameterMemory),
+			static_cast<int64>(OriginDroneNumber));
+		AxisLengthProperty->SetFloatingPointPropertyValue(
+			AxisLengthProperty->ContainerPtrToValuePtr<void>(ParameterMemory),
+			AxisLengthMeters);
+		Actor->SetActorHiddenInGame(false);
+		Actor->ProcessEvent(Function, ParameterMemory);
+		TInlineComponentArray<UPrimitiveComponent*> AxisPrimitives(Actor);
+		for (UPrimitiveComponent* Primitive : AxisPrimitives)
+		{
+			if (Primitive)
+			{
+				Primitive->SetDepthPriorityGroup(SDPG_World);
+				Primitive->SetTranslucentSortPriority(-10);
+				if (Primitive->GetFName() == TEXT("SM_Origin"))
+				{
+					// The selected drone sphere already represents the origin.
+					Primitive->SetHiddenInGame(true);
+				}
+			}
+		}
+		return true;
+	}
+	return false;
+}
+
+TArray<AActor*> UGCSUIBridgeSubsystem::FindSceneMapActors() const
+{
+	TArray<AActor*> Result;
+	UWorld* World = MainWidgetRef.IsValid() ? MainWidgetRef->GetWorld() : GetWorld();
+	if (!World)
+	{
+		return Result;
+	}
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		if (IsSceneMapActor(*It))
+		{
+			Result.Add(*It);
+		}
+	}
+	return Result;
+}
+
+void UGCSUIBridgeSubsystem::SetSceneMapVisible(const bool bVisible) const
+{
+	const TArray<AActor*> MapActors = FindSceneMapActors();
+	for (AActor* Actor : MapActors)
+	{
+		if (IsValid(Actor))
+		{
+			Actor->SetActorHiddenInGame(!bVisible);
+		}
+	}
+	if (MapActors.IsEmpty())
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("[GCSSceneMap] Visible=%s but no matching map actor was found"),
+			bVisible ? TEXT("true") : TEXT("false"));
+	}
+	else
+	{
+		UE_LOG(
+			LogTemp,
+			Display,
+			TEXT("[GCSSceneMap] Visible=%s Actors=%d"),
+			bVisible ? TEXT("true") : TEXT("false"),
+			MapActors.Num());
+	}
+}
+
+void UGCSUIBridgeSubsystem::SyncMapCheckBoxFromScene()
+{
+	UCheckBox* MapCheckBox = FindRightPanelCheckBox(TEXT("CheckBox_Map"));
+	if (!MapCheckBox)
+	{
+		return;
+	}
+	const TArray<AActor*> MapActors = FindSceneMapActors();
+	bool bAnyMapVisible = false;
+	for (const AActor* Actor : MapActors)
+	{
+		bAnyMapVisible |= IsValid(Actor) && !Actor->IsHidden();
+	}
+	bUpdatingMapCheckBoxFromScene = true;
+	MapCheckBox->SetIsChecked(bAnyMapVisible);
+	bUpdatingMapCheckBoxFromScene = false;
+}
+
+void UGCSUIBridgeSubsystem::HandleFixedPileApplyClicked()
+{
+	USpinBox* PileInput = FindRightPanelSpinBox(TEXT("SPN_FixedPileDroneID"));
+	UFleetManagerSubsystem* Fleet = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>()
+		: nullptr;
+	ADroneFleetVisualizationActor* Visualization = FindFleetVisualizationActor();
+	if (!PileInput || !Fleet || !Visualization)
+	{
+		SetRightPanelText(TEXT("TXT_FixedPileStatus"), TEXT("桩基应用失败：运行组件不可用"));
+		return;
+	}
+	if (Visualization->GetVisualizationMode() != EGCSVisualizationMode::Live)
+	{
+		SetRightPanelText(TEXT("TXT_FixedPileStatus"), TEXT("请先退出航线预览，再设置桩基"));
+		return;
+	}
+
+	const int32 DroneNumber = FMath::RoundToInt(PileInput->GetValue());
+	if (DroneNumber < 0)
+	{
+		SetRightPanelText(TEXT("TXT_FixedPileStatus"), TEXT("桩基编号不能为负数"));
+		return;
+	}
+	Visualization->RefreshFromFleet();
+	FString DroneID;
+	if (!Visualization->TryResolveDroneIDFromDisplayID(DroneNumber, DroneID))
+	{
+		SetRightPanelText(
+			TEXT("TXT_FixedPileStatus"),
+			FString::Printf(
+				TEXT("桩基应用失败：当前显示编号 %d 不存在或不唯一"),
+				DroneNumber));
+		return;
+	}
+
+	FString Error;
+	if (!Fleet->SetGeoOriginFromDroneID(DroneID, Error))
+	{
+		SetRightPanelText(
+			TEXT("TXT_FixedPileStatus"),
+			FString::Printf(TEXT("桩基应用失败：%s"), *Error));
+		return;
+	}
+
+	Visualization->SetFixedPileDroneID(DroneID);
+	Visualization->RefreshFromFleet();
+	FVector OriginWorld = FVector::ZeroVector;
+	FVector EastWorld = FVector::ZeroVector;
+	FVector NorthWorld = FVector::ZeroVector;
+	FVector UpWorld = FVector::ZeroVector;
+	if (!Visualization->TryGetGeographicTangentBasis(
+		OriginWorld,
+		EastWorld,
+		NorthWorld,
+		UpWorld))
+	{
+		SetRightPanelText(
+			TEXT("TXT_FixedPileStatus"),
+			FString::Printf(TEXT("当前桩基：%s；坐标方向初始化失败"), *DroneID));
+		return;
+	}
+	if (!InitializeCoordinateAxes(
+		OriginWorld - UpWorld * FixedPileAxisDepthOffsetUU,
+		EastWorld,
+		NorthWorld,
+		0,
+		FixedPileAxisLengthMeters))
+	{
+		SetRightPanelText(
+			TEXT("TXT_FixedPileStatus"),
+			FString::Printf(TEXT("当前桩基：%s；未找到兼容的坐标轴蓝图"), *DroneID));
+		return;
+	}
+
+	SetRightPanelText(
+		TEXT("TXT_FixedPileStatus"),
+		FString::Printf(TEXT("当前桩基：%s（局部原点）"), *DroneID));
+}
+
+void UGCSUIBridgeSubsystem::HandleBenchmarkExportClicked()
+{
+	constexpr int32 LegacyOriginDisplayID = 0;
+	const FName StatusName(TEXT("TXT_BenchmarkExportStatus"));
+	UFleetManagerSubsystem* Fleet = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>()
+		: nullptr;
+	ADroneFleetVisualizationActor* Visualization = FindFleetVisualizationActor();
+	if (!Fleet || !Visualization)
+	{
+		SetRightPanelText(StatusName, TEXT("导出失败：运行组件不可用"));
+		return;
+	}
+	if (Visualization->GetVisualizationMode() != EGCSVisualizationMode::Live)
+	{
+		SetRightPanelText(StatusName, TEXT("请先退出航线预览，再导出基准文件"));
+		return;
+	}
+	if (Visualization->HasConfirmedRouteSlotDisplayOverrides())
+	{
+		SetRightPanelText(StatusName, TEXT("请先卸载已确认的NPZ编号，再导出基准文件"));
+		return;
+	}
+
+	const FFleetGeoOrigin GeoOrigin = Fleet->GetFleetGeoOrigin();
+	if (!GeoOrigin.bOriginInitialized || GeoOrigin.OriginDroneID.IsEmpty())
+	{
+		SetRightPanelText(StatusName, TEXT("请先应用桩基，再导出基准文件"));
+		return;
+	}
+
+	const int64 SnapshotRevision = Fleet->GetFleetRevision();
+	Visualization->RefreshFromFleet();
+	TMap<FString, int32> DisplayIDsByDroneID;
+	FString Error;
+	if (!Visualization->TryGetLiveDisplayIDSnapshot(DisplayIDsByDroneID, Error))
+	{
+		SetRightPanelText(StatusName, FString::Printf(TEXT("导出失败：%s"), *Error));
+		return;
+	}
+	const int32* OriginDisplayID = DisplayIDsByDroneID.Find(GeoOrigin.OriginDroneID);
+	if (!OriginDisplayID || *OriginDisplayID != LegacyOriginDisplayID)
+	{
+		SetRightPanelText(StatusName, TEXT("导出失败：当前桩基不是编号0，请重新应用桩基"));
+		return;
+	}
+
+	FVector OriginWorld = FVector::ZeroVector;
+	FVector EastWorld = FVector::ZeroVector;
+	FVector NorthWorld = FVector::ZeroVector;
+	FVector UpWorld = FVector::ZeroVector;
+	if (!Visualization->TryGetGeographicTangentBasis(
+		OriginWorld,
+		EastWorld,
+		NorthWorld,
+		UpWorld))
+	{
+		SetRightPanelText(StatusName, TEXT("导出失败：局部坐标方向尚未初始化"));
+		return;
+	}
+
+	const TArray<FString> DroneIDs = Visualization->GetParticleDroneIDs();
+	const TArray<FVector> DronePositions = Visualization->GetDronePositions();
+	if (DroneIDs.IsEmpty() || DroneIDs.Num() != DronePositions.Num())
+	{
+		SetRightPanelText(StatusName, TEXT("导出失败：无人机位置快照不完整"));
+		return;
+	}
+
+	TArray<FGCSBenchmarkExportRow> Rows;
+	Rows.Reserve(DroneIDs.Num());
+	for (int32 Index = 0; Index < DroneIDs.Num(); ++Index)
+	{
+		const FString& DroneID = DroneIDs[Index];
+		FDroneData Drone;
+		if (!Fleet->GetDroneByID(DroneID, Drone))
+		{
+			SetRightPanelText(
+				StatusName,
+				FString::Printf(TEXT("导出失败：无人机 %s 数据不存在"), *DroneID));
+			return;
+		}
+		if (!Drone.bOnline)
+		{
+			SetRightPanelText(
+				StatusName,
+				FString::Printf(TEXT("导出失败：无人机 %s 当前离线"), *DroneID));
+			return;
+		}
+		if (!DroneGPS::IsValid(Drone))
+		{
+			SetRightPanelText(
+				StatusName,
+				FString::Printf(TEXT("导出失败：无人机 %s 没有有效的3D GPS"), *DroneID));
+			return;
+		}
+		const int32* DisplayID = DisplayIDsByDroneID.Find(DroneID);
+		if (!DisplayID)
+		{
+			SetRightPanelText(
+				StatusName,
+				FString::Printf(TEXT("导出失败：无人机 %s 没有有效编号"), *DroneID));
+			return;
+		}
+
+		const FVector RelativeWorld = DronePositions[Index] - OriginWorld;
+		FGCSBenchmarkExportRow& Row = Rows.AddDefaulted_GetRef();
+		Row.DisplayID = *DisplayID;
+		Row.EastMeters = FVector::DotProduct(RelativeWorld, EastWorld) / 100.0;
+		Row.NorthMeters = FVector::DotProduct(RelativeWorld, NorthWorld) / 100.0;
+	}
+	if (Fleet->GetFleetRevision() != SnapshotRevision)
+	{
+		SetRightPanelText(StatusName, TEXT("导出取消：无人机数据已变化，请重试"));
+		return;
+	}
+
+	FString BenchmarkText;
+	if (!GCSBenchmarkExport::BuildLegacyBenchmarkText(
+		Rows,
+		LegacyOriginDisplayID,
+		GeoOrigin.OriginLatitude,
+		GeoOrigin.OriginLongitude,
+		BenchmarkText,
+		Error))
+	{
+		SetRightPanelText(StatusName, FString::Printf(TEXT("导出失败：%s"), *Error));
+		return;
+	}
+
+	FString SavePath;
+	const ERuntimeSaveDialogResult DialogResult = OpenRuntimeBenchmarkSaveDialog(SavePath);
+	if (DialogResult == ERuntimeSaveDialogResult::Cancelled)
+	{
+		SetRightPanelText(StatusName, TEXT("已取消导出"));
+		return;
+	}
+	if (DialogResult != ERuntimeSaveDialogResult::Selected || SavePath.IsEmpty())
+	{
+		SetRightPanelText(StatusName, TEXT("导出失败：无法打开保存窗口"));
+		return;
+	}
+	if (!FFileHelper::SaveStringToFile(
+		BenchmarkText,
+		*SavePath,
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	{
+		SetRightPanelText(StatusName, TEXT("导出失败：无法写入目标文件"));
+		return;
+	}
+
+	SetRightPanelText(
+		StatusName,
+		FString::Printf(
+			TEXT("导出成功：%s（%d架）"),
+			*FPaths::GetCleanFilename(SavePath),
+			Rows.Num()));
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[GCSBenchmarkExport] Saved=%s Drones=%d Origin=%s Lat=%.7f Lon=%.7f Revision=%lld"),
+		*SavePath,
+		Rows.Num(),
+		*GeoOrigin.OriginDroneID,
+		GeoOrigin.OriginLatitude,
+		GeoOrigin.OriginLongitude,
+		static_cast<long long>(SnapshotRevision));
+}
+
+void UGCSUIBridgeSubsystem::HandleMapCheckStateChanged(const bool bIsChecked)
+{
+	if (!bUpdatingMapCheckBoxFromScene)
+	{
+		SetSceneMapVisible(bIsChecked);
+	}
 }
 
 void UGCSUIBridgeSubsystem::BindRoutePlaybackControls()
