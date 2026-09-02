@@ -29,6 +29,10 @@ const char* DroneCommandTypeName(DroneCommandType type)
         return "TIME_START";
     case DroneCommandType::TimeStop:
         return "TIME_STOP";
+    case DroneCommandType::ExecuteDanceStep:
+        return "EXECUTE_DANCE_STEP";
+    case DroneCommandType::EndDanceStep:
+        return "END_DANCE_STEP";
     }
 
     return "UNKNOWN";

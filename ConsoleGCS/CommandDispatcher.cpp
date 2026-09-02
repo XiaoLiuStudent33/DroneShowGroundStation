@@ -175,6 +175,40 @@ std::uint64_t CommandDispatcher::QueueTimeControl(
         second);
 }
 
+std::uint64_t CommandDispatcher::QueueExecuteDanceStep(
+    std::uint8_t system,
+    std::uint8_t component)
+{
+    return Queue(
+        Action::ExecuteDanceStep,
+        system,
+        component,
+        0,
+        0.0f,
+        false);
+}
+
+std::uint64_t CommandDispatcher::QueueEndDanceStep(
+    std::uint8_t system,
+    std::uint8_t component,
+    std::uint8_t controlMask)
+{
+    return Queue(
+        Action::EndDanceStep,
+        system,
+        component,
+        0,
+        0.0f,
+        true,
+        0,
+        0,
+        0,
+        0,
+        false,
+        0,
+        controlMask);
+}
+
 std::uint64_t CommandDispatcher::Queue(
     Action action,
     std::uint8_t system,
@@ -445,6 +479,19 @@ bool CommandDispatcher::Send(
             request.scheduledHour,
             request.scheduledMinute,
             request.scheduledSecond);
+
+    case Action::ExecuteDanceStep:
+        return MavlinkCommand::ExecuteDanceStep(
+            udp,
+            request.system,
+            request.component);
+
+    case Action::EndDanceStep:
+        return MavlinkCommand::EndDanceStep(
+            udp,
+            request.system,
+            request.component,
+            request.timeControlMask);
     }
 
     return false;

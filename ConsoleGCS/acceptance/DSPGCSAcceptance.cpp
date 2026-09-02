@@ -37,6 +37,11 @@ namespace
         case dspgcs::CommandType::RTL: return DroneCommandType::RTL;
         case dspgcs::CommandType::SetMode: return DroneCommandType::SetMode;
         case dspgcs::CommandType::HoverTest: return DroneCommandType::HoverTest;
+        case dspgcs::CommandType::SetLedColor: return DroneCommandType::SetLedColor;
+        case dspgcs::CommandType::TimeStart: return DroneCommandType::TimeStart;
+        case dspgcs::CommandType::TimeStop: return DroneCommandType::TimeStop;
+        case dspgcs::CommandType::ExecuteDanceStep: return DroneCommandType::ExecuteDanceStep;
+        case dspgcs::CommandType::EndDanceStep: return DroneCommandType::EndDanceStep;
         }
         return DroneCommandType::Arm;
     }

@@ -325,6 +325,14 @@ bool FGCSRouteWorkflowShowOriginAnchorCaptureTest::RunTest(
 	TestEqual(TEXT("Candidate AMSL is displayed"),
 		FCString::Atod(*AltitudeInput->GetText().ToString()), 42.0);
 
+	Coordinator->ClickApplyShowOriginGpsForTest();
+	TestEqual(TEXT("Applying the captured ShowOrigin also selects the fixed-pile drone"),
+		Fleet->GetFleetGeoOrigin().OriginDroneID, FString(TEXT("Drone001")));
+	TestEqual(TEXT("Captured ShowOrigin Latitude becomes official"),
+		Preview->GetRouteData().ShowOriginLatitude, Candidate.Latitude);
+	TestEqual(TEXT("Captured ShowOrigin Longitude becomes official"),
+		Preview->GetRouteData().ShowOriginLongitude, Candidate.Longitude);
+
 	LatitudeInput->SetText(FText::FromString(TEXT("31.2500000")));
 	LatitudeInput->OnTextChanged.Broadcast(LatitudeInput->GetText());
 	TestEqual(TEXT("Manual edit clears GPS provenance"),

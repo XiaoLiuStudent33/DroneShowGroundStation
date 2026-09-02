@@ -110,6 +110,7 @@ void ADroneFleetVisualizationActor::BeginPlay()
 void ADroneFleetVisualizationActor::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	FlushDeferredNiagaraArrayRebind();
 	UpdateAdaptiveFlightMarkerSize(DeltaSeconds);
 }
 
@@ -411,6 +412,21 @@ void ADroneFleetVisualizationActor::SetRouteTargetsVisible(const bool bVisible)
 			RouteTargetsVisibleParameter,
 			bRouteTargetsVisible);
 	}
+}
+
+void ADroneFleetVisualizationActor::SetRouteTargets(
+	const TArray<FVector>& Positions,
+	const bool bVisible)
+{
+	RouteTargetPositions = Positions;
+	bRouteTargetsVisible = bVisible
+		&& VisualizationMode == EGCSVisualizationMode::Live
+		&& !RouteTargetPositions.IsEmpty();
+
+	// Both emitters live in the same Niagara system. The combined push submits
+	// Live and route-target state before a dynamic count change restarts it. The
+	// target count always comes from Positions.Num(); it is never fixed.
+	PushRouteTargetsToNiagara();
 }
 
 void ADroneFleetVisualizationActor::ClearRouteTargets()
@@ -1146,6 +1162,16 @@ void ADroneFleetVisualizationActor::RebuildDroneLabelAttributes()
 	}
 	for (int32 Index = 0; Index < ParticleCount; ++Index)
 	{
+		// Full route preview particles are ordered by zero-based NPZ RouteSlot and
+		// deliberately have no physical DroneID. Keep that preview-only identity
+		// separate from the canonical Live DroneID rules below.
+		if (VisualizationMode == EGCSVisualizationMode::RoutePreview)
+		{
+			DroneDisplayIDs[Index] = static_cast<float>(Index);
+			DroneSelectedMasks[Index] = 0.0f;
+			continue;
+		}
+
 		const bool bHasDroneID = ParticleDroneIDs.IsValidIndex(Index);
 		const FString DroneID = bHasDroneID ? ParticleDroneIDs[Index] : FString();
 		const bool bNumberingAnomaly = bHasDroneID
@@ -1266,6 +1292,7 @@ void ADroneFleetVisualizationActor::PushArraysToNiagara()
 	{
 		// Burst count is evaluated during initialization, so only rebuild when fleet size changes.
 		DroneFleetNiagara->ReinitializeSystem();
+		bNiagaraArrayRebindPending = true;
 	}
 	else if (!DroneFleetNiagara->IsActive())
 	{
@@ -1281,8 +1308,22 @@ void ADroneFleetVisualizationActor::PushRouteTargetsToNiagara()
 		return;
 	}
 
+	// Route targets and primary drones are emitters in one Niagara system. Write
+	// the complete state of both before a count change reinitializes that shared
+	// system, otherwise its cold-start burst can observe a mixture of old and new
+	// arrays. This is also used when targets are cleared or replaced.
+	const int32 NewDroneCount = DronePositions.Num();
 	const int32 NewRouteTargetCount = RouteTargetPositions.Num();
-	const bool bCountChanged = LastPushedRouteTargetCount != NewRouteTargetCount;
+	const bool bDroneCountChanged = LastPushedDroneCount != NewDroneCount;
+	const bool bRouteTargetCountChanged =
+		LastPushedRouteTargetCount != NewRouteTargetCount;
+	DroneFleetNiagara->SetVariableInt(DroneCountParameter, NewDroneCount);
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayPosition(
+		DroneFleetNiagara,
+		DronePositionsParameter,
+		DronePositions);
+	PushDroneColorsToNiagara();
+	PushDroneLabelAttributesToNiagara();
 	DroneFleetNiagara->SetVariableInt(RouteTargetCountParameter, NewRouteTargetCount);
 	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayPosition(
 		DroneFleetNiagara,
@@ -1294,16 +1335,46 @@ void ADroneFleetVisualizationActor::PushRouteTargetsToNiagara()
 			&& VisualizationMode == EGCSVisualizationMode::Live
 			&& NewRouteTargetCount > 0);
 
-	if (bCountChanged)
+	if (bDroneCountChanged || bRouteTargetCountChanged)
 	{
-		// Route target spawn count is evaluated during emitter initialization.
+		// Both burst counts are evaluated during emitter initialization.
 		DroneFleetNiagara->ReinitializeSystem();
+		bNiagaraArrayRebindPending = true;
 	}
 	else if (!DroneFleetNiagara->IsActive())
 	{
 		DroneFleetNiagara->Activate(true);
 	}
+	LastPushedDroneCount = NewDroneCount;
 	LastPushedRouteTargetCount = NewRouteTargetCount;
+}
+
+void ADroneFleetVisualizationActor::FlushDeferredNiagaraArrayRebind()
+{
+	if (!bNiagaraArrayRebindPending
+		|| !DroneFleetNiagara
+		|| !DroneFleetNiagara->GetAsset())
+	{
+		return;
+	}
+
+	// SetNiagaraArrayPosition converts world coordinates through the current
+	// system instance's LWC converter. A count change replaces that instance, so
+	// re-submit the complete dynamic state on the next actor tick, once the new
+	// converter exists. LastPushed* already match, therefore this does not cause
+	// another reinitialization and works for any live/NPZ particle count.
+	bNiagaraArrayRebindPending = false;
+	bDroneColorsDirty = true;
+	bDroneLabelAttributesDirty = true;
+	PushRouteTargetsToNiagara();
+
+	UE_LOG(
+		LogTemp,
+		Verbose,
+		TEXT("[DroneFleetViz] Deferred Niagara array rebind Drones=%d RouteTargets=%d Visible=%s"),
+		DronePositions.Num(),
+		RouteTargetPositions.Num(),
+		bRouteTargetsVisible ? TEXT("YES") : TEXT("NO"));
 }
 
 void ADroneFleetVisualizationActor::HandleFleetChanged()
@@ -1485,6 +1556,78 @@ bool ADroneFleetVisualizationActor::ConvertRouteENUPositionsToWorld(
 	{
 		*OutWorldBoundsCenter = WorldBounds.GetCenter();
 	}
+	return true;
+}
+
+bool ADroneFleetVisualizationActor::ConvertRouteENUPositionsToLiveWorld(
+	const TArray<FVector3f>& PositionsENU,
+	const double OriginLatitude,
+	const double OriginLongitude,
+	const double OriginAltitude,
+	TArray<FVector>& OutWorldPositions,
+	FVector& OutRouteOriginWorld,
+	FString& OutError,
+	FVector* OutWorldBoundsCenter)
+{
+	if (!bOriginWorldPositionInitialized
+		|| OriginWorldPosition.ContainsNaN())
+	{
+		OutWorldPositions.Reset();
+		OutRouteOriginWorld = FVector::ZeroVector;
+		if (OutWorldBoundsCenter)
+		{
+			*OutWorldBoundsCenter = FVector::ZeroVector;
+		}
+		OutError = TEXT("Live fleet display origin is unavailable for route overlay conversion.");
+		return false;
+	}
+
+	if (!ConvertRouteENUPositionsToWorld(
+		PositionsENU,
+		OriginLatitude,
+		OriginLongitude,
+		OriginAltitude,
+		OutWorldPositions,
+		OutRouteOriginWorld,
+		OutError,
+		OutWorldBoundsCenter))
+	{
+		return false;
+	}
+
+	// The imported ShowOrigin drone and the fixed-pile drone are one physical
+	// drone. Therefore NPZ ENU (0,0,0) is the Live display anchor, even when the
+	// stable GPS captured for ShowOrigin differs slightly from the most recent
+	// telemetry sample used to lock FleetGeoOrigin. Rebase from the converted
+	// route origin itself instead of retaining that sampling delta.
+	//
+	// Passing absolute Cesium coordinates to User.RouteTargetPositions while
+	// User.DronePositions is display-anchored would also mix two coordinate
+	// spaces in one Niagara system and lose LWC precision.
+	const FVector AbsoluteRouteOriginWorld = OutRouteOriginWorld;
+	const FVector LiveDisplayTranslation =
+		OriginWorldPosition - AbsoluteRouteOriginWorld;
+	for (FVector& WorldPosition : OutWorldPositions)
+	{
+		WorldPosition += LiveDisplayTranslation;
+	}
+	OutRouteOriginWorld = OriginWorldPosition;
+	if (OutWorldBoundsCenter)
+	{
+		*OutWorldBoundsCenter += LiveDisplayTranslation;
+	}
+
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("[RouteOverlay] Live-space conversion Targets=%d Translation=(%.3f,%.3f,%.3f) Origin=(%.3f,%.3f,%.3f)"),
+		OutWorldPositions.Num(),
+		LiveDisplayTranslation.X,
+		LiveDisplayTranslation.Y,
+		LiveDisplayTranslation.Z,
+		OutRouteOriginWorld.X,
+		OutRouteOriginWorld.Y,
+		OutRouteOriginWorld.Z);
 	return true;
 }
 

@@ -39,6 +39,8 @@ namespace
         case dspgcs::CommandType::SetLedColor: result = DroneCommandType::SetLedColor; return true;
         case dspgcs::CommandType::TimeStart: result = DroneCommandType::TimeStart; return true;
         case dspgcs::CommandType::TimeStop: result = DroneCommandType::TimeStop; return true;
+        case dspgcs::CommandType::ExecuteDanceStep: result = DroneCommandType::ExecuteDanceStep; return true;
+        case dspgcs::CommandType::EndDanceStep: result = DroneCommandType::EndDanceStep; return true;
         }
         return false;
     }
@@ -57,6 +59,8 @@ namespace
         case dspgcs::CommandType::SetLedColor:
         case dspgcs::CommandType::TimeStart:
         case dspgcs::CommandType::TimeStop:
+        case dspgcs::CommandType::ExecuteDanceStep:
+        case dspgcs::CommandType::EndDanceStep:
             return true;
         default:
             return false;
@@ -194,7 +198,8 @@ DSPGCSProductionCommandReceiver::ValidateRealCommand(
     }
 
     if ((request.commandType == dspgcs::CommandType::TimeStart ||
-         request.commandType == dspgcs::CommandType::TimeStop) &&
+         request.commandType == dspgcs::CommandType::TimeStop ||
+         request.commandType == dspgcs::CommandType::EndDanceStep) &&
         request.parameters.timeControlMask != 1)
     {
         validation.errorCode = "TIME_CONTROL_MASK_NOT_ALLOWED";
@@ -343,7 +348,8 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
                 "s");
         }
         else if (request.commandType == dspgcs::CommandType::TimeStart ||
-            request.commandType == dspgcs::CommandType::TimeStop)
+            request.commandType == dspgcs::CommandType::TimeStop ||
+            request.commandType == dspgcs::CommandType::EndDanceStep)
         {
             ConsoleUI::AddLog(
                 "DSP-GCS MP_TIME_CONTROL received Control=" +
@@ -353,6 +359,13 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
                 std::to_string(request.parameters.scheduledMinute) + ":" +
                 std::to_string(request.parameters.scheduledSecond) +
                 " Targets=" + std::to_string(request.targetDroneIds.size()));
+        }
+        else if (request.commandType == dspgcs::CommandType::ExecuteDanceStep)
+        {
+            ConsoleUI::AddLog(
+                "DSP-GCS EXECUTE_DANCE_STEP received Actions=AUTO+MAV_CMD_USER_1(1)" +
+                std::string(" Targets=") +
+                std::to_string(request.targetDroneIds.size()));
         }
 
         dspgcs::CommandResultBatchDTO resultBatch;

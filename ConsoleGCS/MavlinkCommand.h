@@ -123,6 +123,19 @@ public:
         uint8_t minute,
         uint8_t second);
 
+    /** Legacy dance start: SET_MODE AUTO, then MAV_CMD_USER_1 param1=1. */
+    static bool ExecuteDanceStep(
+        UdpClient& udp,
+        uint8_t targetSystem,
+        uint8_t targetComponent);
+
+    /** Legacy dance end: cancel MP_TIME_CONTROL, then MAV_CMD_USER_1 param1=0. */
+    static bool EndDanceStep(
+        UdpClient& udp,
+        uint8_t targetSystem,
+        uint8_t targetComponent,
+        uint8_t controlMask);
+
     static bool SetMode(
 
         UdpClient& udp,

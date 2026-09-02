@@ -99,6 +99,15 @@ public:
         std::uint8_t minute,
         std::uint8_t second);
 
+    std::uint64_t QueueExecuteDanceStep(
+        std::uint8_t system,
+        std::uint8_t component);
+
+    std::uint64_t QueueEndDanceStep(
+        std::uint8_t system,
+        std::uint8_t component,
+        std::uint8_t controlMask);
+
     void Tick(
         std::chrono::steady_clock::time_point now);
 
@@ -121,7 +130,9 @@ private:
         RTL,
         Loiter,
         SetLedColor,
-        TimeControl
+        TimeControl,
+        ExecuteDanceStep,
+        EndDanceStep
     };
 
     struct Request

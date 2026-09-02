@@ -1716,6 +1716,22 @@ void UGCSRouteWorkflowCoordinator::HandleApplyShowOriginGpsClicked()
 	const bool bFromGps =
 		ShowOriginDraftSource == EGCSShowOriginDraftSource::CapturedCandidate;
 	const FString AppliedDroneID = ShowOriginCandidate.DroneID;
+	UFleetManagerSubsystem* OriginFleet = nullptr;
+	if (bFromGps)
+	{
+		OriginFleet = GameInstanceRef->GetSubsystem<UFleetManagerSubsystem>();
+		FDroneData OriginDrone;
+		if (!OriginFleet
+			|| AppliedDroneID.IsEmpty()
+			|| !OriginFleet->GetDroneByID(AppliedDroneID, OriginDrone)
+			|| !OriginDrone.bOnline
+			|| !DroneGPS::IsValid(OriginDrone))
+		{
+			Error = TEXT("表演原点无人机当前不能作为桩基，请确认在线状态和3D GPS");
+			SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"), Error);
+			return;
+		}
+	}
 	{
 		TGuardValue<bool> Guard(bCommandInFlight, true);
 		if (!CommitValidatedShowOrigin(Latitude, Longitude, Altitude, Error))
@@ -1723,6 +1739,23 @@ void UGCSRouteWorkflowCoordinator::HandleApplyShowOriginGpsClicked()
 			SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
 				Error.IsEmpty() ? TEXT("Show Origin Authority拒绝应用") : Error);
 			return;
+		}
+		if (bFromGps && !OriginFleet->SetGeoOriginFromDroneID(AppliedDroneID, Error))
+		{
+			SetText(ConvertWidgets, TEXT("TXT_ShowOriginGpsStatus"),
+				Error.IsEmpty() ? TEXT("桩基原点同步失败") : Error);
+			return;
+		}
+		if (bFromGps)
+		{
+			if (UWorld* World = GameInstanceRef->GetWorld())
+			{
+				for (TActorIterator<ADroneFleetVisualizationActor> It(World); It; ++It)
+				{
+					It->SetFixedPileDroneID(AppliedDroneID);
+					It->RefreshFromFleet();
+				}
+			}
 		}
 	}
 	bShowOriginDraftActive = false;
@@ -1742,8 +1775,10 @@ void UGCSRouteWorkflowCoordinator::HandleApplyShowOriginGpsClicked()
 		TEXT("表演原点已应用"));
 	ClearCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview);
 	UE_LOG(LogGCSRouteWorkflow, Display,
-		TEXT("[SHOW_ORIGIN_APPLY] Committed Source=%s Lat=%.9f Lon=%.9f AMSL=%.3f"),
-		bFromGps ? *AppliedDroneID : TEXT("Manual"), Latitude, Longitude, Altitude);
+		TEXT("[SHOW_ORIGIN_APPLY] Committed Source=%s FixedPile=%s Lat=%.9f Lon=%.9f AMSL=%.3f"),
+		bFromGps ? *AppliedDroneID : TEXT("Manual"),
+		bFromGps ? *AppliedDroneID : TEXT("Unchanged"),
+		Latitude, Longitude, Altitude);
 	RefreshReadOnlyState();
 }
 

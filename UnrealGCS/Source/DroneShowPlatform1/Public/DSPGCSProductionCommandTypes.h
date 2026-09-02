@@ -21,7 +21,9 @@ enum class EGCSProductionCommandType : uint8
 	HoverTest,
 	SetLedColor,
 	TimeStart,
-	TimeStop
+	TimeStop,
+	ExecuteDanceStep,
+	EndDanceStep
 };
 
 /** Ground-station workflow mode; intentionally independent of APM flight mode. */

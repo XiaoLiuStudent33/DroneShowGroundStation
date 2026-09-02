@@ -27,6 +27,8 @@ namespace
 		case EGCSProductionCommandType::SetLedColor: return dspgcs::CommandType::SetLedColor;
 		case EGCSProductionCommandType::TimeStart: return dspgcs::CommandType::TimeStart;
 		case EGCSProductionCommandType::TimeStop: return dspgcs::CommandType::TimeStop;
+		case EGCSProductionCommandType::ExecuteDanceStep: return dspgcs::CommandType::ExecuteDanceStep;
+		case EGCSProductionCommandType::EndDanceStep: return dspgcs::CommandType::EndDanceStep;
 		}
 		return dspgcs::CommandType::Arm;
 	}
@@ -230,7 +232,8 @@ FString UDSPGCSProductionCommandProviderSubsystem::SubmitCommand(
 			Parameters.Blue);
 	}
 	else if (CommandType == EGCSProductionCommandType::TimeStart ||
-		CommandType == EGCSProductionCommandType::TimeStop)
+		CommandType == EGCSProductionCommandType::TimeStop ||
+		CommandType == EGCSProductionCommandType::EndDanceStep)
 	{
 		UE_LOG(
 			LogTemp,
@@ -242,6 +245,14 @@ FString UDSPGCSProductionCommandProviderSubsystem::SubmitCommand(
 			Parameters.ScheduledHour,
 			Parameters.ScheduledMinute,
 			Parameters.ScheduledSecond);
+	}
+	else if (CommandType == EGCSProductionCommandType::ExecuteDanceStep)
+	{
+		UE_LOG(
+			LogTemp,
+			Display,
+			TEXT("DSP-GCS ExecuteDanceStep Targets=%d Actions=AUTO+MAV_CMD_USER_1(1)"),
+			static_cast<int32>(Request.targetDroneIds.size()));
 	}
 	return CommandID;
 }

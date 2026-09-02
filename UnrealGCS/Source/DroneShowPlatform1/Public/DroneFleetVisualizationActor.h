@@ -116,11 +116,35 @@ public:
 		FString& OutError,
 		FVector* OutWorldBoundsCenter = nullptr);
 
+	/**
+	 * Converts RouteSlot ENU positions into the same display-anchored world
+	 * space used by Live drone telemetry. The imported ShowOrigin drone is the
+	 * fixed-pile drone, so ENU zero is rebased directly to the Live display
+	 * anchor. Full route preview intentionally uses
+	 * ConvertRouteENUPositionsToWorld instead.
+	 */
+	bool ConvertRouteENUPositionsToLiveWorld(
+		const TArray<FVector3f>& PositionsENU,
+		double OriginLatitude,
+		double OriginLongitude,
+		double OriginAltitude,
+		TArray<FVector>& OutWorldPositions,
+		FVector& OutRouteOriginWorld,
+		FString& OutError,
+		FVector* OutWorldBoundsCenter = nullptr);
+
 	/** Submits RouteSlotIndex-ordered world positions to the independent overlay channel. */
 	void SetRouteTargetPositions(const TArray<FVector>& Positions);
 
 	/** Changes only the route-target renderer visibility user parameter. */
 	void SetRouteTargetsVisible(bool bVisible);
+
+	/**
+	 * Atomically submits the complete dynamic route-target array and its desired
+	 * visibility. Live drone arrays are re-submitted before a target-count change
+	 * can reinitialize the shared Niagara system.
+	 */
+	void SetRouteTargets(const TArray<FVector>& Positions, bool bVisible);
 
 	/** Clears all route-target render data without touching live drone arrays. */
 	void ClearRouteTargets();
@@ -186,7 +210,7 @@ private:
 	UPROPERTY(Transient)
 	TArray<FLinearColor> DroneColors;
 
-	/** Per-particle display identifiers: confirmed zero-based RouteSlot or stable particle index. */
+	/** Per-particle display identifiers: Live-derived display number or preview zero-based RouteSlot. */
 	UPROPERTY(Transient)
 	TArray<float> DroneDisplayIDs;
 
@@ -225,6 +249,8 @@ private:
 	/** 仅粒子数量变化时重建系统；普通遥测更新只批量刷新数组。 */
 	int32 LastPushedDroneCount = INDEX_NONE;
 	int32 LastPushedRouteTargetCount = INDEX_NONE;
+	/** Rebind position arrays after a count-driven Niagara instance replacement. */
+	bool bNiagaraArrayRebindPending = false;
 	int32 LastLoggedFleetCount = INDEX_NONE;
 	int32 LastLoggedParticleCount = INDEX_NONE;
 
@@ -279,6 +305,7 @@ private:
 	bool PushDroneColorsToNiagara();
 	void PushArraysToNiagara();
 	void PushRouteTargetsToNiagara();
+	void FlushDeferredNiagaraArrayRebind();
 
 	UFUNCTION()
 	void HandleFleetChanged();

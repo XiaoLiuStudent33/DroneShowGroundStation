@@ -23,7 +23,9 @@ enum class DroneCommandType
     HoverTest,
     SetLedColor,
     TimeStart,
-    TimeStop
+    TimeStop,
+    ExecuteDanceStep,
+    EndDanceStep
 };
 
 // ArduPilot Copter custom_mode values used by the current GCS mode controls.

@@ -267,6 +267,58 @@ bool MavlinkCommand::TimeControl(
     return sent;
 }
 
+bool MavlinkCommand::ExecuteDanceStep(
+    UdpClient& udp,
+    uint8_t targetSystem,
+    uint8_t targetComponent)
+{
+    constexpr uint8_t AutoCustomMode = 3;
+    if (!SetMode(udp, targetSystem, AutoCustomMode))
+    {
+        ConsoleUI::AddLog(
+            "EXECUTE_DANCE_STEP failed before start command: SET_MODE AUTO send failed");
+        return false;
+    }
+
+    const bool sent = SendCommandLong(
+        udp,
+        targetSystem,
+        targetComponent,
+        MAV_CMD_USER_1,
+        1.0f);
+    ConsoleUI::AddLog(
+        std::string("EXECUTE_DANCE_STEP ") + (sent ? "sent" : "send failed") +
+        " Actions=SET_MODE_AUTO,MAV_CMD_USER_1(1) RemoteEndpoint=" +
+        udp.GetRemoteEndpoint());
+    return sent;
+}
+
+bool MavlinkCommand::EndDanceStep(
+    UdpClient& udp,
+    uint8_t targetSystem,
+    uint8_t targetComponent,
+    uint8_t controlMask)
+{
+    if (!TimeControl(udp, 0, controlMask, 0, 0, 0))
+    {
+        ConsoleUI::AddLog(
+            "END_DANCE_STEP failed before land command: MP_TIME_CONTROL cancel send failed");
+        return false;
+    }
+
+    const bool sent = SendCommandLong(
+        udp,
+        targetSystem,
+        targetComponent,
+        MAV_CMD_USER_1,
+        0.0f);
+    ConsoleUI::AddLog(
+        std::string("END_DANCE_STEP ") + (sent ? "sent" : "send failed") +
+        " Actions=MP_TIME_CONTROL_CANCEL,MAV_CMD_USER_1(0) RemoteEndpoint=" +
+        udp.GetRemoteEndpoint());
+    return sent;
+}
+
 bool MavlinkCommand::SetMode(
 
     UdpClient& udp,

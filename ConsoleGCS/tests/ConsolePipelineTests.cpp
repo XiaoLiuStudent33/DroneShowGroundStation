@@ -255,7 +255,7 @@ transport=)") + value + "\n");
             shipping.mavftpRequestTimeoutMs == 750 &&
             shipping.mavftpTerminateTimeoutMs == 2500 &&
             shipping.mavftpRequestRetryCount == 3U &&
-            shipping.mavftpGlobalWriteOutstandingCap == 16U,
+            shipping.mavftpGlobalWriteOutstandingCap == 800U,
             "shipping upload INI does not freeze the production MAVFTP profile");
 
         const auto expectInvalidMavftp = [](

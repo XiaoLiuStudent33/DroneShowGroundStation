@@ -257,6 +257,21 @@ int RunDSPCommandTests()
         DSPGCSProductionCommandReceiver::ValidateRealCommand(validTimeStart).allowed,
         "valid MP_TIME_CONTROL start accepted by safety policy");
 
+    dspgcs::CommandRequestDTO validExecuteDanceStep;
+    validExecuteDanceStep.commandType = dspgcs::CommandType::ExecuteDanceStep;
+    validExecuteDanceStep.targetDroneIds = fiveTargets;
+    passed &= Check(
+        DSPGCSProductionCommandReceiver::ValidateRealCommand(validExecuteDanceStep).allowed,
+        "immediate dance execution accepted by safety policy");
+
+    dspgcs::CommandRequestDTO validEndDanceStep;
+    validEndDanceStep.commandType = dspgcs::CommandType::EndDanceStep;
+    validEndDanceStep.targetDroneIds = fiveTargets;
+    validEndDanceStep.parameters.timeControlMask = 1;
+    passed &= Check(
+        DSPGCSProductionCommandReceiver::ValidateRealCommand(validEndDanceStep).allowed,
+        "immediate dance end accepted by safety policy");
+
     dspgcs::CommandRequestDTO invalidTimeStart = validTimeStart;
     invalidTimeStart.parameters.scheduledSecond = 60;
     const DSPGCSRealCommandValidation invalidTimeValidation =

@@ -361,6 +361,63 @@ int RunCommandPacketTests()
         results.front().outcome == CommandOutcome::Sent &&
         results.front().attempts == 1,
         "MP_TIME_CONTROL is fire-and-forget without COMMAND_ACK retry");
+
+    dispatcher.QueueExecuteDanceStep(1, 1);
+    dispatcher.Tick(now + std::chrono::milliseconds(12));
+    passed &= Check(
+        endpoint.ConsumeMessage(received) && received.msgid == MAVLINK_MSG_ID_SET_MODE,
+        "EXECUTE_DANCE_STEP emits SET_MODE first");
+    mavlink_set_mode_t danceMode{};
+    mavlink_msg_set_mode_decode(&received, &danceMode);
+    passed &= Check(
+        danceMode.target_system == 1 && danceMode.custom_mode == 3,
+        "EXECUTE_DANCE_STEP selects ArduCopter AUTO mode");
+    passed &= Check(
+        endpoint.ConsumeMessage(received) && received.msgid == MAVLINK_MSG_ID_COMMAND_LONG,
+        "EXECUTE_DANCE_STEP emits start COMMAND_LONG second");
+    mavlink_msg_command_long_decode(&received, &command);
+    passed &= Check(
+        command.command == MAV_CMD_USER_1 &&
+        std::fabs(command.param1 - 1.0f) < 0.001f,
+        "EXECUTE_DANCE_STEP uses MAV_CMD_USER_1 param1=1");
+    results = dispatcher.ConsumeResults();
+    passed &= Check(
+        results.size() == 1 && results.front().outcome == CommandOutcome::Sent,
+        "EXECUTE_DANCE_STEP completes after both datagrams are sent");
+
+    dispatcher.QueueEndDanceStep(1, 1, 1);
+    dispatcher.Tick(now + std::chrono::milliseconds(13));
+    timeControlDatagram.clear();
+    passed &= Check(
+        endpoint.ConsumeDatagram(timeControlDatagram),
+        "END_DANCE_STEP emits MP_TIME_CONTROL cancel first");
+    if (!timeControlDatagram.empty())
+    {
+        const bool mavlink2 = timeControlDatagram.front() == MAVLINK_STX;
+        const std::size_t payloadOffset = mavlink2 ? 10 : 6;
+        if (timeControlDatagram.size() >= payloadOffset + 5)
+        {
+            passed &= Check(
+                timeControlDatagram[payloadOffset] == 0 &&
+                timeControlDatagram[payloadOffset + 1] == 1 &&
+                timeControlDatagram[payloadOffset + 2] == 0 &&
+                timeControlDatagram[payloadOffset + 3] == 0 &&
+                timeControlDatagram[payloadOffset + 4] == 0,
+                "END_DANCE_STEP cancellation payload is 0/1/0/0/0");
+        }
+    }
+    passed &= Check(
+        endpoint.ConsumeMessage(received) && received.msgid == MAVLINK_MSG_ID_COMMAND_LONG,
+        "END_DANCE_STEP emits land COMMAND_LONG second");
+    mavlink_msg_command_long_decode(&received, &command);
+    passed &= Check(
+        command.command == MAV_CMD_USER_1 &&
+        std::fabs(command.param1) < 0.001f,
+        "END_DANCE_STEP uses MAV_CMD_USER_1 param1=0");
+    results = dispatcher.ConsumeResults();
+    passed &= Check(
+        results.size() == 1 && results.front().outcome == CommandOutcome::Sent,
+        "END_DANCE_STEP completes after cancel and land datagrams are sent");
     sender.Close();
 
     if (passed)

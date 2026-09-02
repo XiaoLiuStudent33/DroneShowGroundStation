@@ -193,6 +193,43 @@ bool FDroneFleetVisualizationBridgeTest::RunTest(const FString& Parameters)
 		TEXT("The locked origin drone is rebased to the visualization anchor"),
 		InitialGPSPositions[0],
 		Visualization->GetActorLocation());
+	TArray<FVector3f> OverlayENUPositions;
+	OverlayENUPositions.Add(FVector3f::ZeroVector);
+	OverlayENUPositions.Add(FVector3f(1.0f, 0.0f, 0.0f));
+	TArray<FVector> OverlayLiveWorldPositions;
+	FVector OverlayLiveOriginWorld = FVector::ZeroVector;
+	FString OverlayConversionError;
+	// The stable ShowOrigin capture and the latest fixed-pile telemetry are two
+	// samples of the same drone, so allow a small real-world sampling delta. ENU
+	// zero must still be exactly the fixed-pile display anchor.
+	const double CapturedShowOriginLatitude =
+		LockedFleetOrigin.OriginLatitude + 0.00000005;
+	const double CapturedShowOriginLongitude =
+		LockedFleetOrigin.OriginLongitude - 0.00000005;
+	const double CapturedShowOriginAltitude =
+		LockedFleetOrigin.OriginAltitudeAMSL + 0.02;
+	TestTrue(
+		TEXT("Route overlay converts through the Live display coordinate space"),
+		Visualization->ConvertRouteENUPositionsToLiveWorld(
+			OverlayENUPositions,
+			CapturedShowOriginLatitude,
+			CapturedShowOriginLongitude,
+			CapturedShowOriginAltitude,
+			OverlayLiveWorldPositions,
+			OverlayLiveOriginWorld,
+			OverlayConversionError));
+	TestTrue(
+		TEXT("Route overlay ShowOrigin matches the Live visualization anchor"),
+		OverlayLiveOriginWorld.Equals(Visualization->GetActorLocation(), 0.01));
+	TestTrue(
+		TEXT("Route overlay ENU zero matches the fixed-pile display anchor"),
+		OverlayLiveWorldPositions.IsValidIndex(0)
+			&& OverlayLiveWorldPositions[0].Equals(
+				Visualization->GetActorLocation(), 0.01));
+	TestEqual(
+		TEXT("Route overlay conversion preserves its dynamic target count"),
+		OverlayLiveWorldPositions.Num(),
+		OverlayENUPositions.Num());
 	for (int32 Index = 1; Index < InitialGPSPositions.Num(); ++Index)
 	{
 		TestNotEqual(
@@ -353,6 +390,60 @@ bool FDroneFleetVisualizationBridgeTest::RunTest(const FString& Parameters)
 		TEXT("NPZ number overrides the selected-pile side of the pile swap"),
 		Visualization->GetDroneDisplayIDsForTest()[1],
 		12.0f);
+
+	TArray<FVector> RouteTargets;
+	RouteTargets.Add(FVector(10.0, 20.0, 30.0));
+	RouteTargets.Add(FVector(40.0, 50.0, 60.0));
+	RouteTargets.Add(FVector(70.0, 80.0, 90.0));
+	Visualization->SetRouteTargets(RouteTargets, true);
+	TestEqual(
+		TEXT("Route overlay count follows the submitted dynamic array"),
+		Visualization->GetRouteTargetCount(),
+		RouteTargets.Num());
+	TestTrue(
+		TEXT("Atomic route overlay submission applies visibility"),
+		Visualization->AreRouteTargetsVisible());
+	RouteTargets.SetNum(1);
+	Visualization->SetRouteTargets(RouteTargets, true);
+	TestEqual(
+		TEXT("Route overlay count is not fixed to a fleet-size constant"),
+		Visualization->GetRouteTargetCount(),
+		RouteTargets.Num());
+
+	TArray<FVector3f> RoutePreviewPositions;
+	RoutePreviewPositions.Add(FVector3f(0.0f, 0.0f, 10.0f));
+	RoutePreviewPositions.Add(FVector3f(1.0f, 0.0f, 10.0f));
+	RoutePreviewPositions.Add(FVector3f(2.0f, 0.0f, 10.0f));
+	TArray<FLinearColor> RoutePreviewColors;
+	RoutePreviewColors.Init(FLinearColor::White, RoutePreviewPositions.Num());
+	FString RoutePreviewError;
+	TestTrue(
+		TEXT("Full route preview frame is accepted"),
+		Visualization->SetRoutePreviewFrame(
+			RoutePreviewPositions,
+			RoutePreviewColors,
+			31.932471,
+			118.638531,
+			30.0,
+			RoutePreviewError));
+	TestEqual(
+		TEXT("Route preview keeps physical DroneIDs out of preview-only particles"),
+		Visualization->GetParticleDroneIDs().Num(),
+		0);
+	const TArray<float> RoutePreviewDisplayIDs = Visualization->GetDroneDisplayIDsForTest();
+	TestEqual(TEXT("RouteSlot zero is displayed in preview"), RoutePreviewDisplayIDs[0], 0.0f);
+	TestEqual(TEXT("RouteSlot one is displayed in preview"), RoutePreviewDisplayIDs[1], 1.0f);
+	TestEqual(TEXT("RouteSlot two is displayed in preview"), RoutePreviewDisplayIDs[2], 2.0f);
+
+	Visualization->ExitRoutePreview();
+	TestEqual(
+		TEXT("Exiting preview restores the Live physical DroneIDs"),
+		Visualization->GetParticleDroneIDs().Num(),
+		2);
+	TestEqual(
+		TEXT("Exiting preview restores Live display-number rules"),
+		Visualization->GetDroneDisplayIDsForTest()[0],
+		7.0f);
 
 	UE_LOG(
 		LogTemp,

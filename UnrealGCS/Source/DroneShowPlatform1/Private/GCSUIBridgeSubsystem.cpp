@@ -1788,7 +1788,7 @@ void UGCSUIBridgeSubsystem::HandleTimeStartClicked()
 		SetRightPanelText(
 			TEXT("TXT_TimeControlStatus"),
 			PendingTimeControlCommandType == EGCSProductionCommandType::TimeStop
-				? TEXT("正在取消授时任务，请等待取消完成")
+				? TEXT("正在取消授时并发送降落，请等待完成")
 				: TEXT("已有授时任务，请先结束当前任务，勿重复授时"));
 		return;
 	}
@@ -1838,15 +1838,6 @@ void UGCSUIBridgeSubsystem::HandleTimeStartClicked()
 		RequestedTimeLocal += FTimespan::FromDays(1.0);
 	}
 	const double LeadSeconds = (RequestedTimeLocal - Now).GetTotalSeconds();
-	if (LeadSeconds < TimeControlMinimumLeadSeconds)
-	{
-		SetRightPanelText(
-			TEXT("TXT_TimeControlStatus"),
-			FString::Printf(
-				TEXT("授时时间至少提前%d秒"),
-				TimeControlMinimumLeadSeconds));
-		return;
-	}
 
 	ResetTimeControlPreparationState();
 	ScheduledTimeLocal = RequestedTimeLocal;
@@ -1929,7 +1920,7 @@ void UGCSUIBridgeSubsystem::HandleTimeStopClicked()
 	if (!PendingTimeControlCommandID.IsEmpty()
 		&& PendingTimeControlCommandType == EGCSProductionCommandType::TimeStop)
 	{
-		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("正在取消授时任务，请勿重复操作"));
+		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("正在取消授时并发送降落，请勿重复操作"));
 		return;
 	}
 
@@ -1957,14 +1948,8 @@ void UGCSUIBridgeSubsystem::HandleTimeStopClicked()
 	bTimeControlCountdownActive = false;
 	const bool bWasPerformanceActive = bTimeControlPerformanceActive;
 	bTimeControlPerformanceActive = false;
-	bTimeControlArmTriggered = true;
-	bTimeControlAutoTriggered = true;
 	SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("倒计时"));
 	SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("--:--:--"));
-	PendingTimeArmCommandID.Reset();
-	PendingTimeAutoCommandID.Reset();
-	PendingTimeArmDroneIDs.Reset();
-	PendingTimeAutoDroneIDs.Reset();
 	if (URoutePreviewSubsystem* RoutePreview =
 		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>())
 	{
@@ -1981,13 +1966,91 @@ void UGCSUIBridgeSubsystem::HandleTimeStopClicked()
 	PendingTimeControlCompletedDroneIDs.Reset();
 	SetRightPanelText(
 		TEXT("TXT_TimeControlStatus"),
-		FString::Printf(TEXT("正在取消授时任务：0/%d"), Targets.Num()));
+		FString::Printf(TEXT("正在取消授时并发送降落：0/%d"), Targets.Num()));
 	UE_LOG(
 		LogTemp,
 		Display,
 		TEXT("[TimeControlUI] STOP CommandID=%s Targets=%d"),
 		*CommandID,
 		Targets.Num());
+}
+
+void UGCSUIBridgeSubsystem::HandleExecuteDanceStepClicked()
+{
+	const TArray<FString> Targets = GetCommandTargetDroneIDs();
+	if (Targets.IsEmpty())
+	{
+		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("请先选择无人机"));
+		return;
+	}
+
+	const FString CommandID = SubmitProductionCommandForTargets(
+		EGCSProductionCommandType::ExecuteDanceStep,
+		Targets);
+	if (CommandID.IsEmpty())
+	{
+		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("执行舞步发送失败"));
+		return;
+	}
+
+	// The physical command must not depend on local NPZ state. If a matching
+	// route is loaded, start the UE visualization from frame zero as well.
+	if (URoutePreviewSubsystem* RoutePreview =
+		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>();
+		RoutePreview && RoutePreview->IsRouteLoaded())
+	{
+		ResetTimeControlPreparationState();
+		TimeControlTargetDroneIDs = Targets;
+		TimeControlPreviewDatasetGeneration = RoutePreview->GetRouteDatasetGeneration();
+		FString PreviewError;
+		if (!BeginScheduledRoutePreview(PreviewError))
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("[TimeControlUI] EXECUTE local preview rejected: %s"),
+				*PreviewError);
+		}
+	}
+
+	SetRightPanelText(
+		TEXT("TXT_TimeControlStatus"),
+		FString::Printf(TEXT("执行舞步已发送：AUTO＋起飞（%d架）"), Targets.Num()));
+}
+
+void UGCSUIBridgeSubsystem::HandleEndDanceStepClicked()
+{
+	const TArray<FString> Targets = TimeControlTargetDroneIDs.IsEmpty()
+		? GetCommandTargetDroneIDs()
+		: TimeControlTargetDroneIDs;
+	if (Targets.IsEmpty())
+	{
+		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("请先选择无人机"));
+		return;
+	}
+
+	FGCSProductionCommandParameters Parameters;
+	Parameters.TimeControlMask = 1;
+	const FString CommandID = SubmitProductionCommandForTargets(
+		EGCSProductionCommandType::EndDanceStep,
+		Targets,
+		Parameters);
+	if (CommandID.IsEmpty())
+	{
+		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("结束舞步发送失败"));
+		return;
+	}
+
+	if (URoutePreviewSubsystem* RoutePreview =
+		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>())
+	{
+		FString PreviewError;
+		RoutePreview->Stop(PreviewError);
+	}
+	ResetTimeControlPreparationState();
+	SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("倒计时"));
+	SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("--:--:--"));
+	SetRightPanelText(
+		TEXT("TXT_TimeControlStatus"),
+		FString::Printf(TEXT("结束舞步已发送：取消授时＋降落（%d架）"), Targets.Num()));
 }
 
 void UGCSUIBridgeSubsystem::HandleStopClicked()
@@ -2070,7 +2133,7 @@ void UGCSUIBridgeSubsystem::HandleProductionCommandResult(
 				SetRightPanelText(
 					TEXT("TXT_TimeControlStatus"),
 					FString::Printf(
-						TEXT("授时任务已取消 %d/%d"),
+						TEXT("授时已取消并发送降落 %d/%d"),
 						PendingTimeControlSucceededCount,
 						PendingTimeControlTargetCount));
 			}
@@ -2088,52 +2151,27 @@ void UGCSUIBridgeSubsystem::HandleProductionCommandResult(
 					TEXT("%s：%d/%d"),
 					PendingTimeControlCommandType == EGCSProductionCommandType::TimeStart
 						? TEXT("正在发送授时飞行")
-						: TEXT("正在取消授时任务"),
+						: TEXT("正在取消授时并发送降落"),
 					PendingTimeControlResultCount,
 					PendingTimeControlTargetCount));
 		}
 	}
 
-	if (!PendingTimeArmCommandID.IsEmpty()
-		&& Result.CommandID == PendingTimeArmCommandID
-		&& Result.bFinal
-		&& PendingTimeArmDroneIDs.Contains(Result.DroneID))
+	if (Result.bFinal &&
+		(Result.CommandType == EGCSProductionCommandType::ExecuteDanceStep ||
+		 Result.CommandType == EGCSProductionCommandType::EndDanceStep))
 	{
-		PendingTimeArmDroneIDs.Remove(Result.DroneID);
-		if (IsSuccessfulResult(Result))
-		{
-			TimeControlArmedDroneIDs.Add(Result.DroneID);
-		}
-		else
-		{
-			TimeControlFailedDroneIDs.Add(Result.DroneID);
-		}
-		if (PendingTimeArmDroneIDs.IsEmpty())
-		{
-			PendingTimeArmCommandID.Reset();
-			RefreshTimeControlPreparationStatus(TEXT("自动解锁完成"));
-		}
-	}
-
-	if (!PendingTimeAutoCommandID.IsEmpty()
-		&& Result.CommandID == PendingTimeAutoCommandID
-		&& Result.bFinal
-		&& PendingTimeAutoDroneIDs.Contains(Result.DroneID))
-	{
-		PendingTimeAutoDroneIDs.Remove(Result.DroneID);
-		if (IsSuccessfulResult(Result))
-		{
-			TimeControlAutoDroneIDs.Add(Result.DroneID);
-		}
-		else
-		{
-			TimeControlFailedDroneIDs.Add(Result.DroneID);
-		}
-		if (PendingTimeAutoDroneIDs.IsEmpty())
-		{
-			PendingTimeAutoCommandID.Reset();
-			RefreshTimeControlPreparationStatus(TEXT("AUTO确认完成，等待起飞时刻"));
-		}
+		const TCHAR* ActionName = Result.CommandType ==
+			EGCSProductionCommandType::ExecuteDanceStep
+			? TEXT("执行舞步")
+			: TEXT("结束舞步");
+		SetRightPanelText(
+			TEXT("TXT_TimeControlStatus"),
+			FString::Printf(
+				TEXT("%s %s：%s"),
+				ActionName,
+				*Result.DroneID,
+				IsSuccessfulResult(Result) ? TEXT("已发送") : TEXT("失败")));
 	}
 	UE_LOG(
 		LogTemp,
@@ -3702,9 +3740,18 @@ void UGCSUIBridgeSubsystem::RefreshProductionCommandAvailability()
 		  FName(TEXT("BTN_EStop")),
 		  FName(TEXT("BTN_Stop")),
 		  FName(TEXT("BTN_ModeManual")),
-		  FName(TEXT("BTN_ModeAutonomous")) })
+		  FName(TEXT("BTN_ModeAutonomous")),
+		  FName(TEXT("BTN_TimeStart")),
+		  FName(TEXT("BTN_TimeStop")),
+		  FName(TEXT("BTN_ExecuteDanceStep")),
+		  FName(TEXT("BTN_EndDanceStep")) })
 	{
-		if (UButton* Button = FindButton(ButtonName))
+		UButton* Button = FindButton(ButtonName);
+		if (!Button)
+		{
+			Button = FindRightPanelButton(ButtonName);
+		}
+		if (Button)
 		{
 			Button->SetIsEnabled(bCanSendProductionCommands);
 		}
@@ -4193,6 +4240,8 @@ void UGCSUIBridgeSubsystem::BindTimeControlControls()
 {
 	UButton* StartButton = FindRightPanelButton(TEXT("BTN_TimeStart"));
 	UButton* StopButton = FindRightPanelButton(TEXT("BTN_TimeStop"));
+	UButton* ExecuteButton = FindRightPanelButton(TEXT("BTN_ExecuteDanceStep"));
+	UButton* EndButton = FindRightPanelButton(TEXT("BTN_EndDanceStep"));
 	USpinBox* HourInput = FindRightPanelSpinBox(TEXT("SPN_TimeHour"));
 	USpinBox* MinuteInput = FindRightPanelSpinBox(TEXT("SPN_TimeMinute"));
 	USpinBox* SecondInput = FindRightPanelSpinBox(TEXT("SPN_TimeSecond"));
@@ -4200,15 +4249,18 @@ void UGCSUIBridgeSubsystem::BindTimeControlControls()
 	UTextBlock* CountdownText = FindRightPanelText(TEXT("TXT_TimeCountdown"));
 	UTextBlock* StatusText = FindRightPanelText(TEXT("TXT_TimeControlStatus"));
 
-	if (!StartButton || !StopButton || !HourInput || !MinuteInput || !SecondInput
+	if (!StartButton || !StopButton || !ExecuteButton || !EndButton ||
+		!HourInput || !MinuteInput || !SecondInput
 		|| !DurationLabel || !CountdownText || !StatusText)
 	{
 		UE_LOG(
 			LogTemp,
 			Error,
-			TEXT("[TimeControlUI] Asset mismatch Start=%s Stop=%s Hour=%s Minute=%s Second=%s DurationLabel=%s Duration=%s Status=%s"),
+			TEXT("[TimeControlUI] Asset mismatch Start=%s Stop=%s Execute=%s End=%s Hour=%s Minute=%s Second=%s DurationLabel=%s Duration=%s Status=%s"),
 			StartButton ? TEXT("YES") : TEXT("NO"),
 			StopButton ? TEXT("YES") : TEXT("NO"),
+			ExecuteButton ? TEXT("YES") : TEXT("NO"),
+			EndButton ? TEXT("YES") : TEXT("NO"),
 			HourInput ? TEXT("YES") : TEXT("NO"),
 			MinuteInput ? TEXT("YES") : TEXT("NO"),
 			SecondInput ? TEXT("YES") : TEXT("NO"),
@@ -4230,6 +4282,18 @@ void UGCSUIBridgeSubsystem::BindTimeControlControls()
 	StopButton->OnClicked.AddDynamic(
 		this,
 		&UGCSUIBridgeSubsystem::HandleTimeStopClicked);
+	ExecuteButton->OnClicked.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleExecuteDanceStepClicked);
+	ExecuteButton->OnClicked.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleExecuteDanceStepClicked);
+	EndButton->OnClicked.RemoveDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleEndDanceStepClicked);
+	EndButton->OnClicked.AddDynamic(
+		this,
+		&UGCSUIBridgeSubsystem::HandleEndDanceStepClicked);
 
 	const auto ConfigureTimeInput = [](USpinBox* Input, const float Maximum)
 	{
@@ -5068,92 +5132,6 @@ void UGCSUIBridgeSubsystem::TickRoutePlaybackUI(const float DeltaSeconds)
 	RefreshRoutePlaybackUI();
 }
 
-void UGCSUIBridgeSubsystem::BeginTimeControlArmStage()
-{
-	if (bTimeControlArmTriggered)
-	{
-		return;
-	}
-	bTimeControlArmTriggered = true;
-	TArray<FString> Targets;
-	for (const FString& DroneID : TimeControlTargetDroneIDs)
-	{
-		if (TimeControlScheduleSentDroneIDs.Contains(DroneID)
-			&& !TimeControlFailedDroneIDs.Contains(DroneID))
-		{
-			Targets.Add(DroneID);
-			PendingTimeArmDroneIDs.Add(DroneID);
-		}
-	}
-	if (Targets.IsEmpty())
-	{
-		RefreshTimeControlPreparationStatus(TEXT("自动解锁跳过：无可用无人机"));
-		return;
-	}
-	PendingTimeArmCommandID = SubmitProductionCommandForTargets(
-		EGCSProductionCommandType::Arm,
-		Targets);
-	if (PendingTimeArmCommandID.IsEmpty())
-	{
-		for (const FString& DroneID : Targets)
-		{
-			TimeControlFailedDroneIDs.Add(DroneID);
-		}
-		PendingTimeArmDroneIDs.Reset();
-		RefreshTimeControlPreparationStatus(TEXT("自动解锁命令发送失败"));
-		return;
-	}
-	RefreshTimeControlPreparationStatus(TEXT("T-30秒：正在自动解锁"));
-	UE_LOG(LogTemp, Display,
-		TEXT("[TimeControlUI] AUTO_PREP ARM CommandID=%s Targets=%d"),
-		*PendingTimeArmCommandID, Targets.Num());
-}
-
-void UGCSUIBridgeSubsystem::BeginTimeControlAutoStage()
-{
-	if (bTimeControlAutoTriggered)
-	{
-		return;
-	}
-	bTimeControlAutoTriggered = true;
-	TArray<FString> Targets;
-	for (const FString& DroneID : TimeControlTargetDroneIDs)
-	{
-		if (TimeControlArmedDroneIDs.Contains(DroneID)
-			&& !TimeControlFailedDroneIDs.Contains(DroneID))
-		{
-			Targets.Add(DroneID);
-			PendingTimeAutoDroneIDs.Add(DroneID);
-		}
-	}
-	if (Targets.IsEmpty())
-	{
-		RefreshTimeControlPreparationStatus(TEXT("AUTO跳过：没有解锁成功的无人机"));
-		return;
-	}
-	FGCSProductionCommandParameters Parameters;
-	Parameters.CustomMode = 3;
-	Parameters.ModeName = TEXT("AUTO");
-	PendingTimeAutoCommandID = SubmitProductionCommandForTargets(
-		EGCSProductionCommandType::SetMode,
-		Targets,
-		Parameters);
-	if (PendingTimeAutoCommandID.IsEmpty())
-	{
-		for (const FString& DroneID : Targets)
-		{
-			TimeControlFailedDroneIDs.Add(DroneID);
-		}
-		PendingTimeAutoDroneIDs.Reset();
-		RefreshTimeControlPreparationStatus(TEXT("AUTO命令发送失败"));
-		return;
-	}
-	RefreshTimeControlPreparationStatus(TEXT("T-10秒：正在切换AUTO"));
-	UE_LOG(LogTemp, Display,
-		TEXT("[TimeControlUI] AUTO_PREP AUTO CommandID=%s Targets=%d"),
-		*PendingTimeAutoCommandID, Targets.Num());
-}
-
 void UGCSUIBridgeSubsystem::ResetTimeControlPreparationState()
 {
 	bTimeControlCountdownActive = false;
@@ -5162,20 +5140,12 @@ void UGCSUIBridgeSubsystem::ResetTimeControlPreparationState()
 	TimeControlPreviewDatasetGeneration = INDEX_NONE;
 	TimeControlTargetDroneIDs.Reset();
 	TimeControlScheduleSentDroneIDs.Reset();
-	TimeControlArmedDroneIDs.Reset();
-	TimeControlAutoDroneIDs.Reset();
 	TimeControlFailedDroneIDs.Reset();
 	PendingTimeControlCommandID.Reset();
-	PendingTimeArmCommandID.Reset();
-	PendingTimeAutoCommandID.Reset();
 	PendingTimeControlTargetCount = 0;
 	PendingTimeControlResultCount = 0;
 	PendingTimeControlSucceededCount = 0;
 	PendingTimeControlCompletedDroneIDs.Reset();
-	PendingTimeArmDroneIDs.Reset();
-	PendingTimeAutoDroneIDs.Reset();
-	bTimeControlArmTriggered = false;
-	bTimeControlAutoTriggered = false;
 }
 
 bool UGCSUIBridgeSubsystem::BeginScheduledRoutePreview(FString& OutError)
@@ -5229,11 +5199,9 @@ void UGCSUIBridgeSubsystem::RefreshTimeControlPreparationStatus(const FString& P
 	SetRightPanelText(
 		TEXT("TXT_TimeControlStatus"),
 		FString::Printf(
-			TEXT("%s  授时:%d 解锁:%d AUTO:%d 异常:%d/%d"),
+			TEXT("%s  授时:%d 异常:%d/%d"),
 			Prefix.IsEmpty() ? TEXT("授时准备") : *Prefix,
 			TimeControlScheduleSentDroneIDs.Num(),
-			TimeControlArmedDroneIDs.Num(),
-			TimeControlAutoDroneIDs.Num(),
 			TimeControlFailedDroneIDs.Num(),
 			TimeControlTargetDroneIDs.Num()));
 }
@@ -5309,34 +5277,11 @@ void UGCSUIBridgeSubsystem::TickTimeControlUI(const float DeltaSeconds)
 		TEXT("TXT_TimeCountdown"),
 		FormatTimeControlDuration(TotalSeconds));
 
-	if (TotalSeconds > 0
-		&& TotalSeconds <= TimeControlArmLeadSeconds
-		&& PendingTimeControlCommandID.IsEmpty()
-		&& !bTimeControlArmTriggered)
-	{
-		BeginTimeControlArmStage();
-	}
-	if (TotalSeconds > 0
-		&& TotalSeconds <= TimeControlAutoLeadSeconds
-		&& bTimeControlArmTriggered
-		&& PendingTimeArmCommandID.IsEmpty()
-		&& !bTimeControlAutoTriggered)
-	{
-		BeginTimeControlAutoStage();
-	}
-
 	if (TotalSeconds == 0)
 	{
 		bTimeControlCountdownActive = false;
 		SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("表演时间"));
 		SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("00:00:00"));
-		for (const FString& DroneID : TimeControlTargetDroneIDs)
-		{
-			if (!TimeControlAutoDroneIDs.Contains(DroneID))
-			{
-				TimeControlFailedDroneIDs.Add(DroneID);
-			}
-		}
 		FString PreviewError;
 		if (BeginScheduledRoutePreview(PreviewError))
 		{

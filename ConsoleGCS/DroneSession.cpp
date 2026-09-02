@@ -454,18 +454,45 @@ DroneSessionCommandSubmission DroneSession::SubmitCommand(
         }
 
         ConsoleUI::AddLog(
-            requestPrefix + "MP_TIME_CONTROL STOP RemoteEndpoint=" +
+            requestPrefix + "TIME_STOP RemoteEndpoint=" +
             config.remoteIp + ":" + std::to_string(config.remotePort) +
-            " control=0 mask=" +
+            " Actions=MP_TIME_CONTROL_CANCEL,MAV_CMD_USER_1(0) mask=" +
             std::to_string(request.parameters.timeControlMask));
-        submission.dispatchRequestIds.push_back(dispatcher.QueueTimeControl(
+        submission.dispatchRequestIds.push_back(dispatcher.QueueEndDanceStep(
             commandTarget.systemID,
             commandTarget.componentID,
-            0,
-            request.parameters.timeControlMask,
-            0,
-            0,
-            0));
+            request.parameters.timeControlMask));
+        submission.accepted = true;
+        return submission;
+
+    case DroneCommandType::ExecuteDanceStep:
+        ConsoleUI::AddLog(
+            requestPrefix + "EXECUTE_DANCE_STEP RemoteEndpoint=" +
+            config.remoteIp + ":" + std::to_string(config.remotePort) +
+            " Actions=SET_MODE_AUTO,MAV_CMD_USER_1(1)");
+        submission.dispatchRequestIds.push_back(dispatcher.QueueExecuteDanceStep(
+            commandTarget.systemID,
+            commandTarget.componentID));
+        submission.accepted = true;
+        return submission;
+
+    case DroneCommandType::EndDanceStep:
+        if (request.parameters.timeControlMask != 1)
+        {
+            ConsoleUI::AddLog(
+                requestPrefix + "END_DANCE_STEP blocked: invalid mask");
+            submission.error = "invalid scheduled time control mask";
+            return submission;
+        }
+
+        ConsoleUI::AddLog(
+            requestPrefix + "END_DANCE_STEP RemoteEndpoint=" +
+            config.remoteIp + ":" + std::to_string(config.remotePort) +
+            " Actions=MP_TIME_CONTROL_CANCEL,MAV_CMD_USER_1(0)");
+        submission.dispatchRequestIds.push_back(dispatcher.QueueEndDanceStep(
+            commandTarget.systemID,
+            commandTarget.componentID,
+            request.parameters.timeControlMask));
         submission.accepted = true;
         return submission;
 

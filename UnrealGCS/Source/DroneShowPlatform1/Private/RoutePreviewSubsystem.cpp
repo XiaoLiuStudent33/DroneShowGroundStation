@@ -134,7 +134,7 @@ bool URoutePreviewSubsystem::CommitPreparedRouteForWorkflow(
 				PreparedRouteData.GetPosition(0, RouteSlotIndex);
 		}
 		FVector CandidateOriginWorld = FVector::ZeroVector;
-		if (!VisualizationActor->ConvertRouteENUPositionsToWorld(
+		if (!VisualizationActor->ConvertRouteENUPositionsToLiveWorld(
 			CandidateFramePositions,
 			Latitude,
 			Longitude,
@@ -181,10 +181,9 @@ bool URoutePreviewSubsystem::CommitPreparedRouteForWorkflow(
 	if (bEnableOverlay)
 	{
 		CachedRouteTargetWorldPositions = MoveTemp(CandidateWorldPositions);
-		VisualizationActor->SetRouteTargetPositions(CachedRouteTargetWorldPositions);
 		const bool bCanShow =
 			VisualizationActor->GetVisualizationMode() == EGCSVisualizationMode::Live;
-		VisualizationActor->SetRouteTargetsVisible(bCanShow);
+		VisualizationActor->SetRouteTargets(CachedRouteTargetWorldPositions, bCanShow);
 		bRouteOverlayVisible = bCanShow && VisualizationActor->AreRouteTargetsVisible();
 	}
 	UE_LOG(
@@ -437,7 +436,7 @@ bool URoutePreviewSubsystem::RefreshRouteOverlay(FString& OutError)
 	}
 
 	FVector RouteOriginWorld = FVector::ZeroVector;
-	if (!VisualizationActor->ConvertRouteENUPositionsToWorld(
+	if (!VisualizationActor->ConvertRouteENUPositionsToLiveWorld(
 		FramePositionsENU,
 		RouteData.ShowOriginLatitude,
 		RouteData.ShowOriginLongitude,
@@ -461,10 +460,9 @@ bool URoutePreviewSubsystem::RefreshRouteOverlay(FString& OutError)
 		return false;
 	}
 
-	VisualizationActor->SetRouteTargetPositions(CachedRouteTargetWorldPositions);
 	const bool bCanShow = bRouteOverlayEnabled
 		&& VisualizationActor->GetVisualizationMode() == EGCSVisualizationMode::Live;
-	VisualizationActor->SetRouteTargetsVisible(bCanShow);
+	VisualizationActor->SetRouteTargets(CachedRouteTargetWorldPositions, bCanShow);
 	bRouteOverlayVisible = bCanShow && VisualizationActor->AreRouteTargetsVisible();
 	UE_LOG(
 		LogTemp,

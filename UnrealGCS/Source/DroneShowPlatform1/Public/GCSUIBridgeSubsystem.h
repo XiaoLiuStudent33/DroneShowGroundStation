@@ -283,6 +283,12 @@ private:
 	void HandleTimeStopClicked();
 
 	UFUNCTION()
+	void HandleExecuteDanceStepClicked();
+
+	UFUNCTION()
+	void HandleEndDanceStepClicked();
+
+	UFUNCTION()
 	void HandleFixedPileApplyClicked();
 
 	UFUNCTION()
@@ -382,8 +388,6 @@ private:
 	void PollMarqueePlayerControllerInput();
 	void TickRoutePlaybackUI(float DeltaSeconds);
 	void TickTimeControlUI(float DeltaSeconds);
-	void BeginTimeControlArmStage();
-	void BeginTimeControlAutoStage();
 	bool BeginScheduledRoutePreview(FString& OutError);
 	void ResetTimeControlPreparationState();
 	void RefreshTimeControlPreparationStatus(const FString& Prefix = {});
@@ -537,22 +541,14 @@ private:
 	FDateTime ScheduledTimeLocal;
 	TArray<FString> TimeControlTargetDroneIDs;
 	TSet<FString> TimeControlScheduleSentDroneIDs;
-	TSet<FString> TimeControlArmedDroneIDs;
-	TSet<FString> TimeControlAutoDroneIDs;
 	TSet<FString> TimeControlFailedDroneIDs;
 	FString PendingTimeControlCommandID;
-	FString PendingTimeArmCommandID;
-	FString PendingTimeAutoCommandID;
 	EGCSProductionCommandType PendingTimeControlCommandType =
 		EGCSProductionCommandType::TimeStart;
 	int32 PendingTimeControlTargetCount = 0;
 	int32 PendingTimeControlResultCount = 0;
 	int32 PendingTimeControlSucceededCount = 0;
 	TSet<FString> PendingTimeControlCompletedDroneIDs;
-	TSet<FString> PendingTimeArmDroneIDs;
-	TSet<FString> PendingTimeAutoDroneIDs;
-	bool bTimeControlArmTriggered = false;
-	bool bTimeControlAutoTriggered = false;
 	FVector2D TopDownLastMousePosition = FVector2D::ZeroVector;
 	float TopDownFitOrthoWidth = 0.0f;
 	FVector TopDownLockedCameraLocation = FVector::ZeroVector;
@@ -597,9 +593,6 @@ private:
 	static constexpr float TopDownMaxOrthoWidthFactor = 8.0f;
 	static constexpr float RouteUIRefreshIntervalSeconds = 0.1f;
 	static constexpr float TimeControlUIRefreshIntervalSeconds = 0.1f;
-	static constexpr int32 TimeControlMinimumLeadSeconds = 45;
-	static constexpr int32 TimeControlArmLeadSeconds = 30;
-	static constexpr int32 TimeControlAutoLeadSeconds = 10;
 	static constexpr float UploadDashboardRefreshIntervalSeconds = 0.2f;
 	float HoverAltitudeMeters = 5.0f;
 };

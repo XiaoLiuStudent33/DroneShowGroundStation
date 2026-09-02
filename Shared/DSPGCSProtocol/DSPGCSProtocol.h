@@ -17,8 +17,8 @@ namespace dspgcs
 {
     inline constexpr std::uint16_t ProtocolMajor = 1;
     inline constexpr std::uint16_t ProtocolMinor = 0;
-    // Schema 4 adds scheduled local-time flight control command parameters.
-    inline constexpr std::uint16_t SchemaVersion = 4;
+    // Schema 5 adds explicit immediate dance start/end command types.
+    inline constexpr std::uint16_t SchemaVersion = 5;
     inline constexpr std::uint32_t FrameMagic = 0x44535047; // DSPG
     inline constexpr std::size_t MaxFrameBytes = 256 * 1024;
     inline constexpr std::size_t MaxStringBytes = 16 * 1024;
@@ -46,7 +46,9 @@ namespace dspgcs
         HoverTest = 7,
         SetLedColor = 8,
         TimeStart = 9,
-        TimeStop = 10
+        TimeStop = 10,
+        ExecuteDanceStep = 11,
+        EndDanceStep = 12
     };
     enum class AckState : std::uint8_t
     {
