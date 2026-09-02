@@ -17,8 +17,9 @@ namespace dspgcs
 {
     inline constexpr std::uint16_t ProtocolMajor = 1;
     inline constexpr std::uint16_t ProtocolMinor = 0;
-    // Schema 5 adds explicit immediate dance start/end command types.
-    inline constexpr std::uint16_t SchemaVersion = 5;
+    // Schema 7 carries every MDHK_STATUS (#187) field needed by the expanded
+    // UE telemetry table without changing standard operational telemetry.
+    inline constexpr std::uint16_t SchemaVersion = 7;
     inline constexpr std::uint32_t FrameMagic = 0x44535047; // DSPG
     inline constexpr std::size_t MaxFrameBytes = 256 * 1024;
     inline constexpr std::size_t MaxStringBytes = 16 * 1024;
@@ -116,7 +117,8 @@ namespace dspgcs
         inline constexpr std::uint64_t RSSI = 1ull << 6;
         inline constexpr std::uint64_t LED = 1ull << 7;
         inline constexpr std::uint64_t Mission = 1ull << 8;
-        inline constexpr std::uint64_t All = (1ull << 9) - 1;
+        inline constexpr std::uint64_t MDHKStatus = 1ull << 9;
+        inline constexpr std::uint64_t All = (1ull << 10) - 1;
     }
 
     struct MessageEnvelope
@@ -190,6 +192,58 @@ namespace dspgcs
         std::uint16_t progressPermille = 0;
         std::int64_t showTimeMs = 0;
     };
+    struct MDHKStatusDTO
+    {
+        bool received = false;
+        std::int64_t sampleTimestampUtcMs = 0;
+        std::uint32_t timeBootMs = 0;
+        std::uint16_t gpsYear = 0;
+        std::uint8_t gpsMonth = 0;
+        std::uint8_t gpsDay = 0;
+        std::uint8_t gpsHour = 0;
+        std::uint8_t gpsMinute = 0;
+        std::uint8_t gpsSecond = 0;
+        std::uint32_t validFlags = 0;
+        std::uint8_t schemaVersion = 0;
+        bool batteryRemainingValid = false;
+        std::int16_t batteryRemainingPercent = -1;
+        bool batteryTemperatureValid = false;
+        float batteryTemperatureCelsius = 0.0f;
+        bool cell1Valid = false;
+        float cell1Volts = 0.0f;
+        bool cell2Valid = false;
+        float cell2Volts = 0.0f;
+        bool cell3Valid = false;
+        float cell3Volts = 0.0f;
+        bool cell4Valid = false;
+        float cell4Volts = 0.0f;
+        bool gpsValid = false;
+        double latitudeDeg = 0.0;
+        double longitudeDeg = 0.0;
+        bool altitudeValid = false;
+        float gpsAltitudeAmslMeters = 0.0f;
+        float relativeAltitudeMeters = 0.0f;
+        std::uint32_t freeMemoryBytes = 0;
+        std::uint32_t flightSoftwareVersion = 0;
+        float waypointDistanceMeters = 0.0f;
+        float compassVariance = 0.0f;
+        float magneticField1Mgauss = 0.0f;
+        float magneticField2Mgauss = 0.0f;
+        std::uint16_t batteryCycleCount = UINT16_MAX;
+        std::uint16_t cellVoltageDeltaMv = UINT16_MAX;
+        std::uint16_t ekfFlags = 0;
+        std::uint16_t missionSequence = 0;
+        std::uint16_t missionTotal = 0;
+        std::int16_t batteryCurrentCentiamps = -1;
+        std::uint8_t gpsFixType = 0;
+        std::uint8_t satellitesVisible = UINT8_MAX;
+        std::uint8_t red = 0;
+        std::uint8_t green = 0;
+        std::uint8_t blue = 0;
+        std::vector<std::uint8_t> flightCustomVersion =
+            std::vector<std::uint8_t>(8, 0);
+        std::string hardwareId;
+    };
     struct TelemetryDTO
     {
         std::string droneId;
@@ -205,6 +259,7 @@ namespace dspgcs
         RSSIDTO rssi;
         LEDStateDTO led;
         MissionStateDTO mission;
+        MDHKStatusDTO mdhkStatus;
     };
     struct TelemetryBatchDTO
     {
@@ -389,6 +444,26 @@ namespace dspgcs
             w.Bool(t.rssi.valid); w.I16(t.rssi.valueDbm);
             w.U8(static_cast<std::uint8_t>(t.led.state)); w.U8(t.led.red); w.U8(t.led.green); w.U8(t.led.blue); w.U8(t.led.brightness); w.U64(t.led.showFrame); w.Bool(t.led.confirmed);
             w.String(t.mission.missionId); w.U8(static_cast<std::uint8_t>(t.mission.state)); w.U32(t.mission.currentItem); w.U16(t.mission.progressPermille); w.I64(t.mission.showTimeMs);
+            w.Bool(t.mdhkStatus.received); w.I64(t.mdhkStatus.sampleTimestampUtcMs); w.U32(t.mdhkStatus.validFlags); w.U8(t.mdhkStatus.schemaVersion);
+            w.Bool(t.mdhkStatus.batteryRemainingValid); w.I16(t.mdhkStatus.batteryRemainingPercent);
+            w.Bool(t.mdhkStatus.batteryTemperatureValid); w.Float(t.mdhkStatus.batteryTemperatureCelsius);
+            w.Bool(t.mdhkStatus.cell1Valid); w.Float(t.mdhkStatus.cell1Volts);
+            w.Bool(t.mdhkStatus.cell2Valid); w.Float(t.mdhkStatus.cell2Volts);
+            w.Bool(t.mdhkStatus.cell3Valid); w.Float(t.mdhkStatus.cell3Volts);
+            w.Bool(t.mdhkStatus.cell4Valid); w.Float(t.mdhkStatus.cell4Volts);
+            w.Bool(t.mdhkStatus.gpsValid); w.Double(t.mdhkStatus.latitudeDeg); w.Double(t.mdhkStatus.longitudeDeg);
+            w.Bool(t.mdhkStatus.altitudeValid); w.Float(t.mdhkStatus.gpsAltitudeAmslMeters);
+            w.U32(t.mdhkStatus.timeBootMs);
+            w.U16(t.mdhkStatus.gpsYear); w.U8(t.mdhkStatus.gpsMonth); w.U8(t.mdhkStatus.gpsDay);
+            w.U8(t.mdhkStatus.gpsHour); w.U8(t.mdhkStatus.gpsMinute); w.U8(t.mdhkStatus.gpsSecond);
+            w.Float(t.mdhkStatus.relativeAltitudeMeters); w.U32(t.mdhkStatus.freeMemoryBytes); w.U32(t.mdhkStatus.flightSoftwareVersion);
+            w.Float(t.mdhkStatus.waypointDistanceMeters); w.Float(t.mdhkStatus.compassVariance);
+            w.Float(t.mdhkStatus.magneticField1Mgauss); w.Float(t.mdhkStatus.magneticField2Mgauss);
+            w.U16(t.mdhkStatus.batteryCycleCount); w.U16(t.mdhkStatus.cellVoltageDeltaMv); w.U16(t.mdhkStatus.ekfFlags);
+            w.U16(t.mdhkStatus.missionSequence); w.U16(t.mdhkStatus.missionTotal); w.I16(t.mdhkStatus.batteryCurrentCentiamps);
+            w.U8(t.mdhkStatus.gpsFixType); w.U8(t.mdhkStatus.satellitesVisible);
+            w.U8(t.mdhkStatus.red); w.U8(t.mdhkStatus.green); w.U8(t.mdhkStatus.blue);
+            w.Bytes(t.mdhkStatus.flightCustomVersion); w.String(t.mdhkStatus.hardwareId);
         }
         inline bool Telemetry(Reader& r, TelemetryDTO& t)
         {
@@ -400,7 +475,28 @@ namespace dspgcs
                 !r.I32(t.mode.modeCode) || !r.String(t.mode.modeName) || !r.Bool(t.mode.armed) ||
                 !r.Bool(t.connection.online) || !r.U8(connectionState) || !r.I64(t.connection.lastHeartbeatUtcMs) || !r.String(t.connection.linkId) ||
                 !r.Bool(t.rssi.valid) || !r.I16(t.rssi.valueDbm) || !r.U8(ledState) || !r.U8(t.led.red) || !r.U8(t.led.green) || !r.U8(t.led.blue) || !r.U8(t.led.brightness) || !r.U64(t.led.showFrame) || !r.Bool(t.led.confirmed) ||
-                !r.String(t.mission.missionId) || !r.U8(missionState) || !r.U32(t.mission.currentItem) || !r.U16(t.mission.progressPermille) || !r.I64(t.mission.showTimeMs)) return false;
+                !r.String(t.mission.missionId) || !r.U8(missionState) || !r.U32(t.mission.currentItem) || !r.U16(t.mission.progressPermille) || !r.I64(t.mission.showTimeMs) ||
+                !r.Bool(t.mdhkStatus.received) || !r.I64(t.mdhkStatus.sampleTimestampUtcMs) || !r.U32(t.mdhkStatus.validFlags) || !r.U8(t.mdhkStatus.schemaVersion) ||
+                !r.Bool(t.mdhkStatus.batteryRemainingValid) || !r.I16(t.mdhkStatus.batteryRemainingPercent) ||
+                !r.Bool(t.mdhkStatus.batteryTemperatureValid) || !r.Float(t.mdhkStatus.batteryTemperatureCelsius) ||
+                !r.Bool(t.mdhkStatus.cell1Valid) || !r.Float(t.mdhkStatus.cell1Volts) ||
+                !r.Bool(t.mdhkStatus.cell2Valid) || !r.Float(t.mdhkStatus.cell2Volts) ||
+                !r.Bool(t.mdhkStatus.cell3Valid) || !r.Float(t.mdhkStatus.cell3Volts) ||
+                !r.Bool(t.mdhkStatus.cell4Valid) || !r.Float(t.mdhkStatus.cell4Volts) ||
+                !r.Bool(t.mdhkStatus.gpsValid) || !r.Double(t.mdhkStatus.latitudeDeg) || !r.Double(t.mdhkStatus.longitudeDeg) ||
+                !r.Bool(t.mdhkStatus.altitudeValid) || !r.Float(t.mdhkStatus.gpsAltitudeAmslMeters) ||
+                !r.U32(t.mdhkStatus.timeBootMs) ||
+                !r.U16(t.mdhkStatus.gpsYear) || !r.U8(t.mdhkStatus.gpsMonth) || !r.U8(t.mdhkStatus.gpsDay) ||
+                !r.U8(t.mdhkStatus.gpsHour) || !r.U8(t.mdhkStatus.gpsMinute) || !r.U8(t.mdhkStatus.gpsSecond) ||
+                !r.Float(t.mdhkStatus.relativeAltitudeMeters) || !r.U32(t.mdhkStatus.freeMemoryBytes) || !r.U32(t.mdhkStatus.flightSoftwareVersion) ||
+                !r.Float(t.mdhkStatus.waypointDistanceMeters) || !r.Float(t.mdhkStatus.compassVariance) ||
+                !r.Float(t.mdhkStatus.magneticField1Mgauss) || !r.Float(t.mdhkStatus.magneticField2Mgauss) ||
+                !r.U16(t.mdhkStatus.batteryCycleCount) || !r.U16(t.mdhkStatus.cellVoltageDeltaMv) || !r.U16(t.mdhkStatus.ekfFlags) ||
+                !r.U16(t.mdhkStatus.missionSequence) || !r.U16(t.mdhkStatus.missionTotal) || !r.I16(t.mdhkStatus.batteryCurrentCentiamps) ||
+                !r.U8(t.mdhkStatus.gpsFixType) || !r.U8(t.mdhkStatus.satellitesVisible) ||
+                !r.U8(t.mdhkStatus.red) || !r.U8(t.mdhkStatus.green) || !r.U8(t.mdhkStatus.blue) ||
+                !r.Bytes(t.mdhkStatus.flightCustomVersion) || t.mdhkStatus.flightCustomVersion.size() != 8 ||
+                !r.String(t.mdhkStatus.hardwareId) || t.mdhkStatus.hardwareId.size() > 20) return false;
             t.connection.state = static_cast<ConnectionState>(connectionState); t.led.state = static_cast<LEDState>(ledState); t.mission.state = static_cast<MissionState>(missionState); return true;
         }
         inline void Command(Writer& w, const CommandRequestDTO& c)

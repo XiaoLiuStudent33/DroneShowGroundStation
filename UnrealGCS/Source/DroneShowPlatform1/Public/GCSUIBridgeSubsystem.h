@@ -441,6 +441,8 @@ private:
 	void CreateNavigationPages();
 	void ConfigureGroundStationInputPolicy(UUserWidget* MainWidget) const;
 	void ConfigureTelemetryTableInput() const;
+	void TickTelemetryTableUI(float DeltaSeconds);
+	void RefreshTelemetryTableFromProduction();
 	void ResetNavigationPages();
 	void ShowMainPage(EGCSMainPage Page);
 	void ApplyNavigationVisibility();
@@ -568,6 +570,7 @@ private:
 	FString UploadDashboardTuningStatus = TEXT("NOT CONNECTED");
 	FString UploadDashboardTuningDiagnostic;
 	float UploadDashboardRefreshAccumulator = 0.0f;
+	float TelemetryTableRefreshAccumulator = 0.0f;
 	TWeakObjectPtr<ACameraActor> TopDownOrthographicCamera;
 	TWeakObjectPtr<AActor> PreviousTopDownViewTarget;
 	TWeakObjectPtr<APlayerController> TopDownPlayerController;
@@ -576,6 +579,9 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UGCSDroneRowView>> FleetRowViews;
+
+	UPROPERTY(Transient)
+	TMap<FString, TObjectPtr<UObject>> TelemetryRowObjects;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UGCSRouteWorkflowCoordinator> RouteWorkflowCoordinator;
@@ -594,5 +600,6 @@ private:
 	static constexpr float RouteUIRefreshIntervalSeconds = 0.1f;
 	static constexpr float TimeControlUIRefreshIntervalSeconds = 0.1f;
 	static constexpr float UploadDashboardRefreshIntervalSeconds = 0.2f;
+	static constexpr float TelemetryTableRefreshIntervalSeconds = 1.0f;
 	float HoverAltitudeMeters = 5.0f;
 };

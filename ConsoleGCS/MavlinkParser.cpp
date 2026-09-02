@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <string>
 
 namespace
@@ -270,6 +271,86 @@ void MavlinkParser::ParseAt(
 
         data.batteryRemaining = status.battery_remaining;
 
+        break;
+    }
+
+    //--------------------------------------------------
+    // Vendor MAVLink #187 MDHK_STATUS：1 Hz consolidated detail telemetry.
+    // This is a separate UI/status source and never overwrites the standard
+    // operational GPS/SYS_STATUS fields in FlightData.
+    //--------------------------------------------------
+    case MAVLINK_MSG_ID_MDHK_STATUS:
+    {
+        mavlink_mdhk_status_t status{};
+        mavlink_msg_mdhk_status_decode(&msg, &status);
+
+        MDHKStatusData& target = data.mdhkStatus;
+        target.received = true;
+        target.lastReceiveUtcMs = receiveUtcMs;
+        target.lastReceiveMonotonic = receiveMonotonic;
+        ++target.sampleSequence;
+        target.timeBootMs = status.time_boot_ms;
+        target.gpsYear = status.gps_year;
+        target.gpsMonth = status.gps_month;
+        target.gpsDay = status.gps_day;
+        target.gpsHour = status.gps_hour;
+        target.gpsMinute = status.gps_minute;
+        target.gpsSecond = status.gps_second;
+        target.validFlags = status.valid_flags;
+        target.schemaVersion = status.schema_version;
+
+        target.gpsFixType = status.gps_fix_type;
+        target.satellitesVisible = status.satellites_visible;
+        target.gpsValid = status.gps_fix_type >= 3;
+        target.latitudeDeg = static_cast<double>(status.latitude) / 10000000.0;
+        target.longitudeDeg = static_cast<double>(status.longitude) / 10000000.0;
+        target.altitudeValid = status.gps_fix_type >= 3;
+        target.gpsAltitudeAmslMeters =
+            static_cast<float>(static_cast<double>(status.gps_alt) / 1000.0);
+        target.relativeAltitudeMeters =
+            static_cast<float>(static_cast<double>(status.relative_alt) / 1000.0);
+
+        target.batteryRemainingValid = status.battery_remaining >= 0;
+        target.batteryRemainingPercent = status.battery_remaining;
+        target.batteryTemperatureValid =
+            status.battery_temperature != std::numeric_limits<std::int16_t>::max();
+        target.batteryTemperatureCelsius = target.batteryTemperatureValid
+            ? static_cast<float>(status.battery_temperature) / 100.0f
+            : 0.0f;
+        for (std::size_t index = 0; index < target.cellVoltageVolts.size(); ++index)
+        {
+            target.cellVoltageValid[index] =
+                status.cell_voltages[index] != std::numeric_limits<std::uint16_t>::max();
+            target.cellVoltageVolts[index] = target.cellVoltageValid[index]
+                ? static_cast<float>(status.cell_voltages[index]) / 1000.0f
+                : 0.0f;
+        }
+
+        target.freeMemoryBytes = status.freemem32;
+        target.flightSoftwareVersion = status.flight_sw_version;
+        target.waypointDistanceMeters = status.wp_distance;
+        target.compassVariance = status.compass_variance;
+        target.magneticField1Mgauss = status.mag_field1;
+        target.magneticField2Mgauss = status.mag_field2;
+        target.batteryCycleCount = status.battery_cycle_count;
+        target.cellVoltageDeltaMv = status.cell_voltage_delta;
+        target.ekfFlags = status.ekf_flags;
+        target.missionSequence = status.mission_seq;
+        target.missionTotal = status.mission_total;
+        target.batteryCurrentCentiamps = status.battery_current;
+        target.red = status.rgb_red;
+        target.green = status.rgb_green;
+        target.blue = status.rgb_blue;
+        for (std::size_t index = 0; index < target.flightCustomVersion.size(); ++index)
+        {
+            target.flightCustomVersion[index] = status.flight_custom_version[index];
+        }
+        target.hardwareId.assign(status.hardware_id, sizeof(status.hardware_id));
+        const std::size_t terminator = target.hardwareId.find('\0');
+        if (terminator != std::string::npos)
+        {
+            target.hardwareId.resize(terminator);
+        }
         break;
     }
 

@@ -78,6 +78,57 @@ namespace
         dto.rssi.valid = false;
         dto.led.state = dspgcs::LEDState::Unknown;
         dto.mission.state = dspgcs::MissionState::None;
+
+        const MDHKStatusData& status = data.mdhkStatus;
+        dto.mdhkStatus.received = status.received;
+        dto.mdhkStatus.sampleTimestampUtcMs = status.lastReceiveUtcMs;
+        dto.mdhkStatus.timeBootMs = status.timeBootMs;
+        dto.mdhkStatus.gpsYear = status.gpsYear;
+        dto.mdhkStatus.gpsMonth = status.gpsMonth;
+        dto.mdhkStatus.gpsDay = status.gpsDay;
+        dto.mdhkStatus.gpsHour = status.gpsHour;
+        dto.mdhkStatus.gpsMinute = status.gpsMinute;
+        dto.mdhkStatus.gpsSecond = status.gpsSecond;
+        dto.mdhkStatus.validFlags = status.validFlags;
+        dto.mdhkStatus.schemaVersion = status.schemaVersion;
+        dto.mdhkStatus.batteryRemainingValid = status.batteryRemainingValid;
+        dto.mdhkStatus.batteryRemainingPercent = status.batteryRemainingPercent;
+        dto.mdhkStatus.batteryTemperatureValid = status.batteryTemperatureValid;
+        dto.mdhkStatus.batteryTemperatureCelsius = status.batteryTemperatureCelsius;
+        dto.mdhkStatus.cell1Valid = status.cellVoltageValid[0];
+        dto.mdhkStatus.cell1Volts = status.cellVoltageVolts[0];
+        dto.mdhkStatus.cell2Valid = status.cellVoltageValid[1];
+        dto.mdhkStatus.cell2Volts = status.cellVoltageVolts[1];
+        dto.mdhkStatus.cell3Valid = status.cellVoltageValid[2];
+        dto.mdhkStatus.cell3Volts = status.cellVoltageVolts[2];
+        dto.mdhkStatus.cell4Valid = status.cellVoltageValid[3];
+        dto.mdhkStatus.cell4Volts = status.cellVoltageVolts[3];
+        dto.mdhkStatus.gpsValid = status.gpsValid;
+        dto.mdhkStatus.latitudeDeg = status.latitudeDeg;
+        dto.mdhkStatus.longitudeDeg = status.longitudeDeg;
+        dto.mdhkStatus.altitudeValid = status.altitudeValid;
+        dto.mdhkStatus.gpsAltitudeAmslMeters = status.gpsAltitudeAmslMeters;
+        dto.mdhkStatus.relativeAltitudeMeters = status.relativeAltitudeMeters;
+        dto.mdhkStatus.freeMemoryBytes = status.freeMemoryBytes;
+        dto.mdhkStatus.flightSoftwareVersion = status.flightSoftwareVersion;
+        dto.mdhkStatus.waypointDistanceMeters = status.waypointDistanceMeters;
+        dto.mdhkStatus.compassVariance = status.compassVariance;
+        dto.mdhkStatus.magneticField1Mgauss = status.magneticField1Mgauss;
+        dto.mdhkStatus.magneticField2Mgauss = status.magneticField2Mgauss;
+        dto.mdhkStatus.batteryCycleCount = status.batteryCycleCount;
+        dto.mdhkStatus.cellVoltageDeltaMv = status.cellVoltageDeltaMv;
+        dto.mdhkStatus.ekfFlags = status.ekfFlags;
+        dto.mdhkStatus.missionSequence = status.missionSequence;
+        dto.mdhkStatus.missionTotal = status.missionTotal;
+        dto.mdhkStatus.batteryCurrentCentiamps = status.batteryCurrentCentiamps;
+        dto.mdhkStatus.gpsFixType = status.gpsFixType;
+        dto.mdhkStatus.satellitesVisible = status.satellitesVisible;
+        dto.mdhkStatus.red = status.red;
+        dto.mdhkStatus.green = status.green;
+        dto.mdhkStatus.blue = status.blue;
+        dto.mdhkStatus.flightCustomVersion.assign(
+            status.flightCustomVersion.begin(), status.flightCustomVersion.end());
+        dto.mdhkStatus.hardwareId = status.hardwareId;
         return dto;
     }
 }

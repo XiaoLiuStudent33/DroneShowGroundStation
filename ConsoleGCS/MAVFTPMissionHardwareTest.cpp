@@ -13,7 +13,7 @@
 
 extern "C"
 {
-#include "ardupilotmega/mavlink.h"
+#include "mdhk/mavlink.h"
 }
 
 namespace

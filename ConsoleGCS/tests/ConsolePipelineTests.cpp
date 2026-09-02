@@ -26,7 +26,7 @@
 
 extern "C"
 {
-#include "ardupilotmega/mavlink.h"
+#include "mdhk/mavlink.h"
 }
 
 int RunCommandTests();
@@ -1324,6 +1324,55 @@ int RunConsolePipelineTests()
                 .telemetryApplied == 1,
             "SYS_STATUS was not routed to Drone000");
 
+        const std::uint16_t cellVoltages[4] = { 3966, 3989, 3859, 3992 };
+        const std::uint8_t customVersion[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+        const char hardwareId[20] =
+            { 'A','B','C','D','E','F','G','H','J','K','M','N','P','Q','R','S','T','V','W','X' };
+        mavlink_message_t mdhkStatus{};
+        mavlink_msg_mdhk_status_pack(
+            1,
+            MAV_COMP_ID_AUTOPILOT1,
+            &mdhkStatus,
+            123456,
+            2026,
+            9,
+            2,
+            12,
+            34,
+            56,
+            0xA5A50001u,
+            319324710,
+            1186385312,
+            32592,
+            2300,
+            65536,
+            0x01020304u,
+            12.5f,
+            0.25f,
+            430.0f,
+            432.0f,
+            cellVoltages,
+            17,
+            133,
+            0x1234,
+            7,
+            100,
+            125,
+            2595,
+            89,
+            3,
+            14,
+            1,
+            10,
+            20,
+            30,
+            customVersion,
+            hardwareId);
+        Expect(
+            SubmitMessage(ingress, mdhkStatus, "192.168.1.145")
+                .telemetryApplied == 1,
+            "MDHK_STATUS #187 failed CRC parsing or session routing");
+
         telemetry = drone000->GetFlightData();
         Expect(telemetry.gpsValid, "Drone000 GPS did not become valid");
         Expect(telemetry.altitudeValid, "Drone000 altitude did not become valid");
@@ -1337,6 +1386,58 @@ int RunConsolePipelineTests()
             telemetry.altitude > 123.4f && telemetry.altitude < 123.5f,
             "Drone000 altitude conversion failed");
         Expect(telemetry.batteryRemaining == 87, "Drone000 battery failed");
+		Expect(
+			telemetry.mdhkStatus.received &&
+			telemetry.mdhkStatus.batteryRemainingValid &&
+			telemetry.mdhkStatus.batteryRemainingPercent == 89 &&
+			telemetry.mdhkStatus.batteryTemperatureValid &&
+			telemetry.mdhkStatus.batteryTemperatureCelsius > 25.94f &&
+			telemetry.mdhkStatus.batteryTemperatureCelsius < 25.96f &&
+			telemetry.mdhkStatus.cellVoltageValid[0] &&
+			telemetry.mdhkStatus.cellVoltageVolts[0] > 3.965f &&
+			telemetry.mdhkStatus.cellVoltageVolts[0] < 3.967f &&
+			telemetry.mdhkStatus.gpsValid &&
+			telemetry.mdhkStatus.latitudeDeg > 31.9324709 &&
+			telemetry.mdhkStatus.latitudeDeg < 31.9324711 &&
+			telemetry.mdhkStatus.altitudeValid &&
+			telemetry.mdhkStatus.gpsAltitudeAmslMeters > 32.591f &&
+			telemetry.mdhkStatus.gpsAltitudeAmslMeters < 32.593f &&
+			telemetry.mdhkStatus.timeBootMs == 123456 &&
+			telemetry.mdhkStatus.gpsYear == 2026 &&
+			telemetry.mdhkStatus.gpsMonth == 9 &&
+			telemetry.mdhkStatus.gpsDay == 2 &&
+			telemetry.mdhkStatus.gpsHour == 12 &&
+			telemetry.mdhkStatus.gpsMinute == 34 &&
+			telemetry.mdhkStatus.gpsSecond == 56 &&
+			telemetry.mdhkStatus.validFlags == 0xA5A50001u &&
+			telemetry.mdhkStatus.relativeAltitudeMeters > 2.299f &&
+			telemetry.mdhkStatus.relativeAltitudeMeters < 2.301f &&
+			telemetry.mdhkStatus.freeMemoryBytes == 65536 &&
+			telemetry.mdhkStatus.flightSoftwareVersion == 0x01020304u &&
+			telemetry.mdhkStatus.waypointDistanceMeters == 12.5f &&
+			telemetry.mdhkStatus.compassVariance == 0.25f &&
+			telemetry.mdhkStatus.magneticField1Mgauss == 430.0f &&
+			telemetry.mdhkStatus.magneticField2Mgauss == 432.0f &&
+			telemetry.mdhkStatus.batteryCycleCount == 17 &&
+			telemetry.mdhkStatus.cellVoltageDeltaMv == 133 &&
+			telemetry.mdhkStatus.ekfFlags == 0x1234 &&
+			telemetry.mdhkStatus.missionSequence == 7 &&
+			telemetry.mdhkStatus.missionTotal == 100 &&
+			telemetry.mdhkStatus.batteryCurrentCentiamps == 125 &&
+			telemetry.mdhkStatus.gpsFixType == 3 &&
+			telemetry.mdhkStatus.satellitesVisible == 14 &&
+			telemetry.mdhkStatus.schemaVersion == 1 &&
+			telemetry.mdhkStatus.red == 10 &&
+			telemetry.mdhkStatus.green == 20 &&
+			telemetry.mdhkStatus.blue == 30 &&
+			telemetry.mdhkStatus.flightCustomVersion[0] == 1 &&
+			telemetry.mdhkStatus.flightCustomVersion[7] == 8 &&
+			telemetry.mdhkStatus.hardwareId == "ABCDEFGHJKMNPQRSTVWX",
+			"MDHK_STATUS complete telemetry values failed");
+		Expect(
+			telemetry.latitude > 31.9327549 && telemetry.latitude < 31.9327551 &&
+			telemetry.batteryRemaining == 87,
+			"MDHK_STATUS overwrote standard operational telemetry");
         Expect(telemetry.modeName == "LOITER", "Drone000 mode failed");
         std::cout << "Drone000 telemetry GPS/Altitude/Battery/Mode applied\n";
 
@@ -1445,7 +1546,41 @@ int RunConsolePipelineTests()
 					drone000->GetFlightData().lastGpsReceiveUtcMs &&
                 batch.items.front().connection.online &&
                 batch.items.front().gps.valid &&
-                batch.items.front().battery.remainingPercent == 87.0f,
+                batch.items.front().battery.remainingPercent == 87.0f &&
+				batch.items.front().mdhkStatus.received &&
+				batch.items.front().mdhkStatus.batteryRemainingPercent == 89 &&
+				batch.items.front().mdhkStatus.cell4Valid &&
+				batch.items.front().mdhkStatus.cell4Volts > 3.991f &&
+				batch.items.front().mdhkStatus.cell4Volts < 3.993f &&
+				batch.items.front().mdhkStatus.latitudeDeg > 31.9324709 &&
+				batch.items.front().mdhkStatus.latitudeDeg < 31.9324711 &&
+				batch.items.front().mdhkStatus.timeBootMs == 123456 &&
+				batch.items.front().mdhkStatus.gpsYear == 2026 &&
+				batch.items.front().mdhkStatus.gpsSecond == 56 &&
+				batch.items.front().mdhkStatus.validFlags == 0xA5A50001u &&
+				batch.items.front().mdhkStatus.relativeAltitudeMeters > 2.299f &&
+				batch.items.front().mdhkStatus.relativeAltitudeMeters < 2.301f &&
+				batch.items.front().mdhkStatus.freeMemoryBytes == 65536 &&
+				batch.items.front().mdhkStatus.flightSoftwareVersion == 0x01020304u &&
+				batch.items.front().mdhkStatus.waypointDistanceMeters == 12.5f &&
+				batch.items.front().mdhkStatus.compassVariance == 0.25f &&
+				batch.items.front().mdhkStatus.magneticField1Mgauss == 430.0f &&
+				batch.items.front().mdhkStatus.magneticField2Mgauss == 432.0f &&
+				batch.items.front().mdhkStatus.batteryCycleCount == 17 &&
+				batch.items.front().mdhkStatus.cellVoltageDeltaMv == 133 &&
+				batch.items.front().mdhkStatus.ekfFlags == 0x1234 &&
+				batch.items.front().mdhkStatus.missionSequence == 7 &&
+				batch.items.front().mdhkStatus.missionTotal == 100 &&
+				batch.items.front().mdhkStatus.batteryCurrentCentiamps == 125 &&
+				batch.items.front().mdhkStatus.gpsFixType == 3 &&
+				batch.items.front().mdhkStatus.satellitesVisible == 14 &&
+				batch.items.front().mdhkStatus.schemaVersion == 1 &&
+				batch.items.front().mdhkStatus.red == 10 &&
+				batch.items.front().mdhkStatus.green == 20 &&
+				batch.items.front().mdhkStatus.blue == 30 &&
+				batch.items.front().mdhkStatus.flightCustomVersion ==
+					std::vector<std::uint8_t>({ 1, 2, 3, 4, 5, 6, 7, 8 }) &&
+				batch.items.front().mdhkStatus.hardwareId == "ABCDEFGHJKMNPQRSTVWX",
             "production Drone000 TelemetryDTO values failed");
         Expect(
             batch.items[1].droneId == "Drone001" &&

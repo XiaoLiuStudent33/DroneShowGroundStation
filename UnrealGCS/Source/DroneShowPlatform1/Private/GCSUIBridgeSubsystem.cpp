@@ -71,6 +71,63 @@ namespace
 	constexpr float FixedPileAxisDepthOffsetUU = 300.0f;
 	const FName SceneMapActorTag(TEXT("GCS.SceneMap"));
 
+	int32 ParseLogicalDroneNumber(const FString& DroneID)
+	{
+		int32 DigitStart = DroneID.Len();
+		while (DigitStart > 0 && FChar::IsDigit(DroneID[DigitStart - 1]))
+		{
+			--DigitStart;
+		}
+		return DigitStart < DroneID.Len()
+			? FCString::Atoi(*DroneID.Mid(DigitStart))
+			: INDEX_NONE;
+	}
+
+	bool SetTelemetryInteger(UObject* Object, const FName Name, const int32 Value)
+	{
+		if (FIntProperty* Property = FindFProperty<FIntProperty>(Object->GetClass(), Name))
+		{
+			Property->SetPropertyValue_InContainer(Object, Value);
+			return true;
+		}
+		return false;
+	}
+
+	bool SetTelemetryInteger64(UObject* Object, const FName Name, const int64 Value)
+	{
+		if (FInt64Property* Property = FindFProperty<FInt64Property>(Object->GetClass(), Name))
+		{
+			Property->SetPropertyValue_InContainer(Object, Value);
+			return true;
+		}
+		return false;
+	}
+
+	bool SetTelemetryString(UObject* Object, const FName Name, const FString& Value)
+	{
+		if (FStrProperty* Property = FindFProperty<FStrProperty>(Object->GetClass(), Name))
+		{
+			Property->SetPropertyValue_InContainer(Object, Value);
+			return true;
+		}
+		return false;
+	}
+
+	bool SetTelemetryReal(UObject* Object, const FName Name, const double Value)
+	{
+		if (FDoubleProperty* Property = FindFProperty<FDoubleProperty>(Object->GetClass(), Name))
+		{
+			Property->SetPropertyValue_InContainer(Object, Value);
+			return true;
+		}
+		if (FFloatProperty* Property = FindFProperty<FFloatProperty>(Object->GetClass(), Name))
+		{
+			Property->SetPropertyValue_InContainer(Object, static_cast<float>(Value));
+			return true;
+		}
+		return false;
+	}
+
 	bool IsSceneMapActor(const AActor* Actor)
 	{
 		return Actor
@@ -466,6 +523,7 @@ public:
 			Bridge->TickRoutePlaybackUI(DeltaTime);
 			Bridge->TickTimeControlUI(DeltaTime);
 			Bridge->TickUploadDashboardUI(DeltaTime);
+			Bridge->TickTelemetryTableUI(DeltaTime);
 		}
 	}
 
@@ -717,6 +775,7 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 	SelectedCommandDroneIDs.Reset();
 	CurrentFleetPageDroneIDs.Reset();
 	FleetRowViews.Reset();
+	TelemetryRowObjects.Reset();
 	FleetPageOffset = 0;
 	bMarqueePointerDown = false;
 	bMarqueeSelecting = false;
@@ -725,6 +784,7 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 	bUpdatingRouteTimelineFromState = false;
 	RouteUIRefreshAccumulator = 0.0f;
 	TimeControlUIRefreshAccumulator = 0.0f;
+	TelemetryTableRefreshAccumulator = 0.0f;
 	ResetTimeControlPreparationState();
 
 	Super::Deinitialize();
@@ -3693,6 +3753,11 @@ void UGCSUIBridgeSubsystem::HandleFleetDataBatchApplied(
 		FleetRevision,
 		UpdatedDroneCount);
 	RefreshFromFleet();
+	// The production provider has already published the matching MDHK cache
+	// before this batch notification. Refresh the table immediately; the 1 Hz
+	// UI tick remains only as a fallback for view creation/timing races.
+	RefreshTelemetryTableFromProduction();
+	TelemetryTableRefreshAccumulator = 0.0f;
 }
 
 void UGCSUIBridgeSubsystem::HandleTelemetryLinkStateChanged()
@@ -5516,6 +5581,7 @@ void UGCSUIBridgeSubsystem::CreateNavigationPages()
 	LogsPageWidget = CreateNavigationPage(
 		TEXT("/Game/UI/WBP_GCS_PageLogs.WBP_GCS_PageLogs_C"));
 	ConfigureTelemetryTableInput();
+	TelemetryTableRefreshAccumulator = TelemetryTableRefreshIntervalSeconds;
 }
 
 void UGCSUIBridgeSubsystem::ConfigureGroundStationInputPolicy(UUserWidget* MainWidget) const
@@ -5580,6 +5646,151 @@ void UGCSUIBridgeSubsystem::ConfigureTelemetryTableInput() const
 			Error,
 			TEXT("LV_Telemetry must remain vertical so it owns the mouse wheel."));
 	}
+}
+
+void UGCSUIBridgeSubsystem::TickTelemetryTableUI(const float DeltaSeconds)
+{
+	TelemetryTableRefreshAccumulator += DeltaSeconds;
+	if (TelemetryTableRefreshAccumulator < TelemetryTableRefreshIntervalSeconds)
+	{
+		return;
+	}
+	TelemetryTableRefreshAccumulator = 0.0f;
+	RefreshTelemetryTableFromProduction();
+}
+
+void UGCSUIBridgeSubsystem::RefreshTelemetryTableFromProduction()
+{
+	UUserWidget* LogsPage = LogsPageWidget.Get();
+	if (!LogsPage || !LogsPage->WidgetTree)
+	{
+		return;
+	}
+
+	const FBoolProperty* MockProperty =
+		FindFProperty<FBoolProperty>(LogsPage->GetClass(), TEXT("bUseMockTelemetry"));
+	if (!MockProperty)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("Telemetry table requires the WBP_GCS_PageLogs bUseMockTelemetry boolean."));
+		return;
+	}
+	if (MockProperty->GetPropertyValue_InContainer(LogsPage))
+	{
+		return;
+	}
+
+	UListView* TelemetryList = Cast<UListView>(
+		LogsPage->WidgetTree->FindWidget(TEXT("LV_Telemetry")));
+	UDSPGCSProductionTelemetryProviderSubsystem* Provider = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UDSPGCSProductionTelemetryProviderSubsystem>()
+		: nullptr;
+	if (!TelemetryList || !Provider)
+	{
+		return;
+	}
+
+	TArray<FMDHKTelemetryTableRow> Rows = Provider->GetMDHKTelemetryRows();
+	Rows.Sort([](const FMDHKTelemetryTableRow& Left, const FMDHKTelemetryTableRow& Right)
+	{
+		const int32 LeftNumber = ParseLogicalDroneNumber(Left.DroneID);
+		const int32 RightNumber = ParseLogicalDroneNumber(Right.DroneID);
+		if (LeftNumber != INDEX_NONE && RightNumber != INDEX_NONE && LeftNumber != RightNumber)
+		{
+			return LeftNumber < RightNumber;
+		}
+		return Left.DroneID < Right.DroneID;
+	});
+
+	bool bRebuildItems = TelemetryRowObjects.Num() != Rows.Num()
+		|| TelemetryList->GetNumItems() != Rows.Num();
+	if (!bRebuildItems)
+	{
+		for (const FMDHKTelemetryTableRow& Row : Rows)
+		{
+			if (!TelemetryRowObjects.Contains(Row.DroneID))
+			{
+				bRebuildItems = true;
+				break;
+			}
+		}
+	}
+
+	if (bRebuildItems)
+	{
+		TelemetryList->ClearListItems();
+		TelemetryRowObjects.Reset();
+	}
+
+	UClass* RowDataClass = LoadObject<UClass>(
+		nullptr,
+		TEXT("/Game/UI/BP_TelemetryRowData.BP_TelemetryRowData_C"));
+	if (!RowDataClass)
+	{
+		UE_LOG(LogTemp, Error, TEXT("BP_TelemetryRowData class could not be loaded."));
+		return;
+	}
+
+	for (const FMDHKTelemetryTableRow& Row : Rows)
+	{
+		TObjectPtr<UObject>* Existing = TelemetryRowObjects.Find(Row.DroneID);
+		UObject* RowObject = Existing ? Existing->Get() : nullptr;
+		if (!RowObject)
+		{
+			RowObject = NewObject<UObject>(this, RowDataClass);
+			TelemetryRowObjects.Add(Row.DroneID, RowObject);
+			TelemetryList->AddItem(RowObject);
+		}
+
+		const int32 LogicalID = ParseLogicalDroneNumber(Row.DroneID);
+		const bool bPropertiesValid =
+			SetTelemetryInteger(RowObject, TEXT("UavID"), LogicalID) &&
+			SetTelemetryInteger(RowObject, TEXT("Battery"),
+				Row.bBatteryRemainingValid ? Row.BatteryRemainingPercent : -1) &&
+			SetTelemetryReal(RowObject, TEXT("Temperature"),
+				Row.bBatteryTemperatureValid ? Row.BatteryTemperatureCelsius : 0.0) &&
+			SetTelemetryReal(RowObject, TEXT("Cell1"), Row.bCell1Valid ? Row.Cell1Volts : 0.0) &&
+			SetTelemetryReal(RowObject, TEXT("Cell2"), Row.bCell2Valid ? Row.Cell2Volts : 0.0) &&
+			SetTelemetryReal(RowObject, TEXT("Cell3"), Row.bCell3Valid ? Row.Cell3Volts : 0.0) &&
+			SetTelemetryReal(RowObject, TEXT("Cell4"), Row.bCell4Valid ? Row.Cell4Volts : 0.0) &&
+			SetTelemetryReal(RowObject, TEXT("Latitude"), Row.bGPSValid ? Row.LatitudeDeg : 0.0) &&
+			SetTelemetryReal(RowObject, TEXT("Longitude"), Row.bGPSValid ? Row.LongitudeDeg : 0.0) &&
+			SetTelemetryReal(RowObject, TEXT("Altitude"),
+				Row.bAltitudeValid ? Row.AltitudeAmslMeters : 0.0) &&
+			SetTelemetryInteger64(RowObject, TEXT("TimeBootMs"), Row.TimeBootMs) &&
+			SetTelemetryString(RowObject, TEXT("GPSUtc"), Row.GPSUtc) &&
+			SetTelemetryString(RowObject, TEXT("ValidFlags"), Row.ValidFlagsText) &&
+			SetTelemetryReal(RowObject, TEXT("RelativeAltitude"), Row.RelativeAltitudeMeters) &&
+			SetTelemetryInteger64(RowObject, TEXT("FreeMemoryBytes"), Row.FreeMemoryBytes) &&
+			SetTelemetryString(RowObject, TEXT("FlightSWVersion"), Row.FlightSoftwareVersionText) &&
+			SetTelemetryReal(RowObject, TEXT("WaypointDistance"), Row.WaypointDistanceMeters) &&
+			SetTelemetryReal(RowObject, TEXT("CompassVariance"), Row.CompassVariance) &&
+			SetTelemetryReal(RowObject, TEXT("MagField1"), Row.MagneticField1Mgauss) &&
+			SetTelemetryReal(RowObject, TEXT("MagField2"), Row.MagneticField2Mgauss) &&
+			SetTelemetryInteger(RowObject, TEXT("BatteryCycleCount"), Row.BatteryCycleCount) &&
+			SetTelemetryInteger(RowObject, TEXT("CellVoltageDeltaMv"), Row.CellVoltageDeltaMv) &&
+			SetTelemetryString(RowObject, TEXT("EKFFlags"), Row.EKFFlagsText) &&
+			SetTelemetryInteger(RowObject, TEXT("MissionSeq"), Row.MissionSequence) &&
+			SetTelemetryInteger(RowObject, TEXT("MissionTotal"), Row.MissionTotal) &&
+			SetTelemetryReal(RowObject, TEXT("BatteryCurrent"), Row.BatteryCurrentAmps) &&
+			SetTelemetryInteger(RowObject, TEXT("GPSFixType"), Row.GPSFixType) &&
+			SetTelemetryInteger(RowObject, TEXT("SatellitesVisible"), Row.SatellitesVisible) &&
+			SetTelemetryInteger(RowObject, TEXT("PayloadSchemaVersion"), Row.PayloadSchemaVersion) &&
+			SetTelemetryString(RowObject, TEXT("RGB"), Row.RGBText) &&
+			SetTelemetryString(RowObject, TEXT("FlightCustomVersion"), Row.FlightCustomVersionText) &&
+			SetTelemetryString(RowObject, TEXT("HardwareID"), Row.HardwareID);
+		if (!bPropertiesValid)
+		{
+			UE_LOG(LogTemp, Error,
+				TEXT("BP_TelemetryRowData no longer matches the expanded 32-column production contract."));
+			return;
+		}
+	}
+
+	// RequestRefresh only reconciles added/removed items. These row objects keep
+	// their identity while their telemetry properties change, so force entry
+	// re-binding to execute WBP_TelemetryRow::OnListItemObjectSet again.
+	TelemetryList->RegenerateAllEntries();
 }
 
 void UGCSUIBridgeSubsystem::ResetNavigationPages()

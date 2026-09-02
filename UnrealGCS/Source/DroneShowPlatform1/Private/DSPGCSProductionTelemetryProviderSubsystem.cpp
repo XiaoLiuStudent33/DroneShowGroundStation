@@ -20,6 +20,7 @@
 #include "Misc/ScopeLock.h"
 
 #include <iterator>
+#include <limits>
 
 namespace
 {
@@ -33,6 +34,52 @@ namespace
 		return TimestampUtcMs > 0
 			? FDateTime::FromUnixTimestamp(TimestampUtcMs / 1000)
 			: FDateTime::UtcNow();
+	}
+
+	FString FormatMDHKGPSUtc(const dspgcs::MDHKStatusDTO& Status)
+	{
+		const bool bValid = Status.gpsYear != 0
+			&& Status.gpsMonth >= 1 && Status.gpsMonth <= 12
+			&& Status.gpsDay >= 1 && Status.gpsDay <= 31
+			&& Status.gpsHour <= 23
+			&& Status.gpsMinute <= 59
+			&& Status.gpsSecond <= 60;
+		return bValid
+			? FString::Printf(
+				TEXT("%04u-%02u-%02u %02u:%02u:%02u"),
+				static_cast<uint32>(Status.gpsYear),
+				static_cast<uint32>(Status.gpsMonth),
+				static_cast<uint32>(Status.gpsDay),
+				static_cast<uint32>(Status.gpsHour),
+				static_cast<uint32>(Status.gpsMinute),
+				static_cast<uint32>(Status.gpsSecond))
+			: TEXT("-1");
+	}
+
+	FString FormatMDHKFlightSoftwareVersion(const uint32 Version)
+	{
+		return FString::Printf(
+			TEXT("%u.%u.%u (0x%08X)"),
+			(Version >> 24) & 0xffu,
+			(Version >> 16) & 0xffu,
+			(Version >> 8) & 0xffu,
+			Version);
+	}
+
+	FString FormatMDHKCustomVersion(const std::vector<std::uint8_t>& Version)
+	{
+		if (Version.size() != 8)
+		{
+			return TEXT("-1");
+		}
+
+		FString Result;
+		Result.Reserve(16);
+		for (const std::uint8_t Byte : Version)
+		{
+			Result += FString::Printf(TEXT("%02X"), static_cast<uint32>(Byte));
+		}
+		return Result;
 	}
 
 	FDroneData ToProductionFleetDrone(const dspgcs::TelemetryDTO& Source, const bool bSelected)
@@ -131,6 +178,10 @@ void UDSPGCSProductionTelemetryProviderSubsystem::Stop()
 		Transport.reset();
 	}
 	ResetPendingTelemetrySnapshot();
+	{
+		FScopeLock Lock(&MDHKTelemetryRowsMutex);
+		MDHKTelemetryRows.Reset();
+	}
 	AdapterRef.Reset();
 }
 
@@ -152,6 +203,13 @@ UDSPGCSProductionTelemetryProviderSubsystem::GetTelemetryLinkState() const
 bool UDSPGCSProductionTelemetryProviderSubsystem::IsTelemetryLinkConnected() const
 {
 	return GetTelemetryLinkState() == EDSPGCSTelemetryLinkState::Connected;
+}
+
+TArray<FMDHKTelemetryTableRow>
+UDSPGCSProductionTelemetryProviderSubsystem::GetMDHKTelemetryRows() const
+{
+	FScopeLock Lock(&MDHKTelemetryRowsMutex);
+	return MDHKTelemetryRows;
 }
 
 void UDSPGCSProductionTelemetryProviderSubsystem::SetCommandResultHandler(
@@ -367,9 +425,79 @@ void UDSPGCSProductionTelemetryProviderSubsystem::HandleTransportFrame(
 	Snapshot.Header.SourceTimestamp = FromProductionUnixMilliseconds(Envelope.timestampUtcMs);
 	Snapshot.FleetRevision = static_cast<int64>(CompleteBatch.fleetRevision);
 	Snapshot.Drones.Reserve(static_cast<int32>(CompleteBatch.items.size()));
+	TArray<FMDHKTelemetryTableRow> NewMDHKRows;
+	NewMDHKRows.Reserve(static_cast<int32>(CompleteBatch.items.size()));
 	for (size_t Index = 0; Index < CompleteBatch.items.size(); ++Index)
 	{
-		Snapshot.Drones.Add(ToProductionFleetDrone(CompleteBatch.items[Index], Index == 0));
+		const dspgcs::TelemetryDTO& Source = CompleteBatch.items[Index];
+		Snapshot.Drones.Add(ToProductionFleetDrone(Source, Index == 0));
+		if (Source.mdhkStatus.received)
+		{
+			FMDHKTelemetryTableRow& Row = NewMDHKRows.AddDefaulted_GetRef();
+			Row.DroneID = FromProductionProtocolString(Source.droneId);
+			Row.bReceived = true;
+			Row.SampleTimestampUtcMs = Source.mdhkStatus.sampleTimestampUtcMs;
+			Row.BatteryRemainingPercent = Source.mdhkStatus.batteryRemainingPercent;
+			Row.bBatteryRemainingValid = Source.mdhkStatus.batteryRemainingValid;
+			Row.BatteryTemperatureCelsius = Source.mdhkStatus.batteryTemperatureCelsius;
+			Row.bBatteryTemperatureValid = Source.mdhkStatus.batteryTemperatureValid;
+			Row.Cell1Volts = Source.mdhkStatus.cell1Volts;
+			Row.bCell1Valid = Source.mdhkStatus.cell1Valid;
+			Row.Cell2Volts = Source.mdhkStatus.cell2Volts;
+			Row.bCell2Valid = Source.mdhkStatus.cell2Valid;
+			Row.Cell3Volts = Source.mdhkStatus.cell3Volts;
+			Row.bCell3Valid = Source.mdhkStatus.cell3Valid;
+			Row.Cell4Volts = Source.mdhkStatus.cell4Volts;
+			Row.bCell4Valid = Source.mdhkStatus.cell4Valid;
+			Row.LatitudeDeg = Source.mdhkStatus.latitudeDeg;
+			Row.LongitudeDeg = Source.mdhkStatus.longitudeDeg;
+			Row.bGPSValid = Source.mdhkStatus.gpsValid;
+			Row.AltitudeAmslMeters = Source.mdhkStatus.gpsAltitudeAmslMeters;
+			Row.bAltitudeValid = Source.mdhkStatus.altitudeValid;
+			Row.ValidFlags = static_cast<int64>(Source.mdhkStatus.validFlags);
+			Row.PayloadSchemaVersion = Source.mdhkStatus.schemaVersion;
+			Row.TimeBootMs = static_cast<int64>(Source.mdhkStatus.timeBootMs);
+			Row.GPSUtc = FormatMDHKGPSUtc(Source.mdhkStatus);
+			Row.ValidFlagsText = FString::Printf(
+				TEXT("0x%08X"), Source.mdhkStatus.validFlags);
+			Row.RelativeAltitudeMeters = Source.mdhkStatus.relativeAltitudeMeters;
+			Row.FreeMemoryBytes = static_cast<int64>(Source.mdhkStatus.freeMemoryBytes);
+			Row.FlightSoftwareVersionText = FormatMDHKFlightSoftwareVersion(
+				Source.mdhkStatus.flightSoftwareVersion);
+			Row.WaypointDistanceMeters = Source.mdhkStatus.waypointDistanceMeters;
+			Row.CompassVariance = Source.mdhkStatus.compassVariance;
+			Row.MagneticField1Mgauss = Source.mdhkStatus.magneticField1Mgauss;
+			Row.MagneticField2Mgauss = Source.mdhkStatus.magneticField2Mgauss;
+			Row.BatteryCycleCount = Source.mdhkStatus.batteryCycleCount
+				== std::numeric_limits<std::uint16_t>::max()
+				? -1 : static_cast<int32>(Source.mdhkStatus.batteryCycleCount);
+			Row.CellVoltageDeltaMv = Source.mdhkStatus.cellVoltageDeltaMv
+				== std::numeric_limits<std::uint16_t>::max()
+				? -1 : static_cast<int32>(Source.mdhkStatus.cellVoltageDeltaMv);
+			Row.EKFFlagsText = FString::Printf(
+				TEXT("0x%04X"), Source.mdhkStatus.ekfFlags);
+			Row.MissionSequence = Source.mdhkStatus.missionSequence;
+			Row.MissionTotal = Source.mdhkStatus.missionTotal;
+			Row.BatteryCurrentAmps = Source.mdhkStatus.batteryCurrentCentiamps == -1
+				? -1.0
+				: static_cast<double>(Source.mdhkStatus.batteryCurrentCentiamps) / 100.0;
+			Row.GPSFixType = Source.mdhkStatus.gpsFixType;
+			Row.SatellitesVisible = Source.mdhkStatus.satellitesVisible
+				== std::numeric_limits<std::uint8_t>::max()
+				? -1 : static_cast<int32>(Source.mdhkStatus.satellitesVisible);
+			Row.RGBText = FString::Printf(
+				TEXT("R=%u G=%u B=%u"),
+				static_cast<uint32>(Source.mdhkStatus.red),
+				static_cast<uint32>(Source.mdhkStatus.green),
+				static_cast<uint32>(Source.mdhkStatus.blue));
+			Row.FlightCustomVersionText = FormatMDHKCustomVersion(
+				Source.mdhkStatus.flightCustomVersion);
+			Row.HardwareID = FromProductionProtocolString(Source.mdhkStatus.hardwareId);
+		}
+	}
+	{
+		FScopeLock Lock(&MDHKTelemetryRowsMutex);
+		MDHKTelemetryRows = MoveTemp(NewMDHKRows);
 	}
 
 	if (Adapter->PushFleetSnapshot(Snapshot))

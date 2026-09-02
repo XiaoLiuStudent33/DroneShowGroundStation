@@ -16,7 +16,7 @@
 
 extern "C"
 {
-#include "ardupilotmega/mavlink.h"
+#include "mdhk/mavlink.h"
 }
 
 namespace
@@ -646,6 +646,7 @@ bool DroneSession::ApplyDiscoveredTelemetry(
     case MAVLINK_MSG_ID_GPS_RAW_INT:
     case MAVLINK_MSG_ID_SYS_STATUS:
     case MAVLINK_MSG_ID_AUTOPILOT_VERSION:
+    case MAVLINK_MSG_ID_MDHK_STATUS:
         parser.Parse(message, workingData);
         dataManager.Update(workingData);
         return true;

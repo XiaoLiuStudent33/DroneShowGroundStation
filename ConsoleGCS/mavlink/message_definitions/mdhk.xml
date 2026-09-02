@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<mavlink>
+  <include>ardupilotmega.xml</include>
+  <dialect>0</dialect>
+  <messages>
+    <message id="187" name="MDHK_STATUS">
+      <description>ZYhawk consolidated 1 Hz telemetry status. This supplements standard MAVLink messages and does not change their definitions.</description>
+      <field type="uint32_t" name="time_boot_ms" units="ms">Timestamp since system boot.</field>
+      <field type="uint16_t" name="gps_year">GPS UTC Gregorian year. Zero means invalid.</field>
+      <field type="uint8_t" name="gps_month">GPS UTC month, 1 through 12. Zero means invalid.</field>
+      <field type="uint8_t" name="gps_day">GPS UTC day, 1 through 31. Zero means invalid.</field>
+      <field type="uint8_t" name="gps_hour">GPS UTC hour in 24-hour format, 0 through 23.</field>
+      <field type="uint8_t" name="gps_minute">GPS UTC minute, 0 through 59.</field>
+      <field type="uint8_t" name="gps_second">GPS UTC second, 0 through 60.</field>
+      <field type="uint32_t" name="valid_flags" display="bitmask">Validity bitmap for the grouped values in this packet. The vendor enum is preserved as a raw value until its bit definitions are supplied.</field>
+      <field type="int32_t" name="latitude" units="degE7">Raw GPS latitude.</field>
+      <field type="int32_t" name="longitude" units="degE7">Raw GPS longitude.</field>
+      <field type="int32_t" name="gps_alt" units="mm">Raw GPS altitude above mean sea level.</field>
+      <field type="int32_t" name="relative_alt" units="mm">Estimated altitude relative to HOME, positive upward.</field>
+      <field type="uint32_t" name="freemem32" units="bytes">Available system memory.</field>
+      <field type="uint32_t" name="flight_sw_version">Firmware version encoded as in AUTOPILOT_VERSION.flight_sw_version.</field>
+      <field type="float" name="wp_distance" units="m">Horizontal distance from the aircraft to the current navigation waypoint.</field>
+      <field type="float" name="compass_variance">Maximum EKF compass variance.</field>
+      <field type="float" name="mag_field1" units="mgauss">Magnitude of compass instance 1 field vector.</field>
+      <field type="float" name="mag_field2" units="mgauss">Magnitude of compass instance 2 field vector.</field>
+      <field type="uint16_t[4]" name="cell_voltages" units="mV">Primary battery cell voltages 1 through 4. UINT16_MAX means invalid.</field>
+      <field type="uint16_t" name="battery_cycle_count">Primary smart-battery cycle count. UINT16_MAX means invalid.</field>
+      <field type="uint16_t" name="cell_voltage_delta" units="mV">Difference between the highest and lowest valid primary-battery cell voltage. UINT16_MAX means invalid.</field>
+      <field type="uint16_t" name="ekf_flags" enum="EKF_STATUS_FLAGS" display="bitmask">Flags encoded as in EKF_STATUS_REPORT.flags.</field>
+      <field type="uint16_t" name="mission_seq">Current mission sequence number.</field>
+      <field type="uint16_t" name="mission_total">Total mission item count excluding HOME.</field>
+      <field type="int16_t" name="battery_current" units="cA">Primary battery current. -1 means invalid.</field>
+      <field type="int16_t" name="battery_temperature" units="cdegC">Primary battery temperature. INT16_MAX means invalid.</field>
+      <field type="int8_t" name="battery_remaining" units="%">Primary battery remaining percentage. -1 means invalid.</field>
+      <field type="uint8_t" name="gps_fix_type" enum="GPS_FIX_TYPE">Raw GPS fix type.</field>
+      <field type="uint8_t" name="satellites_visible">Number of satellites visible. 255 means invalid.</field>
+      <field type="uint8_t" name="schema_version">MDHK_STATUS payload schema version.</field>
+      <field type="uint8_t" name="rgb_red">Final logical red LED output, 0 through 255.</field>
+      <field type="uint8_t" name="rgb_green">Final logical green LED output, 0 through 255.</field>
+      <field type="uint8_t" name="rgb_blue">Final logical blue LED output, 0 through 255.</field>
+      <field type="uint8_t[8]" name="flight_custom_version">Firmware Git/custom version bytes.</field>
+      <field type="char[20]" name="hardware_id">Twenty-character Base32 STM32 hardware identifier.</field>
+    </message>
+  </messages>
+</mavlink>
