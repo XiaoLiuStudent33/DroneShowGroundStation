@@ -29,12 +29,14 @@
 #include "RouteUploadManager.h"
 #include "SafetyConfig.h"
 #include "FrozenAssignmentStore.h"
+#include "ManagedBackendSession.h"
 
 #include <windows.h>
 
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -185,6 +187,7 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
 {
     std::string configPath = "gcs-config.ini";
     bool configPathSet = false;
+    std::string launcherToken;
     MissionProfileProbeOptions probeOptions;
     MAVFTPMissionHardwareTestOptions hardwareTestOptions;
     bool quickOnlyOptionSeen = false;
@@ -346,6 +349,15 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
                 return -1;
             }
         }
+        else if (argument == "--launcher-session")
+        {
+            if (!launcherToken.empty() || !ReadOptionValue(
+                    "--launcher-session", index, argc, argv, launcherToken))
+            {
+                std::cerr << "Exactly one launcher session is accepted.\n";
+                return -1;
+            }
+        }
         else if (!argument.empty() && argument[0] == '-')
         {
             std::cerr << "Unknown command-line option.\n";
@@ -384,6 +396,16 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
         hardwareTestOptions.routeSlotIndex = 0;
     if (hardwareTestOptions.quickTest && !configPathSet)
         configPath = "gcs-config-upload.ini";
+    // A managed joint launch may provide a Unicode-safe, per-user config path.
+    // Manual invocations and explicit CLI paths keep their existing behavior.
+    if (!launcherToken.empty() && !configPathSet)
+    {
+        wchar_t managedConfig[32768]{};
+        const DWORD length = GetEnvironmentVariableW(
+            L"DRONEGCS_CONFIG_PATH", managedConfig, 32768);
+        if (length > 0 && length < 32768)
+            configPath = std::filesystem::path(managedConfig).u8string();
+    }
     AppConfig appConfig;
     std::string configError;
 
@@ -420,6 +442,33 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
         return -1;
     }
 
+    ManagedBackendSession launcherSession;
+    if (!launcherSession.Open(launcherToken, appConfig,
+            probeOptions.enabled || hardwareTestOptions.enabled, configError))
+    {
+        std::cerr << configError << '\n';
+        return -7;
+    }
+
+    // Joint launch supplies one absolute workspace to both processes. Never
+    // consult a developer checkout path or override an explicit operator root.
+    if (launcherSession.Enabled() && appConfig.artifactWorkspaceRoot.empty())
+    {
+        wchar_t root[32768]{};
+        const DWORD length = GetEnvironmentVariableW(L"DRONEGCS_ARTIFACT_WORKSPACE", root, 32768);
+        if (length > 0 && length < 32768)
+        {
+            const std::filesystem::path path(root);
+            if (!path.is_absolute() || path == path.root_path()) return -7;
+            appConfig.artifactWorkspaceRoot = path.lexically_normal().u8string();
+        }
+        else if (appConfig.routeUploadEnabled)
+        {
+            std::cerr << "Joint control launch requires an absolute artifact workspace.\n";
+            return -7;
+        }
+    }
+
     SafetyConfig::SetSafeTestMode(appConfig.safeTestMode);
     SafetyConfig::SetRealCommandEnabled(appConfig.realCommandEnabled);
     SafetyConfig::SetFlightAltitudeLimits(
@@ -437,6 +486,17 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
 
     ScopedConsolePresentation consolePresentation;
     ConsoleUI::AddLog("Drone GCS Started");
+    if (launcherSession.Enabled())
+    {
+        DWORD consoleMode = 0;
+        ConsoleUI::AddLog(GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &consoleMode)
+            ? "Visible Console attached; Ctrl+C requests orderly shutdown."
+            : "Console output redirected.");
+        ConsoleUI::AddLog("ArtifactWorkspace=" + appConfig.artifactWorkspaceRoot);
+        ConsoleUI::AddLog(ManagedBackendSession::IsReadOnly(appConfig)
+            ? "Read-only lifecycle: stop with launcher."
+            : "Control lifecycle: UE/launcher exit does NOT stop backend; no automatic restart.");
+    }
     ConsoleUI::AddLog(
         std::string("SAFE_TEST_MODE=") +
         (SafetyConfig::SAFE_TEST_MODE ? "true" : "false"));
@@ -489,13 +549,14 @@ int ConsoleGCSApplication::Run(int argc, char* argv[])
     }
 
     return RunProductionMavlink(
-        appConfig, probeOptions, hardwareTestOptions);
+        appConfig, probeOptions, hardwareTestOptions, launcherSession);
 }
 
 int ConsoleGCSApplication::RunProductionMavlink(
     const AppConfig& appConfig,
     const MissionProfileProbeOptions& probeOptions,
-    const MAVFTPMissionHardwareTestOptions& hardwareTestOptions)
+    const MAVFTPMissionHardwareTestOptions& hardwareTestOptions,
+    ManagedBackendSession& launcherSession)
 {
     if (probeOptions.enabled && appConfig.realCommandEnabled)
     {
@@ -708,7 +769,9 @@ int ConsoleGCSApplication::RunProductionMavlink(
             return -6;
         }
     }
-    while (true)
+    if (launcherSession.Enabled())
+        ConsoleUI::AddLog("Managed backend session: readiness and explicit orderly shutdown enabled");
+    while (!launcherSession.ShouldStop())
     {
         // Drain a full synchronized thousand-aircraft telemetry burst before
         // sleeping. The bound prevents malformed traffic from starving the
@@ -881,6 +944,11 @@ int ConsoleGCSApplication::RunProductionMavlink(
             {
                 ConsoleUI::AddLog("DSP-GCS telemetry publish failed");
             }
+            else if (!launcherSession.MarkReady())
+            {
+                ConsoleUI::AddErrorLog("Unable to notify launcher readiness");
+                return -7;
+            }
             lastTelemetryPublish = now;
         }
 
@@ -908,4 +976,6 @@ int ConsoleGCSApplication::RunProductionMavlink(
 
         Sleep(10);
     }
+    ConsoleUI::AddLog("Managed backend session stopping; releasing network resources");
+    return 0;
 }

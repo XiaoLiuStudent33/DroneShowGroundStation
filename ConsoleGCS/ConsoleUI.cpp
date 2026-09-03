@@ -12,6 +12,8 @@
 #include <condition_variable>
 #include <ctime>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <utility>
 
@@ -464,6 +466,13 @@ namespace
 
         void RenderLoop()
         {
+            // Keep the dashboard's real Console handle. A second, renderer-owned
+            // sink records logs without redirecting stdout or adding a producer lock.
+            std::ofstream sessionLog;
+            wchar_t logPath[32768]{};
+            const DWORD pathLength = GetEnvironmentVariableW(L"DRONEGCS_BACKEND_LOG", logPath, 32768);
+            if (pathLength > 0 && pathLength < 32768)
+                sessionLog.open(std::filesystem::path(logPath), std::ios::app);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 rendererThreadId_ = std::this_thread::get_id();
@@ -505,6 +514,13 @@ namespace
                     reportedDroppedLogCount_ = droppedCount;
                 }
 
+                if (sessionLog)
+                {
+                    for (const auto& record : records)
+                        for (const auto& line : SplitLines(record.text))
+                            sessionLog << FormatRecordPrefix(record) << line << '\n';
+                    sessionLog.flush();
+                }
                 if (activeMode_ == ConsoleOutputMode::Linear)
                     RenderLinear(records);
                 else

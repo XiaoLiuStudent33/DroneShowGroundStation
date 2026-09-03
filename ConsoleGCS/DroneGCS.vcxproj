@@ -177,6 +177,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AppConfig.h" />
+    <ClInclude Include="ManagedBackendSession.h" />
     <ClInclude Include="CommandDispatcher.h" />
     <ClInclude Include="CommandManager.h" />
     <ClInclude Include="ConsoleArtifactConsumerV2.h" />

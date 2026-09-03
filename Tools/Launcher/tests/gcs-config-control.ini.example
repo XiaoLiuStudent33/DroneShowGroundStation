@@ -1,0 +1,12 @@
+# Command-enabled fixture. Loopback only; no drone, no discovery traffic, no commands.
+safe_test_mode=true
+mavlink_network_enabled=true
+real_command_enabled=true
+route_upload_enabled=true
+mavlink_bind_ip=127.0.0.1
+mavlink_bind_port=10091
+heartbeat_timeout_ms=3000
+dspgcs_telemetry_enabled=true
+dspgcs_command_enabled=true
+dspgcs_transport_config=config/DSPGCSTransport.ini
+dspgcs_telemetry_interval_ms=250

@@ -2,7 +2,7 @@
 
 Status: CURRENT SUPPORTING
 Authority: 测试资产、运行入口与证据等级
-Last Updated: 2026-08-25
+Last Updated: 2026-09-03
 
 Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，当前调用链见 [Code_Architecture_CN.md](Code_Architecture_CN.md)，进度见 [Development_Status_CN.md](Development_Status_CN.md)。
 
@@ -15,6 +15,8 @@ Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，�
 | UE Regression | `UnrealGCS/Source/DroneShowPlatform1/Private/Tests/` | Unreal Automation，统一前缀 `DroneGCS.` |
 | Acceptance Tool | `ConsoleGCS/DSPGCSAcceptance.vcxproj` | 独立 DSP-GCS loopback 手工验收 |
 | Hardware Harness | `DroneGCS.exe --mavftp-test` 或显式 legacy harness 参数 | 真实飞控写入；不属于普通回归 |
+| Joint Package Smoke | `Tools/Launcher/tests/Smoke.ps1` | 联合进程、配置、目录、端口与隔离回环；不发真机命令 |
+| Installer Validation | `Tools/Installer/BuildInstaller.ps1` | Shipping 布局、payload 哈希、源码排除与 NSIS 产物 |
 
 测试中的 loopback Session、MAVFTP fake wire 和 synthetic Artifact 不能证明真实飞控行为。
 
@@ -40,6 +42,7 @@ Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，�
 .\x64\Release\ConsoleGCSTests.exe --mission-upload-tests
 .\x64\Release\ConsoleGCSTests.exe --upload-job-tests
 .\x64\Release\ConsoleGCSTests.exe --mavftp-probe-tests
+.\x64\Release\ConsoleGCSTests.exe --mavftp-concurrency-tests
 .\x64\Release\ConsoleGCSTests.exe --drone-id-tests
 .\x64\Release\ConsoleGCSTests.exe --console-render-tests
 ```
@@ -107,3 +110,22 @@ UE Development/DebugGame Editor Build 均 PASS；AutoStart 6/6 PASS，Route Assi
 ```
 
 仓库没有对应持久化日志，飞控源码也未证明精确根因。因此不能写成固定“7000 item limit”，也不能将该观察升级为自动化回归结论。
+
+## 7. 联合软件包与安装程序证据
+
+2026-09-03 自动化/本机证据：
+
+- Release x64 Console 与联合启动器构建 PASS。
+- `Tools/Launcher/tests/Smoke.ps1` 共 32 项 PASS，覆盖中文/空格路径、安装标记、首次配置复制、每用户日志与工作区、Shipping 布局、可见完整控制后端、Ctrl+C 正常退出及无残留进程。
+- 真实 V3 Shipping 暂存目录通过 manifest、二进制 SHA-256、源码排除和单 Game EXE 严格校验。
+- `DroneGCSLauncher.exe --check` PASS；该模式不启动子进程、不发包。
+- NSIS 3.12 无警告生成 V1.0.0 安装程序和 SHA-256 校验文件。
+
+用户确认的异机证据：
+
+```text
+Second-PC install and launch: USER-CONFIRMED PASS
+Repository-side second-PC logs: NONE
+```
+
+因此可以确认第一版安装交付链可用；不能仅凭该结论声称升级、卸载、全部灯光/飞行/航线上传或任意固件行为均已验收。

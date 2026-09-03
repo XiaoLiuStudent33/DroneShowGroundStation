@@ -11,6 +11,7 @@
 struct AppConfig;
 struct MissionProfileProbeOptions;
 struct MAVFTPMissionHardwareTestOptions;
+class ManagedBackendSession;
 
 class ConsoleGCSApplication
 {
@@ -21,5 +22,6 @@ private:
     int RunProductionMavlink(
         const AppConfig& appConfig,
         const MissionProfileProbeOptions& probeOptions,
-        const MAVFTPMissionHardwareTestOptions& hardwareTestOptions);
+        const MAVFTPMissionHardwareTestOptions& hardwareTestOptions,
+        ManagedBackendSession& launcherSession);
 };

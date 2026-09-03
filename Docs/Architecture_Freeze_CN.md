@@ -2,8 +2,8 @@
 
 Status: CURRENT
 Authority: 项目最高长期架构约束
-Last Updated: 2026-08-24
-Applies To: `ConsoleGCS`、`UnrealGCS`、`Shared`、Route domain
+Last Updated: 2026-09-03
+Applies To: `ConsoleGCS`、`UnrealGCS`、`Shared`、Route domain、联合启动与安装交付
 Supersedes: 早期阶段性架构建议中的冲突内容
 
 ## 1. 文档职责
@@ -108,6 +108,11 @@ FleetManager / RoutePreview
 - Developer Provider 只能依赖 Production interface，默认关闭。
 - Production Provider 失败只能进入 `Disconnected/Error/Link Lost`，不得自动 fallback 到 Mock。
 - `DSPGCSLoopbackTransport` 名称包含 Loopback，但当前代表 `127.0.0.1:12001 <-> 127.0.0.1:12002` 正式同机 Production UDP。
+- 正式交付必须包含编译后的 UE、Console、配置模板和所需运行库，禁止依赖开发机源码、Visual Studio、UE 编辑器或开发机绝对路径。
+- 用户入口固定为联合启动器；它先启动可见 Console 后端，等待真实 Ready 后再启动 UE。UE 根目录 Game EXE 只是前端入口，不作为交付快捷方式。
+- 正式安装目录中的文件视为只读程序资产。配置、日志、UE Saved 与航线工作区必须写入当前用户 `%LOCALAPPDATA%/DroneGCS`，升级不得静默覆盖用户配置。
+- 完整控制模式下，UE 或启动器退出不得自动杀死仍承担控制职责的 Console；确认飞行和上传停止后，由操作员在 Console 中正常退出。
+- 启动器可以校验本机是否具有 `192.168.1.254`，但不得自动修改网卡；安装器只管理限定到后端 EXE 和 `192.168.1.254:10001/UDP` 的专用入站防火墙规则。
 
 ## 7. Route Domain 冻结方向
 

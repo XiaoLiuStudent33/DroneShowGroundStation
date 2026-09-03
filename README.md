@@ -3,7 +3,7 @@
 无人机表演地面站生产项目。
 
 Status: CURRENT
-Last Updated: 2026-08-24
+Last Updated: 2026-09-03
 
 ## 系统边界
 
@@ -39,6 +39,8 @@ RouteUploadManager
 
 9100 Artifact Items / 9101 Wire Mission Items 的三段真实生产上传已通过 Count/Home/First/Last 验证，Job ElapsedMs=8829。真实 Mission execution timing 与 RGB waypoint 执行仍属于固件验证边界。
 
+第一版可安装交付链已经完成：UE 5.5 Shipping 前端、可见 Console 后端、生产配置和运行库由联合启动器统一启动，并通过 NSIS 生成 `DroneGCS-Setup-1.0.0-x64.exe`。安装后的程序不读取开发机源码，也不要求 Visual Studio、UE 编辑器或 PowerShell。2026-09-03 的另一台电脑安装与启动结果为 `USER-CONFIRMED PASS`；该证据不自动等同于全部飞行、航线上传和固件行为验收。
+
 ## 文档阅读顺序
 
 1. [文档索引](Docs/README_CN.md)
@@ -55,3 +57,5 @@ RouteUploadManager
 - `Shared/`：DSP-GCS Protocol、Route Artifact、Waypoint 和 Mission wire contract。
 - `Docs/`：当前 Authority、状态、专项架构、Audit 与 History。
 - `Tools/`：独立辅助工具，不属于 DroneGCS Production Authority。
+- `Tools/Launcher/`：联合 payload 构建、可见后端进程管理和隔离 Smoke。
+- `Tools/Installer/`：Shipping 暂存包校验与 NSIS 安装程序构建。

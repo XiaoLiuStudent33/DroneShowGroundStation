@@ -2,8 +2,8 @@
 
 Status: CURRENT
 Authority: 当前 Production 运行链与 Developer Entry Map
-Last Updated: 2026-08-25
-Baseline: `17b679265c77d1c2306e1b500574b121b29e525c`
+Last Updated: 2026-09-03
+Baseline: `master` / `03825841f81e516731d12df632867be67f72ad57` + 2026-09-03 联合打包工作树
 
 本文只记录当前源码中已经存在的实现。长期约束见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，进度见 [Development_Status_CN.md](Development_Status_CN.md)，Route Upload 语义见 [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md)。
 
@@ -222,27 +222,28 @@ known endpoint FILE_TRANSFER_PROTOCOL ingress
 - Quick Test：`DroneGCS.exe --mavftp-test <DroneID> --route-slot <N> [--items <N>]`。
 - Legacy explicit Hardware Harness 参数仍保留。
 
-Quick Test 当前从 `Current/manifest.json` 引导，但会使用默认 segment capacity 65535；尚未接入 `[mavftp]` 配置。MAVFTP 只通过显式测试入口启用。
+Quick Test 当前从 `Current/manifest.json` 引导，并与生产链共享 `[mavftp]` 的 segment capacity、request/terminate timeout、retry 和 write window 合同。显式 Hardware Harness 仍只能通过受控测试入口启用。
 
 ## 12. 当前配置边界
 
-- Console deployment：`ConsoleGCS/gcs-config.ini` 或显式指定配置。
+- Console 开发/手工运行：`ConsoleGCS/gcs-config.ini` 或显式指定配置。
 - Console DSP：`ConsoleGCS/config/DSPGCSTransport.ini`。
 - UE：`UnrealGCS/Config/DefaultGame.ini`。
 - Route/Mission 测试部署：`ConsoleGCS/gcs-config-upload.ini`，包含真实写入 gate；不得自动运行。
+- 联合交付模板：`Tools/Launcher/config/production.ini` 与 `Tools/Launcher/config/DSPGCSTransport.ini`；`PreparePayload.ps1` 通过严格 allow-list 生成 payload 和哈希 manifest。
+- 正式安装首次运行：联合启动器把模板复制到 `%LOCALAPPDATA%/DroneGCS/Config`，以后升级不覆盖，并把绝对配置路径传给 Console。
+- 联合航线工作区：默认 `%LOCALAPPDATA%/DroneGCS/ArtifactWorkspace`，由启动器通过同一环境设置提供给 UE 与 Console。
 - Protocol contracts：`Shared/DSPGCSProtocol`、`Shared/RouteArtifact`、`Shared/RouteWaypoint`、`Shared/RouteMission`。
 
-当前没有 `[mavftp] segment_items / segment_retry_count / segment_timeout_ms` 配置接线。
+生产模板已接入 `[mavftp]`：`segment_items=4000`、request/terminate timeout `750/2500 ms`、retry `3`、per-client write window `16`、global outstanding cap `800`。
 
 ## 13. 尚未实现或尚未证明
 
-- Phase 2I-C.3.D 配置化多段 MAVFTP 上传。
-- Quick Test 配置化 segment capacity、segment retry/timeout 和完整逐段日志/metrics。
-- MAVFTP production `RouteUploadManager` cutover。
-- 真实飞控多段 CLEAR + NO_CLEAR 拼接验证。
 - Production Mission Ready verification 与完整 firmware capability model。
 - 10000-drone chunked/sharded Route Store。
 - Backup Drone Replacement 与 conflict/rejoin workflow。
+- E.2 多机硬件规模验证与调度冻结。
+- 正式发布代码签名、升级覆盖和卸载完整验收。
 
 ## 14. Developer Entry Map
 
@@ -258,6 +259,9 @@ Quick Test 当前从 `Current/manifest.json` 引导，但会使用默认 segment
 | Upload Job DSP/UI | `DSPGCSUploadJobSubsystem`、`GCSRouteWorkflowCoordinator` | Console Receiver、Authority、StateMirror |
 | Production upload | `RouteUploadManager` | `MissionPreparationWorker`、`MAVFTPMissionTransport`、`MavFtpClient` |
 | MAVFTP test chain | `MAVFTPMissionHardwareTest` | `MavFtpClient`、`MissionFtpCompiler`、`MAVFTPMissionTransport` |
+| 联合 payload | `Tools/Launcher/PreparePayload.ps1` | Game Target PreBuildSteps、RuntimeDependencies / NonUFS |
+| 联合启动 | `Tools/Launcher/DroneGCSLauncher.cpp` | `ManagedBackendSession`、安装标记与每用户目录 |
+| 正式安装 | `Tools/Installer/BuildInstaller.ps1` | `DroneGCS.nsi`、Shipping/manifest 校验 |
 | Test entry | `ConsolePipelineTests.cpp` | UE `Private/Tests/` |
 
 ## 15. 当前事实标签
@@ -276,3 +280,18 @@ Quick Test 当前从 `Current/manifest.json` 引导，但会使用默认 segment
 `auto` 模式使用 Windows stdout Handle 的 `GetFileType`、`GetConsoleMode` 与实时 Console geometry 判定：真实 Windows Console 使用 Dashboard；Pipe、Disk/File、无效 Handle、PowerShell `Tee-Object` 和 CI 使用 Linear 行日志。Dashboard 每次绘制重新读取可见窗口宽高，长行只在 Presentation 层做 UTF-8 边界安全截断，完整原文仍保留在线性输出。
 
 队列满时优先丢弃非关键记录并公开累计 `DroppedLogCount`；Error/Job terminal 记录可抢占非关键记录。若关键记录本身耗尽整个上限，critical drop 也必须出现在同一可观测计数中，不能静默发生。Renderer 停止前排空有界队列并恢复 Console cursor。
+
+## 17. 联合启动与安装运行链
+
+```text
+NSIS installed shortcut
+-> DroneGCSLauncher.exe
+-> preflight: payload / config / process / ports / local IP
+-> visible DroneGCS.exe --managed-backend --config <absolute user config>
+-> backend Ready event
+-> Shipping UE Game EXE
+```
+
+`DroneShowPlatform1.Target.cs` 的 Game Target PreBuildSteps 调用 `PreparePayload.ps1`。该脚本编译 Release x64 Console 与 Launcher，只复制 allow-list 中的 EXE、两个配置、README 和三个 VC143 CRT DLL，并生成 SHA-256 manifest；`DroneShowPlatform1.Build.cs` 以 NonUFS loose files 暂存，源码、测试程序、PDB 和开发配置不会进入交付 payload。
+
+安装布局由 `installed-layout.marker` 区分。安装版把可变数据放入 `%LOCALAPPDATA%/DroneGCS`；便携包没有该标记，继续使用包内配置语义。完整控制模式下，Launcher/UE 退出后 Console 保持运行，避免控制后端被意外终止；操作员确认安全后在 Console 按 Ctrl+C 正常释放端口和资源。

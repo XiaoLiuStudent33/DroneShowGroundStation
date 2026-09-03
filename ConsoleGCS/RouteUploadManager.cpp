@@ -93,12 +93,17 @@ namespace
 		{
 			static std::mutex logMutex;
 			std::lock_guard<std::mutex> lock(logMutex);
+			wchar_t configuredLog[32768]{};
+			const DWORD configuredLength = GetEnvironmentVariableW(
+				L"DRONEGCS_ROUTE_UPLOAD_LOG", configuredLog, 32768);
 			wchar_t executablePath[MAX_PATH]{};
 			const DWORD length = GetModuleFileNameW(nullptr, executablePath, MAX_PATH);
-			const std::filesystem::path directory = length > 0 && length < MAX_PATH
-				? std::filesystem::path(executablePath).parent_path()
-				: std::filesystem::current_path();
-			std::ofstream output(directory / "DroneGCS-route-upload.log",
+			const std::filesystem::path logPath = configuredLength > 0 && configuredLength < 32768
+				? std::filesystem::path(configuredLog)
+				: ((length > 0 && length < MAX_PATH
+					? std::filesystem::path(executablePath).parent_path()
+					: std::filesystem::current_path()) / "DroneGCS-route-upload.log");
+			std::ofstream output(logPath,
 				std::ios::binary | std::ios::app);
 			if (!output) return;
 			const auto now = std::chrono::system_clock::to_time_t(

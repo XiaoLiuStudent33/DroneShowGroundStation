@@ -2,7 +2,7 @@
 
 Status: CURRENT
 Authority: 当前 UMG 结构、C++ binding 和交互状态边界
-Last Updated: 2026-08-25
+Last Updated: 2026-09-03
 Applies To: `WBP_GCS_*`、`UGCSUIBridgeSubsystem`、`FGCSUIWidgetPresenter`
 
 ## 1. Purpose 与 Authority
@@ -181,4 +181,4 @@ Slider使用0..1归一化；用户scrub时暂停，结束后不自动恢复。�
 
 UI command 通过 `UDSPGCSUploadJobSubsystem` 发送 DSP-GCS Upload Job protocol，不直接调用 MAVLink 或 `RouteUploadManager`。
 
-ConsoleGCS 继续 headless，不创建第二套正式 Operator UI。E.1 软件 Gate 已完成，E.2 多机硬件验证尚未完成；Console 重启后的 DroneID 发现顺序风险留给 E.3。
+ConsoleGCS 不创建第二套图形业务 UI，但正式联合运行时保留可见的 Fleet/Runtime Log 诊断 Dashboard。命令操作仍以 UE Operator UI 为唯一入口；Console Dashboard 负责可观测性，不拥有第二套命令选择状态。E.1 软件 Gate 已完成，E.2 多机硬件验证尚未完成；Console 重启后的 DroneID 发现顺序风险留给 E.3。

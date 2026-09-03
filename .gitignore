@@ -10,6 +10,7 @@ x86/
 *.VC.opendb
 
 # Unreal Engine generated files
+/UnrealGCS/Launcher-README.md
 Binaries/
 DerivedDataCache/
 Intermediate/
@@ -25,6 +26,7 @@ Saved/
 *.lib
 *.exp
 *.log
+/Tools/Installer/Output/
 
 # Local settings and secrets
 .env

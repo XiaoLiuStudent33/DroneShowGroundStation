@@ -183,7 +183,9 @@ bool AppConfig::Load(
     AppConfig& config,
     std::string& error)
 {
-    std::ifstream input(path);
+    // Configuration paths originate from a wide-character Windows launcher.
+    // u8path preserves non-ASCII user/profile and install directory names.
+    std::ifstream input(std::filesystem::u8path(path));
 
     if (!input)
     {

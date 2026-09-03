@@ -2,7 +2,7 @@
 
 Status: CURRENT
 Authority: 当前网络身份、MAVLink ingress/outbound 与 DSP-GCS Production 链
-Last Updated: 2026-08-24
+Last Updated: 2026-09-03
 
 ## 1. Identity
 
@@ -139,4 +139,11 @@ MAVFTPMissionTransport
 - Wire contracts：`Shared/DSPGCSProtocol`。
 - 每机 Remote Endpoint：真实入站 datagram。
 
-当前尚无 `[mavftp] segment_items / segment_retry_count / segment_timeout_ms` production 配置接线。
+联合交付的 production config 启用 MAVLink network、真实命令、DSP command 和 Route Upload，并接入 `[mavftp]` 的 segment、timeout、retry、write window 与 global outstanding cap。`safe_test_mode=true` 保留现有高度、目标、ACK 等生产校验，不是旧版只读锁。
+
+## 12. 安装部署网络边界
+
+- 飞控只接受地面站本机 `192.168.1.254:10001/UDP`；启动器只预检该本机 IP 是否存在，不自动修改网卡。
+- 安装器创建专用入站规则，限定到安装后的 `Backend/DroneGCS.exe`、UDP、本地 IP `192.168.1.254` 与端口 `10001`；卸载时删除同名规则。
+- UE 与 Console 的 `127.0.0.1:12001 <-> 127.0.0.1:12002` 仍是独立的同机 DSP-GCS 链，不对外暴露。
+- 安装版配置位于 `%LOCALAPPDATA%/DroneGCS/Config`；包内配置只作为首次运行模板，升级不覆盖用户配置。

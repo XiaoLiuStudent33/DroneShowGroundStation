@@ -2,7 +2,7 @@
 
 Status: CURRENT SUPPORTING
 Authority: 文档导航、分类与 Source-of-Truth 索引
-Last Updated: 2026-08-24
+Last Updated: 2026-09-03
 
 ## 1. START HERE
 
@@ -37,6 +37,9 @@ Source of Truth 优先级：当前生产源码、已存在并通过的测试、�
 | 本文件 | 全部 Markdown 的分类与导航 |
 | [PROJECT_HANDOFF_CN.md](PROJECT_HANDOFF_CN.md) | 新会话快速接手与安全边界 |
 | [Test_Architecture_CN.md](Test_Architecture_CN.md) | Console/UE/Hardware 测试入口和证据边界 |
+| [../Tools/Launcher/README.md](../Tools/Launcher/README.md) | 联合软件包、启动/退出、运行数据与开发机打包接入 |
+| [../Tools/Launcher/VALIDATION.md](../Tools/Launcher/VALIDATION.md) | 当前联合包与安装程序验证结果 |
+| [../Tools/Installer/README.md](../Tools/Installer/README.md) | Shipping 输入校验、NSIS 安装构建、分发和验收流程 |
 
 ## 4. History / Archived
 
@@ -51,6 +54,7 @@ Source of Truth 优先级：当前生产源码、已存在并通过的测试、�
 | [History/Production_Responsibility_Audit_CN.md](History/Production_Responsibility_Audit_CN.md) | Cleanup/Architecture Freeze 阶段职责审计快照 |
 | [History/Audit_Legacy_BGC2_RouteUpload_CN.md](History/Audit_Legacy_BGC2_RouteUpload_CN.md) | Legacy BGC2 Route Upload 源码证据与兼容性风险 |
 | [History/Audit_DroneGCS_RouteUpload_Gap_CN.md](History/Audit_DroneGCS_RouteUpload_Gap_CN.md) | 2026-08-14 Route Upload 尚未实现时的 gap 快照 |
+| [History/Joint_Package_V1_V2_Validation_CN.md](History/Joint_Package_V1_V2_Validation_CN.md) | 联合启动器 V1 只读版与 V2 完整控制便携版的历史验证记录 |
 
 这些文件顶部必须保持 `ARCHIVED / HISTORICAL` 或等价历史横幅，并链接回当前 Authority。
 
@@ -86,16 +90,14 @@ Source of Truth 优先级：当前生产源码、已存在并通过的测试、�
 
 ## 7. Inventory Classification
 
-本次 `rg --files -g "*.md"` 得到 27 个受 Git 跟踪的 Markdown：
+2026-09-03 审计得到 31 个现存 Markdown；拆分联合包历史验证后为 32 个：
 
-- CURRENT Authority：7。
-- CURRENT Supporting：4。
-- History / Archived：7。
-- External Tool Documentation：9。
-- Audit/Evidence 原位文件：0；三份旧 Audit 已归档到 `History/`。
-- Stale Duplicate：0。
-- Requires User Decision：0。
-- Deleted：0。
+- CURRENT Authority / Supporting：11。
+- Launcher / Installer 当前工具文档：3。
+- History / Archived：8。
+- External Tool Documentation：9，位于独立 `Tools/unreal-mcp` 仓库。
+- Generated Duplicate：1，即 `UnrealGCS/Launcher-README.md`；由 payload 构建生成，不手工维护。
+- 本轮未删除 Markdown。历史文档统一保留在 `Docs/History/`，等待人工决定是否删除。
 
 ## 8. Maintenance Rules
 

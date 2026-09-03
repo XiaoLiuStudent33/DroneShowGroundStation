@@ -1,8 +1,8 @@
 # DroneGCS 项目交接速览
 
 Status: CURRENT SUPPORTING
-Last Updated: 2026-08-25
-Baseline: `master` / `17b679265c77d1c2306e1b500574b121b29e525c`
+Last Updated: 2026-09-03
+Baseline: `master` / `03825841f81e516731d12df632867be67f72ad57` + 2026-09-03 联合打包工作树
 
 本文件是快速接手入口。长期边界以 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md) 为准，当前调用链以 [Code_Architecture_CN.md](Code_Architecture_CN.md) 和 Production 源码为准，进度以 [Development_Status_CN.md](Development_Status_CN.md) 为准。
 
@@ -33,6 +33,8 @@ ArduPilot / APM
 - RouteSlot 不是 DroneID、SYSID 或 particle index。
 - E.0 临时自动规则是 canonical `NumericDroneID - 1`；只消费 `SelectedCommandDroneIDs`，`M_DroneIdLabel` 不是 Authority。
 - UE 不直接向飞控发送 MAVLink。
+- 正式用户入口是安装后的 `DroneGCSLauncher.exe`，不是 UE 根目录的纯前端 Game EXE。
+- 安装版程序位于 Program Files，可变配置、日志、UE Saved 和 Artifact Workspace 位于 `%LOCALAPPDATA%/DroneGCS`。
 
 ## E.0.2 操作合同
 
@@ -63,13 +65,14 @@ UE Route Workflow
 
 旧的标准 MAVLink Mission 上传 Transport 已退休并删除；生产失败明确失败，不做协议回退。
 
-## 4. 当前暂停点
+## 4. 当前完成点与暂停点
 
 ```text
-Phase 2I-C.3.D.1-D.3 = DONE
-Phase 2I-C.3.D.4 = MAVFTP SINGLE-TRANSPORT FREEZE
-Phase 2I-C.3.E.0 = AUTOMATIC SELECTED-DRONE ASSIGNMENT / SERIAL MULTI-TARGET DONE
-Phase 2I-C.3.E.0.1 = CONSOLE RENDER INTEGRITY DONE
+Route/MAVFTP Production Chain = DONE
+Joint Shipping Package = DONE
+Visible Full-Control Backend Lifecycle = DONE
+NSIS V1.0.0 Installer = DONE
+Second-PC Install/Launch = USER-CONFIRMED PASS
 ```
 
 生产参数为 `segment_items=4000`、request/terminate timeout `750/2500 ms`、retry `3`、write window `16`。`segmentCapacity` 以包含 Reserved Home 的 Wire Mission Items 计数。
@@ -77,6 +80,8 @@ Phase 2I-C.3.E.0.1 = CONSOLE RENDER INTEGRITY DONE
 正常 UI Start 每次重新建立当前选择的 Working/Frozen Assignment，等待精确 Console Accepted，重新校验全部 Authority 后 exactly once 创建一个 Job。E.1 后，`EDT_MaxConcurrency` + `BTN_ApplyMaxConcurrency` 是本次及后续 Job 的操作员 Authority：合法 Applied 值为 `1..50`，Start 在事务开始时冻结该值并复用现有 DTO `MaxConcurrentTargets`；Console 严格拒绝越界值，实际并发为 `min(DTO.MaxConcurrentTargets, MatchedTargetCount)`。不存在 Console `max_concurrent_targets` INI 覆盖。E.2 多机硬件验证尚未完成；Console 重启后的 DroneID 发现顺序风险为 DEFERRED/E.3。
 
 Console 可观测性由 `ConsoleUI` 的单一 Renderer 线程负责。Producer 只入队 1024 条上限的结构化记录或发布 Fleet 快照；真实 Windows Console 使用动态尺寸 Dashboard，重定向、Pipe、文件、Tee 和 CI 使用无 cursor 控制的 Linear 输出。溢出通过 `DroppedLogCount` 可观测，terminal/error 优先于普通日志。E.1 使用动态 N Target 准入和公平 Write permit pool；`write_window=16` 仍为每 Client 上限，独立 `global_write_outstanding_cap` 合法范围 `1..800`、启动默认 `800`。
+
+当前暂停在 Release 1 安装交付完成点。下一步不是重做 UE/Console 功能，而是分别验收非飞行闭环、受监督飞行与航线上传、升级覆盖、卸载清理和代码签名。异机“安装/启动通过”不能替代这些分项证据。
 
 ## 5. 保护规则
 
@@ -89,6 +94,8 @@ Console 可观测性由 `ConsoleUI` 的单一 Renderer 线程负责。Producer �
 
 ## 6. 当前证据
 
-Console Release x64 Solution Build 已于 2026-08-25 通过（0 errors、12 warnings、ExitCode 0）；六组专项测试和 Full ConsoleGCSTests 全部通过。UE Development/DebugGame Build 均通过，E.0 AutoStart 6/6 与合并相关回归 164/164 PASS。本轮未运行真实飞控上传。硬件 1000～6000 PASS 与 7000 NAK 2 均为用户确认且没有仓库日志。
+Console Release x64 Solution Build 已于 2026-08-25 通过（0 errors、12 warnings、ExitCode 0）；六组专项测试和 Full ConsoleGCSTests 全部通过。UE Development/DebugGame Build 均通过，E.0 AutoStart 6/6 与合并相关回归 164/164 PASS。硬件 1000～6000 PASS 与 7000 NAK 2 均为用户确认且没有仓库日志。
+
+2026-09-03：联合启动隔离 Smoke 32 项、V3 Shipping/manifest 严格校验、Launcher `--check` 与 NSIS 3.12 无警告构建 PASS；生成 V1.0.0 安装程序。用户确认安装程序转移到另一台电脑后安装与启动通过，证据等级为 `USER-CONFIRMED`，没有异机日志进入仓库。
 
 详细测试边界见 [Test_Architecture_CN.md](Test_Architecture_CN.md)。

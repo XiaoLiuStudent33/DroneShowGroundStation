@@ -113,6 +113,24 @@ public class DroneShowPlatform1 : ModuleRules
 		}
 		AddEngineThirdPartyPrivateStaticDependencies(Target, "zlib");
 
+		if (Target.Platform == UnrealTargetPlatform.Win64 && Target.Type == TargetType.Game)
+		{
+			// Explicit loose-file dependencies: executables cannot run inside PAK/IoStore.
+			// PreparePayload (Game Target pre-build) produces these before UBT actions.
+			string Payload = Path.GetFullPath(Path.Combine(ModuleDirectory, "..", "..", "Intermediate", "JointPayload"));
+			RuntimeDependencies.Add("$(ProjectDir)/DroneGCSLauncher.exe",
+				Path.Combine(Payload, "DroneGCSLauncher.exe"), StagedFileType.NonUFS);
+			RuntimeDependencies.Add("$(ProjectDir)/Launcher-README.md",
+				Path.Combine(Payload, "Launcher-README.md"), StagedFileType.NonUFS);
+			foreach (string File in new string[] { "DroneGCS.exe", "gcs-config.ini",
+				"config/DSPGCSTransport.ini", "msvcp140.dll", "vcruntime140.dll",
+				"vcruntime140_1.dll", "payload-manifest.json" })
+			{
+				RuntimeDependencies.Add("$(ProjectDir)/Binaries/Win64/Backend/" + File,
+					Path.Combine(Payload, File), StagedFileType.NonUFS);
+			}
+		}
+
 		// Uncomment if you are using Slate UI
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
 		

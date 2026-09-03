@@ -1,0 +1,5 @@
+DroneGCS installed layout v1
+
+This marker tells DroneGCSLauncher.exe to keep mutable configuration, logs,
+route-upload diagnostics, artifacts, and Unreal Engine Saved data under the
+current Windows user's LOCALAPPDATA directory.

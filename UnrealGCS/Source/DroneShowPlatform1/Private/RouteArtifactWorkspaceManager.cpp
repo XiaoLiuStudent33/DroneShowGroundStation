@@ -847,6 +847,13 @@ bool FRouteArtifactWorkspaceManager::ResolveWorkspaceRoot(
 		return RouteArtifactWorkspacePaths::ResolveConfiguredRoot(
 			Impl->ConfiguredRoot, OutRoot, OutError);
 	}
+	// The joint launcher provides the same portable absolute workspace to UE
+	// and Console. Explicit roots above retain their existing precedence.
+	const FString JointRoot = FPlatformMisc::GetEnvironmentVariable(TEXT("DRONEGCS_ARTIFACT_WORKSPACE"));
+	if (!JointRoot.IsEmpty())
+	{
+		return RouteArtifactWorkspacePaths::ResolveConfiguredRoot(JointRoot, OutRoot, OutError);
+	}
 #if UE_BUILD_SHIPPING
 	constexpr ERouteArtifactWorkspaceRootKind RootKind =
 		ERouteArtifactWorkspaceRootKind::ShippingLocalUser;

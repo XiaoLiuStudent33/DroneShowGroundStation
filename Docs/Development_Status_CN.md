@@ -2,8 +2,8 @@
 
 Status: CURRENT
 Authority: 当前实现状态与开发顺序
-Last Updated: 2026-08-25
-Baseline: `master` / `17b679265c77d1c2306e1b500574b121b29e525c`
+Last Updated: 2026-09-03
+Baseline: `master` / `03825841f81e516731d12df632867be67f72ad57` + 2026-09-03 联合打包工作树
 
 ## 1. DONE / IMPLEMENTED
 
@@ -35,11 +35,15 @@ Route Upload 阶段：
 | Phase 2I-C.3.E.1 Dynamic-N MAVFTP Concurrency / Isolation | SOFTWARE GATE PASS；E.2 HARDWARE PENDING |
 | MAVFTP 9100/4000 三段生产上传与最终验证 | DONE |
 | MissionTransport abstraction | DONE |
-
-E.0.2 冻结结果：Interactive Dashboard 在单 Renderer frame 中为 Total/Online/Offline 数字及 ONLINE/OFFLINE token 写 Win32 attributes；Linear 输出保持纯文本。Fleet Select-All 复用 `SelectedCommandDroneIDs`，作用于全 Fleet Online DroneID 精确集合，支持跨页、上下线重算、一次批量广播和 active AutoStart/Upload mutation gate；未改动 Route Assignment、MAVFTP、DSP DTO 或 UE Asset。
 | MissionFtpCompiler | DONE |
 | MAVFTP Writer Core | DONE |
 | MAVFTP Hardware Harness / Quick Test | DONE |
+| UE + Console 联合 payload 构建与 Shipping 暂存 | DONE |
+| 可见完整控制 Console 的联合启动和安全退出 | DONE |
+| NSIS V1.0.0 安装程序与 SHA-256 产物 | DONE |
+| 无源码/无 VS/无 UE 编辑器电脑安装与启动 | USER-CONFIRMED PASS |
+
+E.0.2 冻结结果：Interactive Dashboard 在单 Renderer frame 中为 Total/Online/Offline 数字及 ONLINE/OFFLINE token 写 Win32 attributes；Linear 输出保持纯文本。Fleet Select-All 复用 `SelectedCommandDroneIDs`，作用于全 Fleet Online DroneID 精确集合，支持跨页、上下线重算、一次批量广播和 active AutoStart/Upload mutation gate；未改动 Route Assignment、MAVFTP、DSP DTO 或 UE Asset。
 
 当前生产上传链：
 
@@ -65,10 +69,25 @@ UE Route Workflow
 当前完成点：
 
 ```text
-Phase 2I-C.3.E.0 — Automatic Selected-Drone Assignment and Start Transaction
+Release 1 — UE + Console 联合软件包与 NSIS V1.0.0 安装程序
 ```
 
-已冻结：
+本轮已完成：
+
+- Game Target PreBuildSteps 编译 Release x64 Console 与联合启动器，失败阻断 UE 打包。
+- RuntimeDependencies / NonUFS 只暂存严格 allow-list payload，不包含源码、测试程序、PDB 或开发机个人路径。
+- 联合启动器预检 payload、配置、进程、端口和本机 `192.168.1.254`，先启动可见 Console，等待 Ready 后再启动 Shipping UE。
+- 完整控制模板启用 `real_command_enabled`、`dspgcs_command_enabled` 与 `route_upload_enabled`；既有目标、5 米高度、ACK 和任务状态保护不变。
+- 安装版配置、日志、UE Saved 和 Artifact Workspace 迁入 `%LOCALAPPDATA%/DroneGCS`；安装目录不承载可变业务数据。
+- NSIS 3.12 无警告生成 `DroneGCS-Setup-1.0.0-x64.exe` 与 SHA-256 文件；另一台电脑安装与启动由用户确认通过。
+
+下一阶段：
+
+- 明确记录异机非飞行控制、飞行、航线上传、升级覆盖和卸载各自的验收范围，避免把“安装通过”扩大为全部业务通过。
+- 正式对外发布前配置代码签名、发布版本规则和发布归档。
+- 继续保留 E.2 多机硬件规模验证；随后再决定 E.3 稳定身份方案。
+
+Route/MAVFTP 已冻结：
 
 - `segment_items` 表示 Wire Mission Items，包括 Reserved Home `seq 0`。
 - 复用现有 `MissionFtpCompiler` 的唯一 deterministic segment plan，不创建第二套 planner。
@@ -130,6 +149,10 @@ Full ConsoleGCSTests = PASS
 E.1 Console Release Build PASS；动态 N 覆盖 `1/2/6/16/25/50`，公平 permit 专项连续 20/20 PASS，Debug/assert-enabled 专项连续 20/20 PASS，完整 Console 回归连续 3/3 PASS。Endpoint ingress 隔离 Fixture 使用相同 SYSID 和相同 ACK identity、不同 Remote endpoint，验证 ACK 不串包。该软件证据不替代 E.2 真实多机硬件验收。
 
 UE Development/DebugGame Editor Build 均为 PASS；`DroneGCS.Data.DSPGCSUploadJob` 3/3、`DroneGCS.UI.RouteWorkflow` 17/17 PASS，覆盖 Applied 并发、AutoStart 快照、View persistence 与 stale gate。本轮没有运行真实飞控上传。
+
+2026-09-03 联合交付证据：Console Release x64、Launcher `/W4 /WX`、Console Render/Runtime Config、隔离回环 Smoke 32 项、真实 V3 Shipping 输入与 payload manifest 校验、Launcher `--check`、NSIS 3.12 无警告编译全部 PASS。安装程序为 297422854 字节，SHA-256 为 `b236c8a32708c686999009d36909b81ea5034b0b852b6610ac8f1bde1874b99f`，代码签名状态为未签名。
+
+用户于 2026-09-03 确认安装程序已在另一台电脑完成安装并通过启动测试。该项标记为 `USER-CONFIRMED PASS`，仓库没有对应异机自动化日志；升级、卸载以及全部真机控制仍需按各自验收项记录。
 
 当前 Artifact 样本位于 `UnrealGCS/Saved/RouteArtifacts/Current/manifest.json`：Schema 2、9100 frames、1000 RouteSlots、1000 route records；`Saved` 样本不是应提交的 Production 源码。
 
