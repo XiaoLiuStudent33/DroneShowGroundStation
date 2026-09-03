@@ -338,6 +338,8 @@ private:
 
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FDSPGCSUploadJobClientHardeningTest;
+	friend class FGCSRouteWorkflowRouteListSnapshotLifecycleTest;
+	friend class FGCSRouteWorkflowPreJobPresentationTest;
 	TFunction<bool(
 		dspgcs::UploadArtifactBindingDTO&,
 		dspgcs::UploadFrozenAssignmentBindingDTO&,

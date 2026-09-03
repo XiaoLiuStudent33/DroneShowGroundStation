@@ -2636,9 +2636,10 @@ void UGCSRouteWorkflowCoordinator::AdvanceAutoStartTransaction()
 		return;
 	}
 	AutoStartSnapshot.bJobStartDispatched = true;
+	AutoStartSnapshot.UploadJobID = UploadJobID;
 	FinishAutoStart(EGCSRouteAutoStartState::Completed, FString());
 	UE_LOG(LogGCSRouteWorkflow, Display,
-		TEXT("[ROUTE_AUTO_START] Transaction=%s State=Completed UploadJobID=%s Targets=%d MaxConcurrentTargets=%d"),
+		TEXT("[ROUTE_AUTO_START] Transaction=%s State=StartDispatched UploadJobID=%s Targets=%d MaxConcurrentTargets=%d"),
 		*AutoStartSnapshot.TransactionID, *UploadJobID,
 		AutoStartSnapshot.Targets.Num(), AutoStartSnapshot.MaxConcurrentTargets);
 }
@@ -3037,6 +3038,15 @@ UGCSRouteWorkflowCoordinator::GatherUploadCommandGateInputs() const
 		Inputs.StartBlockedReason = TEXT("An Upload Job command is in progress.");
 	else if (Command.bHasActiveJobBinding || Command.bHasExecutableJob)
 		Inputs.StartBlockedReason = TEXT("An Upload Job is already active.");
+	if (!Command.bHasExecutableJob && Command.bHasActiveJobBinding &&
+		(Command.bHasAuthoritativeFailure || Command.bCommandTimedOut || Command.bRecoveryRequired ||
+		 (Command.bHasCommandAck && Command.LastCommandAckStatus ==
+			 static_cast<int32>(dspgcs::UploadJobCommandAckStatus::Rejected))))
+	{
+		FString Diagnostic;
+		Inputs.StartBlockedReason = GetAutoStartPresentation(Diagnostic);
+		if (!Diagnostic.IsEmpty()) Inputs.StartBlockedReason += TEXT(" / ") + Diagnostic;
+	}
 	if (const dspgcs::UploadJobSnapshotDTO* Snapshot =
 		Upload->GetStateMirror().GetSnapshot())
 	{
@@ -3123,6 +3133,55 @@ void UGCSRouteWorkflowCoordinator::ApplyCommandErrorPresentation()
 	default:
 		break;
 	}
+}
+
+FString UGCSRouteWorkflowCoordinator::GetAutoStartPresentation(FString& OutDiagnostic) const
+{
+	OutDiagnostic = AutoStartDiagnostic;
+	if (AutoStartState != EGCSRouteAutoStartState::Completed)
+		return FormatAutoStartState(AutoStartState);
+
+	const UDSPGCSUploadJobSubsystem* Upload = GameInstanceRef.IsValid()
+		? GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>() : nullptr;
+	const FDSPGCSUploadJobCommandStatus Command = Upload
+		? Upload->GetCommandStatus() : FDSPGCSUploadJobCommandStatus{};
+	// A retained preview must not consume a previous/different Job's outcome.
+	if (AutoStartSnapshot.UploadJobID.IsEmpty() ||
+		Command.ActiveUploadJobID != AutoStartSnapshot.UploadJobID)
+	{
+		OutDiagnostic = TEXT("Start was dispatched; waiting for the matching Console Job outcome.");
+		return TEXT("Start Sent");
+	}
+	const bool bStartRejected = Command.bHasCommandAck &&
+		Command.CurrentCommandType == static_cast<int32>(dspgcs::UploadJobCommandType::Start) &&
+		Command.LastCommandAckStatus == static_cast<int32>(dspgcs::UploadJobCommandAckStatus::Rejected);
+	if (!Command.bHasExecutableJob && (Command.bHasAuthoritativeFailure || bStartRejected))
+	{
+		OutDiagnostic = Command.LastSafeDiagnostic;
+		if (OutDiagnostic.IsEmpty()) OutDiagnostic = TEXT("Console rejected Upload Job Start.");
+		const bool bPreviewOnly = !RouteListItems.IsEmpty() && RouteListItems[0] &&
+			RouteListItems[0]->bAutoStartPreview;
+		OutDiagnostic += TEXT(" No executable Job snapshot is available; these are not per-drone upload results. Check Console configuration and Artifact validation, then explicitly load the dataset again before a new Start.");
+		return bPreviewOnly ? TEXT("Start Failed") : TEXT("Job Status Error");
+	}
+	if (!Command.bHasExecutableJob && (Command.bCommandTimedOut || Command.bRecoveryRequired))
+	{
+		OutDiagnostic = Command.LastSafeDiagnostic;
+		OutDiagnostic += TEXT(" Start outcome is unknown; do not assume failure or retry. Check Console and restore status synchronization.");
+		return TEXT("Start Unconfirmed");
+	}
+	if (const auto* Job = Upload->GetStateMirror().GetSnapshot())
+	{
+		if (Job->jobState == dspgcs::UploadJobState::Validating)
+		{
+			OutDiagnostic = TEXT("Console is validating the Artifact; no per-drone upload results are available yet.");
+			return TEXT("Validating Upload");
+		}
+	}
+	OutDiagnostic = Command.bHasExecutableJob
+		? TEXT("Waiting for complete authoritative Route details.")
+		: TEXT("Waiting for Console validation and an authoritative Upload Job snapshot. A Start ACK alone does not confirm upload execution.");
+	return Command.bHasExecutableJob ? TEXT("Loading Route Details") : TEXT("Awaiting Console");
 }
 
 void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
@@ -3271,22 +3330,22 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	SetText(ConvertWidgets,TEXT("TXT_GeneratedCount"),FString::Printf(TEXT("%d / %d"),GP.CompletedRoutes,GP.TotalRoutes)); SetText(ConvertWidgets,TEXT("TXT_ValidatedCount"),C==ERouteArtifactCurrentStatus::Ready?FString::Printf(TEXT("%d / %d"),Info.RouteSlotCount,Info.RouteSlotCount):TEXT("--")); SetText(ConvertWidgets,TEXT("TXT_ConvertPercent"),FormatPercent(GR));
 	const bool HasElapsed=GP.GenerationState!=ERouteWaypointBatchState::Idle||GP.TotalRoutes>0||GP.ElapsedSeconds>0; SetText(ConvertWidgets,TEXT("TXT_ArtifactElapsedValue"),HasElapsed?FormatElapsedMilliseconds(FMath::Max(0.0,GP.ElapsedSeconds)*1000.0):TEXT("--"));
 	const UDSPGCSUploadJobSubsystem* Upload=GI->GetSubsystem<UDSPGCSUploadJobSubsystem>(); const dspgcs::UploadJobSnapshotDTO* Job=Upload?Upload->GetStateMirror().GetSnapshot():nullptr;
-	const auto Count=[this,Job](FName Name,uint32 Value){GCSRouteWorkflowPrivate::SetText(UploadWidgets,Name,Job?FString::Printf(TEXT("%u"),Value):TEXT("0"));};
+	const auto Count=[this,Job](FName Name,uint32 Value){GCSRouteWorkflowPrivate::SetText(UploadWidgets,Name,Job?FString::Printf(TEXT("%u"),Value):TEXT("--"));};
 	Count(TEXT("TXT_UploadMatched"),Job?Job->matchedCount:0); Count(TEXT("TXT_UploadVacant"),Job?Job->vacantCount:0); Count(TEXT("TXT_UploadSpare"),Job?Job->spareCount:0); Count(TEXT("TXT_UploadWaiting"),Job?Job->waitingCount:0); Count(TEXT("TXT_UploadPreparing"),Job?Job->preparingCount:0); Count(TEXT("TXT_UploadUploading"),Job?Job->uploadingCount:0); Count(TEXT("TXT_UploadRetryWaiting"),Job?Job->retryWaitingCount:0); Count(TEXT("TXT_UploadSucceeded"),Job?Job->succeededCount:0); Count(TEXT("TXT_UploadFailed"),Job?Job->failedCount:0); Count(TEXT("TXT_UploadCancelled"),Job?Job->cancelledCount:0);
 	const UDSPGCSFrozenAssignmentSyncSubsystem* FrozenSync =
 		GI->GetSubsystem<UDSPGCSFrozenAssignmentSyncSubsystem>();
 	FString ConsoleState = FrozenState(FrozenSync
 		? FrozenSync->GetSyncState() : EDSPGCSFrozenAssignmentSyncState::NotFrozen);
+	FString PreJobDiagnostic;
+	const FString PreJobPresentation = GetAutoStartPresentation(PreJobDiagnostic);
 	if (Job) ConsoleState += TEXT(" / Artifact: ") + Gate(Job->artifactGateState);
 	else if (AutoStartState != EGCSRouteAutoStartState::Idle)
-		ConsoleState += TEXT(" / Auto: ") + FormatAutoStartState(AutoStartState);
+		ConsoleState += TEXT(" / Auto: ") + PreJobPresentation;
 	SetText(UploadWidgets,TEXT("TXT_ConsoleValidatedValue"),ConsoleState);
 	FString JobPresentation = Job
 		? FormatUploadJobPresentation(static_cast<uint8>(Job->jobState))
 		: (AutoStartState == EGCSRouteAutoStartState::Idle
-			? TEXT("State: --") : TEXT("State: ") + FormatAutoStartState(AutoStartState));
-	if (!Job && !AutoStartDiagnostic.IsEmpty())
-		JobPresentation += TEXT(" / ") + AutoStartDiagnostic.Left(320);
+			? TEXT("State: --") : TEXT("State: ") + PreJobPresentation);
 	if (Job && Job->jobState == dspgcs::UploadJobState::Failed &&
 		!Job->firstFailure.safeSummary.empty())
 	{
@@ -3295,7 +3354,8 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	}
 	const FDSPGCSUploadJobCommandStatus CommandStatus =
 		Upload ? Upload->GetCommandStatus() : FDSPGCSUploadJobCommandStatus{};
-	if (!CommandStatus.LastSafeDiagnostic.IsEmpty() &&
+	if ((Job || AutoStartState != EGCSRouteAutoStartState::Completed) &&
+		!CommandStatus.LastSafeDiagnostic.IsEmpty() &&
 		(CommandStatus.bCommandTimedOut || CommandStatus.bHasAuthoritativeFailure ||
 		 CommandStatus.LastCommandResultCode !=
 			 static_cast<int32>(dspgcs::UploadJobErrorCode::None) ||
@@ -3305,7 +3365,19 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 		JobPresentation += TEXT(" / ") + CommandStatus.LastSafeDiagnostic.Left(320);
 	}
 	SetText(UploadWidgets,TEXT("TXT_UploadJobStateValue"),JobPresentation);
-	const uint64 Total=Job?Job->totalBytes:0,Done=Job?Job->bytesCompleted:0; const double UR=ComputeProgressRatio(Done,Total); SetText(UploadWidgets,TEXT("TXT_UploadThroughputValue"),FormatThroughput(Job?Job->throughputBytesPerSecond:0)); SetText(UploadWidgets,TEXT("TXT_UploadBytesValue"),FormatLogicalByteProgress(Done,Total)); SetText(UploadWidgets,TEXT("TXT_UploadElapsedValue"),FormatElapsedMilliseconds(Job?Job->elapsedMs:0)); if(UProgressBar* Bar=Get<UProgressBar>(UploadWidgets,TEXT("PROGRESS_Upload"))) Bar->SetPercent(UR); SetText(UploadWidgets,TEXT("TXT_UploadPercent"),FormatPercent(UR)); SetText(UploadWidgets,TEXT("TXT_CurrentMaxConcurrencyValue"),FString::Printf(TEXT("Current: %d"),AppliedMaxConcurrentTargets));
+	// Keep the outcome visible in the narrow status cell; details belong in the
+	// tooltip rather than pushing "Start Failed" out of the clipped TextBlock.
+	SetTooltip(UploadWidgets,TEXT("TXT_UploadJobStateValue"),
+		!Job && !PreJobDiagnostic.IsEmpty()
+			? JobPresentation + TEXT("\n") + PreJobDiagnostic : JobPresentation);
+	const uint64 Total = Job ? Job->totalBytes : 0, Done = Job ? Job->bytesCompleted : 0;
+	const double UR = ComputeProgressRatio(Done, Total);
+	SetText(UploadWidgets, TEXT("TXT_UploadThroughputValue"), Job ? FormatThroughput(Job->throughputBytesPerSecond) : TEXT("--"));
+	SetText(UploadWidgets, TEXT("TXT_UploadBytesValue"), Job ? FormatLogicalByteProgress(Done, Total) : TEXT("--"));
+	SetText(UploadWidgets, TEXT("TXT_UploadElapsedValue"), Job ? FormatElapsedMilliseconds(Job->elapsedMs) : TEXT("--"));
+	if (UProgressBar* Bar = Get<UProgressBar>(UploadWidgets, TEXT("PROGRESS_Upload"))) Bar->SetPercent(UR);
+	SetText(UploadWidgets, TEXT("TXT_UploadPercent"), Job ? FormatPercent(UR) : TEXT("--"));
+	SetText(UploadWidgets,TEXT("TXT_CurrentMaxConcurrencyValue"),FString::Printf(TEXT("Current: %d"),AppliedMaxConcurrentTargets));
 	RefreshArtifactIdentity();
 	SyncRouteListModel();
 	RefreshVisibleRouteRows();
@@ -3399,6 +3471,14 @@ void UGCSRouteWorkflowCoordinator::SyncRouteListModel()
 		GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>();
 	const FDSPGCSUploadJobStateMirror* Mirror = Upload ? &Upload->GetStateMirror() : nullptr;
 	const dspgcs::UploadJobSnapshotDTO* Job = Mirror ? Mirror->GetSnapshot() : nullptr;
+	// A Validating aggregate has no executable route membership yet. Keep the
+	// matching transaction's preview so a later validation rejection can update it.
+	if (Job && Job->jobState == dspgcs::UploadJobState::Validating &&
+		WorkflowFromUtf8(Job->uploadJobId) == AutoStartSnapshot.UploadJobID &&
+		!RouteListItems.IsEmpty() && RouteListItems[0] && RouteListItems[0]->bAutoStartPreview)
+	{
+		return;
+	}
 	if (!Job)
 	{
 		if (!RouteListItems.IsEmpty() && RouteListItems[0] &&
@@ -3412,27 +3492,37 @@ void UGCSRouteWorkflowCoordinator::SyncRouteListModel()
 	}
 
 	const FString JobID = WorkflowFromUtf8(Job->uploadJobId);
-	const FString SnapshotToken = WorkflowFromUtf8(Job->snapshotToken);
-	if (RouteListJobID != JobID || RouteListSnapshotToken != SnapshotToken)
+	// Console rotates snapshotToken on every aggregate poll. It identifies a
+	// paging transaction, not the lifetime of these JobID/RouteSlot list items.
+	if (RouteListJobID != JobID)
 	{
 		ClearRouteListModel();
 		RouteListJobID = JobID;
-		RouteListSnapshotToken = SnapshotToken;
 	}
 
-	const bool bComplete = Mirror->IsRoutePageComplete()
+	const bool bComplete = !Mirror->IsRecoveryRequired() && Mirror->IsRoutePageComplete()
 		&& Mirror->GetRouteStateCount() == static_cast<int32>(Job->matchedCount);
 	if (!bComplete)
 	{
-		const FString Presentation = FormatUploadJobPresentation(
-			static_cast<uint8>(Job->jobState));
-		SetText(UploadWidgets, TEXT("TXT_UploadJobStateValue"),
-			bUploadArtifactMismatch
-				? Presentation + TEXT(" / Routes: Loading / Artifact mismatch")
-				: Presentation + TEXT(" / Routes: Loading"));
+		// Keep same-Job membership visible during recovery. Never publish a
+		// partial page or interpret its missing routes as removed targets.
+		FString Presentation = FormatUploadJobPresentation(
+			static_cast<uint8>(Job->jobState)) + (RouteListItems.IsEmpty()
+				? TEXT(" / Routes: Loading") : TEXT(" / Routes: Recovering"));
+		if (bUploadArtifactMismatch) Presentation += TEXT(" / Artifact mismatch");
+		SetText(UploadWidgets, TEXT("TXT_UploadJobStateValue"), Presentation);
 		return;
 	}
-	if (!RouteListItems.IsEmpty() || Job->matchedCount == 0) return;
+
+	// Common progress-only path: no allocation, sorting or ListView mutation.
+	// Compare membership as well as count so a same-size replacement is safe.
+	const bool bSameMembers = RouteListItems.Num() == Mirror->GetRouteStateCount()
+		&& !RouteListItems.ContainsByPredicate([Mirror, &JobID](const auto& Item)
+		{
+			return !Item || Item->bAutoStartPreview || Item->UploadJobID != JobID
+				|| !Mirror->FindRoute(Item->RouteSlotIndex);
+		});
+	if (bSameMembers) return;
 
 	TArray<int32> SortedRouteSlots;
 	Mirror->CopySortedRouteSlots(SortedRouteSlots);
@@ -3443,22 +3533,21 @@ void UGCSRouteWorkflowCoordinator::SyncRouteListModel()
 				TEXT(" / Routes: Loading"));
 		return;
 	}
-	ReplaceRouteListItems(JobID, SnapshotToken, SortedRouteSlots);
+	ReplaceRouteListItems(JobID, SortedRouteSlots);
 }
 
 bool UGCSRouteWorkflowCoordinator::ReplaceRouteListItems(
 	const FString& JobID,
-	const FString& SnapshotToken,
 	const TArray<int32>& SortedRouteSlots)
 {
 	if (!IsInGameThread()) return false;
-	if (RouteListJobID == JobID && RouteListSnapshotToken == SnapshotToken
+	if (RouteListJobID == JobID
 		&& RouteListItems.Num() == SortedRouteSlots.Num())
 	{
 		bool bSame = true;
 		for (int32 Index = 0; Index < SortedRouteSlots.Num(); ++Index)
 		{
-			if (!RouteListItems[Index]
+			if (!RouteListItems[Index] || RouteListItems[Index]->bAutoStartPreview
 				|| RouteListItems[Index]->RouteSlotIndex != SortedRouteSlots[Index])
 			{
 				bSame = false;
@@ -3478,7 +3567,6 @@ bool UGCSRouteWorkflowCoordinator::ReplaceRouteListItems(
 
 	ClearRouteListModel();
 	RouteListJobID = JobID;
-	RouteListSnapshotToken = SnapshotToken;
 	RouteListItems.Reserve(SortedRouteSlots.Num());
 	RouteItemsBySlot.Reserve(SortedRouteSlots.Num());
 	TArray<UObject*> ListItems;
@@ -3488,7 +3576,6 @@ bool UGCSRouteWorkflowCoordinator::ReplaceRouteListItems(
 		UGCSRouteUploadListItem* Item = NewObject<UGCSRouteUploadListItem>(this);
 		Item->RouteSlotIndex = RouteSlot;
 		Item->UploadJobID = JobID;
-		Item->SnapshotToken = SnapshotToken;
 		RouteListItems.Add(Item);
 		RouteItemsBySlot.Add(RouteSlot, Item);
 		ListItems.Add(Item);
@@ -3512,7 +3599,6 @@ void UGCSRouteWorkflowCoordinator::ClearRouteListModel()
 	RouteListItems.Reset();
 	RouteItemsBySlot.Reset();
 	RouteListJobID.Reset();
-	RouteListSnapshotToken.Reset();
 	ValidatedRouteRows.Reset();
 	RouteRowDiagnostics.Reset();
 }
@@ -3523,7 +3609,6 @@ bool UGCSRouteWorkflowCoordinator::ReplaceAutoStartPreviewItems(
 	if (!IsInGameThread() || Snapshot.Targets.IsEmpty()) return false;
 	ClearRouteListModel();
 	RouteListJobID = TEXT("AUTO:") + Snapshot.TransactionID;
-	RouteListSnapshotToken = Snapshot.TransactionID;
 	TArray<UObject*> ListItems;
 	RouteListItems.Reserve(Snapshot.Targets.Num());
 	ListItems.Reserve(Snapshot.Targets.Num());
@@ -3532,7 +3617,6 @@ bool UGCSRouteWorkflowCoordinator::ReplaceAutoStartPreviewItems(
 		UGCSRouteUploadListItem* Item = NewObject<UGCSRouteUploadListItem>(this);
 		Item->RouteSlotIndex = Target.RouteSlotIndex;
 		Item->UploadJobID = RouteListJobID;
-		Item->SnapshotToken = RouteListSnapshotToken;
 		Item->bAutoStartPreview = true;
 		Item->PreviewDroneID = Target.DroneID;
 		Item->PreviewRouteRelativePath = Target.RouteRelativePath;
@@ -3560,6 +3644,10 @@ void UGCSRouteWorkflowCoordinator::RefreshVisibleRouteRows()
 		GameInstanceRef->GetSubsystem<URouteArtifactWorkspaceSubsystem>();
 	if (!List) return;
 	const FDSPGCSUploadJobStateMirror* Mirror = Upload ? &Upload->GetStateMirror() : nullptr;
+	const dspgcs::UploadJobSnapshotDTO* Job = Mirror ? Mirror->GetSnapshot() : nullptr;
+	const bool bRoutesCurrent = Job && WorkflowFromUtf8(Job->uploadJobId) == RouteListJobID
+		&& !Mirror->IsRecoveryRequired() && Mirror->IsRoutePageComplete()
+		&& Mirror->GetRouteStateCount() == static_cast<int32>(Job->matchedCount);
 
 	for (UUserWidget* Row : List->GetDisplayedEntryWidgets())
 	{
@@ -3599,8 +3687,7 @@ void UGCSRouteWorkflowCoordinator::RefreshVisibleRouteRows()
 		}
 		ValidatedRouteRows.Add(Row);
 		RouteRowDiagnostics.Remove(Row);
-		if (!Item || Item->UploadJobID != RouteListJobID
-			|| Item->SnapshotToken != RouteListSnapshotToken) continue;
+		if (!Item || Item->UploadJobID != RouteListJobID) continue;
 		if (Item->bAutoStartPreview)
 		{
 			UTextBlock* RouteText = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_Route")));
@@ -3613,15 +3700,15 @@ void UGCSRouteWorkflowCoordinator::RefreshVisibleRouteRows()
 				*FormatRouteFileDisplay(Item->PreviewRouteRelativePath))));
 			RouteText->SetToolTipText(FText::FromString(Item->PreviewRouteRelativePath));
 			DroneText->SetText(FText::FromString(Item->PreviewDroneID));
-			StateText->SetText(FText::FromString(FormatAutoStartState(AutoStartState)));
-			StateText->SetToolTipText(FText::FromString(AutoStartDiagnostic));
+			FString Diagnostic;
+			StateText->SetText(FText::FromString(GetAutoStartPresentation(Diagnostic)));
+			StateText->SetToolTipText(FText::FromString(Diagnostic));
 			ProgressText->SetText(FText::FromString(TEXT("--")));
-			RetryText->SetText(FText::FromString(TEXT("0")));
+			RetryText->SetText(FText::FromString(TEXT("--")));
 			continue;
 		}
-		if (!Mirror) continue;
-		const dspgcs::UploadRouteStateDTO* State = Mirror->FindRoute(Item->RouteSlotIndex);
-		if (!State) continue;
+		const dspgcs::UploadRouteStateDTO* State = bRoutesCurrent
+			? Mirror->FindRoute(Item->RouteSlotIndex) : nullptr;
 
 		FRouteArtifactRecord Record;
 		const bool bHasRecord = !bUploadArtifactMismatch && Workspace
@@ -3632,8 +3719,20 @@ void UGCSRouteWorkflowCoordinator::RefreshVisibleRouteRows()
 		UTextBlock* StateText = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_State")));
 		UTextBlock* ProgressText = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_Progress")));
 		UTextBlock* RetryText = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("TXT_Retry")));
-		RouteText->SetText(FText::FromString(bHasRecord ? FormatRouteFileDisplay(FullRoute) : TEXT("--")));
+		RouteText->SetText(FText::FromString(bHasRecord ? FormatRouteFileDisplay(FullRoute)
+			: FString::Printf(TEXT("Slot %d"), Item->RouteSlotIndex)));
 		RouteText->SetToolTipText(FText::FromString(FullRoute));
+		if (!State)
+		{
+			// Recycled/newly visible entries must not retain another row's values
+			// or present stale progress as current while a full page is recovering.
+			DroneText->SetText(FText::FromString(TEXT("--")));
+			StateText->SetText(FText::FromString(TEXT("Syncing")));
+			StateText->SetToolTipText(FText::FromString(TEXT("Waiting for a complete authoritative Route page.")));
+			ProgressText->SetText(FText::FromString(TEXT("--")));
+			RetryText->SetText(FText::FromString(TEXT("--")));
+			continue;
+		}
 		const FString DroneID = WorkflowFromUtf8(State->droneId);
 		DroneText->SetText(FText::FromString(DroneID.IsEmpty() ? TEXT("--") : DroneID));
 		FString RouteStateText = FormatRouteState(static_cast<uint8>(State->state));
@@ -3918,7 +4017,7 @@ FString UGCSRouteWorkflowCoordinator::FormatAutoStartState(
 	case EGCSRouteAutoStartState::Freezing: return TEXT("Freezing Assignment");
 	case EGCSRouteAutoStartState::SyncingConsole: return TEXT("Syncing Console");
 	case EGCSRouteAutoStartState::StartingJob: return TEXT("Starting Upload");
-	case EGCSRouteAutoStartState::Completed: return TEXT("Upload Job Started");
+	case EGCSRouteAutoStartState::Completed: return TEXT("Start Sent");
 	case EGCSRouteAutoStartState::Failed: return TEXT("Automatic Start Failed");
 	case EGCSRouteAutoStartState::CancelledAsStale: return TEXT("Automatic Start Stale");
 	default: return TEXT("Idle");
@@ -3930,10 +4029,9 @@ void UGCSRouteWorkflowCoordinator::InitializeForTest(UGameInstance* GI) { Shutdo
 void UGCSRouteWorkflowCoordinator::SetWorkflowFactoryForTest(TFunction<UUserWidget*()> Factory,bool bSkip) { WorkflowFactoryForTest=MoveTemp(Factory); bSkipRequiredWidgetBindingForTest=bSkip; }
 bool UGCSRouteWorkflowCoordinator::BuildRouteItemsForTest(
 	const FString& JobID,
-	const FString& SnapshotToken,
 	const TArray<int32>& SortedRouteSlots)
 {
-	return ReplaceRouteListItems(JobID, SnapshotToken, SortedRouteSlots);
+	return ReplaceRouteListItems(JobID, SortedRouteSlots);
 }
 const UGCSRouteUploadListItem* UGCSRouteWorkflowCoordinator::FindRouteItemForTest(
 	const int32 RouteSlotIndex) const

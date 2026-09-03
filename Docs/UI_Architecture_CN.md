@@ -178,6 +178,8 @@ Slider使用0..1归一化；用户scrub时暂停，结束后不自动恢复。�
 - Waiting、Preparing、Uploading、RetryWaiting、Succeeded、Failed、Cancelled 统计与总进度。
 - command gate、safe diagnostic 与 stale binding rejection 展示。
 - Workflow 关闭只隐藏 View；AutoStart 在隐藏期间继续接收/推进，重新打开不会重复 Freeze/Sync/Start。
+- `LIST_RouteUploadStates` 的稳定 ListItem identity 为 `UploadJobID + RouteSlotIndex`，不是每次查询轮换的 `snapshotToken`。相同 Job/RouteSlot 集合的进度、聚合快照与终态更新复用原对象，仅刷新可见 Row；Token 仍由 DSP Mirror 校验分页一致性。分页恢复时保留同一 Job 的列表成员并显示 `Routes: Recovering` / `Syncing`，不发布半份分页或把旧进度当作当前值；完整成员集合改变、新 Job 或权威错误时才替换/清空列表。
+- 启动预览是上述正式 Job 行的例外：AutoStart `Completed` 只表示 Start 已发出，快照另记录其 `UploadJobID`。预览只消费同 Job 的回传，显示 `Awaiting Console` / `Validating Upload`；在收到明确拒绝时原位显示 `Start Failed`，不把 `Frozen Console Accepted` 或 Start ACK 当成执行成功。无正式快照时统计、进度、耗时与重试为 `--`，不虚构逐机失败数；Start ACK 或首个状态查询超时显示 `Start Unconfirmed`，不解锁重试。主状态格只放短结果，完整诊断及显式重新载入数据的处理提示放在 tooltip；不自动重发 Start、解除 Job 绑定或修改安全配置。
 
 UI command 通过 `UDSPGCSUploadJobSubsystem` 发送 DSP-GCS Upload Job protocol，不直接调用 MAVLink 或 `RouteUploadManager`。
 

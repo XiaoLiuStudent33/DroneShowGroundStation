@@ -18,8 +18,10 @@
 #include "GCSDataTypes.h"
 #include "GCSUIBridgeSubsystem.h"
 #include "HAL/PlatformTime.h"
+#include "Layout/Geometry.h"
 #include "RouteGpsCaptureSubsystem.h"
 #include "RoutePreviewSubsystem.h"
+#include "Widgets/SWidget.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowOwnershipTest,"DroneGCS.UI.RouteWorkflow.OwnershipAndTeardown",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
 bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
@@ -1035,10 +1037,9 @@ bool FGCSRouteWorkflowRouteListScaleTest::RunTest(const FString& Parameters)
 		TArray<int32> Slots; Slots.Reserve(Count);
 		for(int32 Index=0;Index<Count;++Index) Slots.Add(Index);
 		const FString JobID=FString::Printf(TEXT("job-%d"),Count);
-		const FString Token=FString::Printf(TEXT("snapshot-%d"),Count);
 		const int64 BeforeRebuild=C->GetRouteListRebuildCountForTest();
 		const double Start=FPlatformTime::Seconds();
-		TestTrue(*FString::Printf(TEXT("%d item build"),Count),C->BuildRouteItemsForTest(JobID,Token,Slots));
+		TestTrue(*FString::Printf(TEXT("%d item build"),Count),C->BuildRouteItemsForTest(JobID,Slots));
 		const double BuildMs=(FPlatformTime::Seconds()-Start)*1000.0;
 		TestEqual(*FString::Printf(TEXT("%d item count"),Count),C->GetRouteItemCountForTest(),Count);
 		TestEqual(*FString::Printf(TEXT("%d one rebuild"),Count),C->GetRouteListRebuildCountForTest(),BeforeRebuild+1);
@@ -1048,7 +1049,7 @@ bool FGCSRouteWorkflowRouteListScaleTest::RunTest(const FString& Parameters)
 		TestNotNull(TEXT("O(1) first lookup"),First);
 		TestNotNull(TEXT("O(1) middle lookup"),Middle);
 		TestNotNull(TEXT("O(1) last lookup"),Last);
-		TestTrue(TEXT("same Job/snapshot refresh accepted"),C->BuildRouteItemsForTest(JobID,Token,Slots));
+		TestTrue(TEXT("same Job/membership refresh accepted"),C->BuildRouteItemsForTest(JobID,Slots));
 		TestTrue(TEXT("same Job keeps first item identity"),C->FindRouteItemForTest(0)==First);
 		TestTrue(TEXT("same Job keeps middle item identity"),C->FindRouteItemForTest(Count/2)==Middle);
 		TestEqual(TEXT("same Job does not rebuild"),C->GetRouteListRebuildCountForTest(),BeforeRebuild+1);
@@ -1061,6 +1062,403 @@ bool FGCSRouteWorkflowRouteListScaleTest::RunTest(const FString& Parameters)
 		if(Count==20000) TestTrue(TEXT("20K ListView does not instantiate 20K rows"),Visible<Count);
 	}
 	C->Shutdown(); GI->Shutdown(); return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowPreJobPresentationTest,
+	"DroneGCS.UI.RouteWorkflow.PreJobPresentation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowPreJobPresentationTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UGameInstance* GI = NewObject<UGameInstance>(GEngine);
+	GI->InitializeStandalone(TEXT("GCSPreJobPresentationTest"));
+	UDSPGCSUploadJobSubsystem* Upload = GI->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	UGCSRouteWorkflowCoordinator* C = NewObject<UGCSRouteWorkflowCoordinator>(GI);
+	C->InitializeForTest(GI);
+	UClass* PageClass = LoadClass<UUserWidget>(nullptr,
+		TEXT("/Game/UI/WBP_GCS_RouteUpload.WBP_GCS_RouteUpload_C"));
+	UUserWidget* Page = PageClass ? CreateWidget<UUserWidget>(GI, PageClass) : nullptr;
+	UListView* List = Page && Page->WidgetTree
+		? Cast<UListView>(Page->WidgetTree->FindWidget(TEXT("LIST_RouteUploadStates"))) : nullptr;
+	if (!TestNotNull(TEXT("Upload subsystem"), Upload) || !TestNotNull(TEXT("Actual upload ListView"), List))
+	{
+		C->Shutdown(); GI->Shutdown(); return false;
+	}
+	TArray<UWidget*> Widgets;
+	Page->WidgetTree->GetAllWidgets(Widgets);
+	for (UWidget* Widget : Widgets) C->UploadWidgets.Add(Widget->GetFName(), Widget);
+	C->bBindingValid = true;
+	int32 SentCommands = 0;
+	// All outgoing frames are intercepted; the real receive/decode path is used.
+	Upload->FrameSenderForTest = [&SentCommands](const std::vector<uint8>& Frame)
+	{
+		dspgcs::MessageEnvelope Envelope;
+		std::vector<uint8> Payload;
+		if (dspgcs::DecodeEnvelope(Frame, Envelope, Payload) &&
+			Envelope.messageType == dspgcs::UploadJobMessageTypes::Command) ++SentCommands;
+		return true;
+	};
+	const std::string JobID(32, 'a'), CommandID(32, 'b');
+	TSharedRef<SWidget> SlateList = List->TakeWidget();
+	auto Refresh = [C, SlateList]()
+	{
+		C->RefreshReadOnlyState();
+		SlateList->SlatePrepass(1.0f);
+		SlateList->Tick(FGeometry::MakeRoot(FVector2D(800.0f, 700.0f), FSlateLayoutTransform()),
+			FPlatformTime::Seconds(), 0.2f);
+		C->RefreshVisibleRouteRows();
+	};
+	auto Text = [](UUserWidget* Widget, FName Name)
+	{
+		const UTextBlock* Value = Widget && Widget->WidgetTree
+			? Cast<UTextBlock>(Widget->WidgetTree->FindWidget(Name)) : nullptr;
+		return Value ? Value->GetText().ToString() : FString();
+	};
+	auto BeginPreview = [&]()
+	{
+		Upload->Mirror.Reset();
+		Upload->BindUploadJobForTest(JobID);
+		Upload->ClearPendingSnapshotRequest();
+		Upload->Mirror.SetPendingCommandID(CommandID);
+		Upload->CurrentCommandType = dspgcs::UploadJobCommandType::Start;
+		Upload->bHasCommandAck = false;
+		Upload->bCommandInFlight = true;
+		Upload->bCommandTimedOut = false;
+		Upload->LastCommandResultCode = dspgcs::UploadJobErrorCode::None;
+		Upload->LastSafeDiagnostic.Reset();
+		C->AutoStartState = EGCSRouteAutoStartState::Completed;
+		C->AutoStartSnapshot = FGCSRouteAutoStartSnapshot{};
+		C->AutoStartSnapshot.TransactionID = TEXT("preview-transaction");
+		C->AutoStartSnapshot.UploadJobID = UTF8_TO_TCHAR(JobID.c_str());
+		C->AutoStartSnapshot.bJobStartDispatched = true;
+		for (int32 Slot = 0; Slot < 2; ++Slot)
+		{
+			FGCSRouteAutoStartTargetSnapshot Target;
+			Target.RouteSlotIndex = Slot;
+			Target.DroneID = FString::Printf(TEXT("Drone%03d"), Slot);
+			Target.RouteRelativePath = FString::Printf(TEXT("routes/00000000/%d.waypoints"), Slot);
+			C->AutoStartSnapshot.Targets.Add(Target);
+		}
+		TestTrue(TEXT("Preview published"), C->ReplaceAutoStartPreviewItems(C->AutoStartSnapshot));
+		Refresh();
+	};
+	auto DeliverAck = [&](bool bRejected)
+	{
+		dspgcs::UploadJobCommandAckDTO Ack;
+		Ack.clientCommandId = CommandID; Ack.uploadJobId = JobID;
+		Ack.commandType = dspgcs::UploadJobCommandType::Start;
+		Ack.status = bRejected ? dspgcs::UploadJobCommandAckStatus::Rejected : dspgcs::UploadJobCommandAckStatus::Accepted;
+		Ack.resultCode = bRejected ? dspgcs::UploadJobErrorCode::ArtifactNotAccepted : dspgcs::UploadJobErrorCode::None;
+		Ack.safeDiagnostic = bRejected ? "Artifact Start rejected." : "";
+		std::vector<uint8> Payload; std::string Error;
+		TestTrue(TEXT("ACK encodes"), dspgcs::EncodeUploadJobCommandAck(Ack, Payload, Error));
+		dspgcs::MessageEnvelope Envelope; Envelope.messageType = dspgcs::UploadJobMessageTypes::CommandAck;
+		Upload->EnqueueIncoming(Envelope, Payload); Upload->ProcessIncoming(); Refresh();
+	};
+	auto DeliverFailure = [&](const std::string& ResponseJobID)
+	{
+		dspgcs::UploadJobSnapshotDTO Failure;
+		Failure.clientRequestId = Upload->PendingSnapshotRequestID;
+		Failure.uploadJobId = ResponseJobID;
+		Failure.resultCode = dspgcs::UploadJobErrorCode::ArtifactNotAccepted;
+		Failure.safeDiagnostic = "Artifact v2 validation did not produce the requested accepted snapshot.";
+		std::vector<uint8> Payload; std::string Error;
+		TestTrue(TEXT("Failure snapshot encodes"), dspgcs::EncodeUploadJobSnapshot(Failure, Payload, Error));
+		dspgcs::MessageEnvelope Envelope; Envelope.messageType = dspgcs::UploadJobMessageTypes::Snapshot;
+		Upload->EnqueueIncoming(Envelope, Payload); Upload->ProcessIncoming(); Refresh();
+	};
+	auto FirstRow = [&]() { return List->GetEntryWidgetFromItem(C->FindRouteItemForTest(0)); };
+	BeginPreview();
+	TestNotNull(TEXT("Visible preview row generated"), FirstRow());
+	TestEqual(TEXT("Dispatch is not execution"), Text(FirstRow(), TEXT("TXT_State")), FString(TEXT("Awaiting Console")));
+	DeliverAck(true);
+	TestEqual(TEXT("Rejected ACK updates existing preview"), Text(FirstRow(), TEXT("TXT_State")), FString(TEXT("Start Failed")));
+
+	BeginPreview(); DeliverAck(false);
+	TestEqual(TEXT("Accepted ACK still waits for authority"), Text(FirstRow(), TEXT("TXT_State")), FString(TEXT("Awaiting Console")));
+	Upload->PendingSnapshotAttemptCount = Upload->MaxSnapshotRequestAttempts;
+	Upload->SnapshotRetryAtSeconds = 0.0;
+	Upload->TickClient(0.0f); Refresh();
+	TestEqual(TEXT("Snapshot timeout after ACK is also unconfirmed"), Text(FirstRow(), TEXT("TXT_State")), FString(TEXT("Start Unconfirmed")));
+	TestTrue(TEXT("First snapshot timeout schedules recovery"), Upload->Mirror.IsRecoveryRequired());
+	Upload->NextSnapshotPollSeconds = 0.0;
+	Upload->TickClient(0.0f);
+	TestTrue(TEXT("Scheduled read-only recovery actually requests the first snapshot"),
+		Upload->bSnapshotRequestInFlight && !Upload->PendingSnapshotRequestID.empty());
+	FString Error;
+	TestTrue(TEXT("Retry is status-only"), Upload->RequestAuthoritativeSnapshot(Error));
+	DeliverFailure(std::string(32, 'c'));
+	TestFalse(TEXT("Other Job failure cannot reject this Start"), Upload->Mirror.HasAuthoritativeError());
+	TestTrue(TEXT("Request matching outcome after ignored response"), Upload->RequestAuthoritativeSnapshot(Error));
+	const UGCSRouteUploadListItem* Item = C->FindRouteItemForTest(0);
+	UUserWidget* Entry = FirstRow();
+	const int64 Rebuilds = C->GetRouteListRebuildCountForTest();
+	DeliverFailure(JobID);
+	TestTrue(TEXT("Validation failure uses real client error path"), Upload->GetCommandStatus().bHasAuthoritativeFailure);
+	for (int32 Tick = 0; Tick < 12; ++Tick) Refresh();
+	TestTrue(TEXT("Failure preserves preview identity"), C->FindRouteItemForTest(0) == Item && FirstRow() == Entry);
+	TestEqual(TEXT("Failure does not reintroduce list flicker"), C->GetRouteListRebuildCountForTest(), Rebuilds);
+	TestEqual(TEXT("Failure row is explicit"), Text(Entry, TEXT("TXT_State")), FString(TEXT("Start Failed")));
+	TestEqual(TEXT("Narrow aggregate cell shows only the concise outcome"), Text(Page, TEXT("TXT_UploadJobStateValue")), FString(TEXT("State: Start Failed")));
+	TestTrue(TEXT("Frozen Accepted cannot mask failure"), Text(Page, TEXT("TXT_ConsoleValidatedValue")).Contains(TEXT("Start Failed")));
+	for (FName Name : { FName(TEXT("TXT_UploadFailed")), FName(TEXT("TXT_UploadMatched")),
+		FName(TEXT("TXT_UploadBytesValue")), FName(TEXT("TXT_UploadElapsedValue")), FName(TEXT("TXT_UploadPercent")) })
+		TestEqual(TEXT("Absent Job statistics are unavailable, not zero"), Text(Page, Name), FString(TEXT("--")));
+	TestEqual(TEXT("No invented target retry count"), Text(Entry, TEXT("TXT_Retry")), FString(TEXT("--")));
+	const UTextBlock* Status = Cast<UTextBlock>(Page->WidgetTree->FindWidget(TEXT("TXT_UploadJobStateValue")));
+	TestTrue(TEXT("Unclipped diagnostic and explicit recovery guidance are in tooltip"), Status &&
+		Status->GetToolTipText().ToString().Contains(TEXT("explicitly load the dataset again")));
+	for (FName Name : { FName(TEXT("BTN_StartUpload")), FName(TEXT("BTN_RetryFailed")), FName(TEXT("BTN_CancelUpload")) })
+	{
+		const UButton* Button = Cast<UButton>(Page->WidgetTree->FindWidget(Name));
+		TestTrue(TEXT("No automatic unlock of upload controls"), Button && !Button->GetIsEnabled());
+	}
+	TestTrue(TEXT("Explicit replacement is permitted after authoritative rejection"), Upload->PrepareForNewUploadJob(Error));
+	C->ResetAutoStartForNewDataset(); Refresh();
+	TestEqual(TEXT("Explicit replacement clears preview"), List->GetNumItems(), 0);
+
+	BeginPreview(); DeliverAck(false);
+	dspgcs::UploadJobSnapshotDTO Validating;
+	Validating.uploadJobId = JobID; Validating.snapshotToken = std::string(32, 'd');
+	Validating.jobState = dspgcs::UploadJobState::Validating; Validating.jobRevision = 1;
+	TestTrue(TEXT("Intermediate validating aggregate"), Upload->ApplySnapshotForTest(Validating)); Refresh();
+	TestEqual(TEXT("Validating retains preview"), List->GetNumItems(), 2);
+	TestEqual(TEXT("Validating row is not upload execution"), Text(FirstRow(), TEXT("TXT_State")), FString(TEXT("Validating Upload")));
+	DeliverFailure(JobID);
+	TestEqual(TEXT("Failure after Validating updates retained row"), Text(FirstRow(), TEXT("TXT_State")), FString(TEXT("Start Failed")));
+
+	BeginPreview();
+	// Force the production retry deadline without sleeping or sending commands.
+	Upload->PendingCommandFrame = { 1 };
+	Upload->PendingAttemptCount = Upload->MaxCommandAttempts;
+	Upload->RetryAtSeconds = 0.0;
+	Upload->TickClient(0.0f); Refresh();
+	TestEqual(TEXT("Timeout is unknown, never invented failure"), Text(FirstRow(), TEXT("TXT_State")), FString(TEXT("Start Unconfirmed")));
+	TestFalse(TEXT("Unknown outcome cannot release binding"), Upload->CanPrepareForNewUploadJob(Error));
+	DeliverAck(false);
+	TestEqual(TEXT("Late ACK after closed retry window cannot invent acceptance"), Text(FirstRow(), TEXT("TXT_State")), FString(TEXT("Start Unconfirmed")));
+	TestTrue(TEXT("Authoritative recovery can resolve uncertain Start"), Upload->ApplySnapshotForTest(Validating)); Refresh();
+	TestEqual(TEXT("Recovered authority supersedes local timeout"), Text(FirstRow(), TEXT("TXT_State")), FString(TEXT("Validating Upload")));
+	C->AutoStartSnapshot.UploadJobID = TEXT("different-transaction-job");
+	DeliverFailure(JobID);
+	TestEqual(TEXT("Retained preview ignores different bound Job"), Text(FirstRow(), TEXT("TXT_State")), FString(TEXT("Start Sent")));
+	TestEqual(TEXT("Presentation never sends an upload/control command"), SentCommands, 0);
+	C->Shutdown(); GI->Shutdown();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowRouteListSnapshotLifecycleTest,
+	"DroneGCS.UI.RouteWorkflow.RouteListSnapshotLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowRouteListSnapshotLifecycleTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UGameInstance* GI = NewObject<UGameInstance>(GEngine);
+	GI->InitializeStandalone(TEXT("GCSRouteListSnapshotLifecycleTest"));
+	UDSPGCSUploadJobSubsystem* Upload = GI->GetSubsystem<UDSPGCSUploadJobSubsystem>();
+	if (!TestNotNull(TEXT("Upload mirror owner"), Upload))
+	{
+		GI->Shutdown();
+		return false;
+	}
+	UGCSRouteWorkflowCoordinator* C = NewObject<UGCSRouteWorkflowCoordinator>(GI);
+	C->InitializeForTest(GI);
+	// Generate the real Blueprint row entries offscreen. This uses synthetic
+	// mirror input only and never invokes an upload command or changes assets.
+	UClass* PageClass = LoadClass<UUserWidget>(nullptr,
+		TEXT("/Game/UI/WBP_GCS_RouteUpload.WBP_GCS_RouteUpload_C"));
+	UUserWidget* PageWidget = PageClass ? CreateWidget<UUserWidget>(GI, PageClass) : nullptr;
+	UListView* List = PageWidget && PageWidget->WidgetTree
+		? Cast<UListView>(PageWidget->WidgetTree->FindWidget(TEXT("LIST_RouteUploadStates"))) : nullptr;
+	UTextBlock* Status = PageWidget && PageWidget->WidgetTree
+		? Cast<UTextBlock>(PageWidget->WidgetTree->FindWidget(TEXT("TXT_UploadJobStateValue"))) : nullptr;
+	if (!TestNotNull(TEXT("Real RouteUpload ListView"), List) ||
+		!TestNotNull(TEXT("Real RouteUpload status"), Status) ||
+		!TestNotNull(TEXT("Real RouteUpload row class"), List->GetEntryWidgetClass().Get()))
+	{
+		C->Shutdown(); GI->Shutdown(); return false;
+	}
+	C->UploadWidgets.Add(TEXT("LIST_RouteUploadStates"), List);
+	C->UploadWidgets.Add(TEXT("TXT_UploadJobStateValue"), Status);
+	TSharedRef<SWidget> SlateList = List->TakeWidget();
+	auto Sync = [C, SlateList]()
+	{
+		C->SyncRouteListModel();
+		SlateList->SlatePrepass(1.0f);
+		SlateList->Tick(FGeometry::MakeRoot(FVector2D(800.0f, 700.0f), FSlateLayoutTransform()),
+			FPlatformTime::Seconds(), 0.2f);
+		C->RefreshVisibleRouteRows();
+	};
+	auto RowText = [](UUserWidget* Row, const FName Name)
+	{
+		const UTextBlock* Text = Row && Row->WidgetTree
+			? Cast<UTextBlock>(Row->WidgetTree->FindWidget(Name)) : nullptr;
+		return Text ? Text->GetText().ToString() : FString();
+	};
+	dspgcs::UploadJobSnapshotDTO Snapshot;
+	Snapshot.uploadJobId = std::string(32, 'a');
+	Snapshot.snapshotToken = std::string(32, 'b');
+	Snapshot.jobRevision = 1;
+	Snapshot.snapshotSequence = 1;
+	Snapshot.matchedCount = 2;
+	Snapshot.jobState = dspgcs::UploadJobState::Running;
+	Upload->BindUploadJobForTest(Snapshot.uploadJobId);
+	TestTrue(TEXT("Initial aggregate applies"), Upload->ApplySnapshotForTest(Snapshot));
+	Sync();
+	TestEqual(TEXT("Initial incomplete page exposes no partial list"), List->GetNumItems(), 0);
+	auto PageFor = [&Snapshot](const uint32 Start, const bool HasMore, const int32 Slot)
+	{
+		dspgcs::UploadJobRouteStatePageDTO Page;
+		Page.uploadJobId = Snapshot.uploadJobId;
+		Page.snapshotToken = Snapshot.snapshotToken;
+		Page.jobRevision = Snapshot.jobRevision;
+		Page.totalRouteCount = Snapshot.matchedCount;
+		Page.pageStart = Start;
+		Page.nextPageStart = Start + 1;
+		Page.hasMore = HasMore;
+		dspgcs::UploadRouteStateDTO Route;
+		Route.routeSlotIndex = Slot;
+		Route.droneId = Slot == 0 ? "001" : "002";
+		Route.state = dspgcs::UploadRouteState::Uploading;
+		Route.totalBytes = 100;
+		Page.routes.push_back(Route);
+		return Page;
+	};
+	TestTrue(TEXT("First page applies"), Upload->ApplyRoutePageForTest(PageFor(0, true, 0)));
+	Sync();
+	TestEqual(TEXT("Partial initial page remains unpublished"), List->GetNumItems(), 0);
+	TestTrue(TEXT("Last page applies"), Upload->ApplyRoutePageForTest(PageFor(1, false, 1)));
+	Sync();
+	TestEqual(TEXT("Complete initial list published"), List->GetNumItems(), 2);
+	const UGCSRouteUploadListItem* First = C->FindRouteItemForTest(0);
+	const UGCSRouteUploadListItem* Second = C->FindRouteItemForTest(1);
+	const int64 InitialRebuilds = C->GetRouteListRebuildCountForTest();
+	UUserWidget* FirstEntry = List->GetEntryWidgetFromItem(First);
+	TestNotNull(TEXT("Actual Blueprint row generated"), FirstEntry);
+	TestEqual(TEXT("Initial visible DroneID"), RowText(FirstEntry, TEXT("TXT_Drone")), FString(TEXT("001")));
+	TestEqual(TEXT("Initial visible progress"), RowText(FirstEntry, TEXT("TXT_Progress")), FString(TEXT("0%")));
+	List->SetSelectedItem(First);
+	for (int32 Poll = 0; Poll < 12; ++Poll)
+	{
+		// BuildSnapshot rotates the token on every aggregate query, even when
+		// all route deltas have already arrived and the mirror retains its rows.
+		Snapshot.snapshotToken = std::string(32, static_cast<char>('c' + Poll));
+		++Snapshot.jobRevision;
+		++Snapshot.snapshotSequence;
+		TestTrue(TEXT("Rotating-token aggregate applies"), Upload->ApplySnapshotForTest(Snapshot));
+		Sync();
+		TestTrue(TEXT("New token preserves first ListItem"), C->FindRouteItemForTest(0) == First);
+		TestTrue(TEXT("New token preserves second ListItem"), C->FindRouteItemForTest(1) == Second);
+		TestEqual(TEXT("New token does not rebuild"), C->GetRouteListRebuildCountForTest(), InitialRebuilds);
+		TestTrue(TEXT("New token retains visible row widget"), List->GetEntryWidgetFromItem(First) == FirstEntry);
+		TestTrue(TEXT("New token retains selection"), List->GetSelectedItem() == First);
+	}
+	dspgcs::UploadJobRouteStateDeltaDTO Delta;
+	Delta.uploadJobId = Snapshot.uploadJobId;
+	Delta.jobRevision = ++Snapshot.jobRevision;
+	Delta.deltaSequence = ++Snapshot.routeDeltaSequence;
+	Delta.routes = PageFor(0, true, 0).routes;
+	Delta.routes[0].bytesCompleted = 25;
+	bool bDuplicate = false;
+	TestTrue(TEXT("Live progress delta applies"), Upload->Mirror.ApplyRouteDelta(Delta, bDuplicate));
+	Sync();
+	TestEqual(TEXT("Existing row displays live delta progress"),
+		RowText(FirstEntry, TEXT("TXT_Progress")), FString(TEXT("25%")));
+	TestTrue(TEXT("Progress delta does not replace visible row"), List->GetEntryWidgetFromItem(First) == FirstEntry);
+	Delta.jobRevision = Snapshot.jobRevision + 1;
+	Delta.deltaSequence = Snapshot.routeDeltaSequence + 2;
+	TestFalse(TEXT("Skipped delta starts recovery"), Upload->Mirror.ApplyRouteDelta(Delta, bDuplicate));
+	Sync();
+	TestTrue(TEXT("Delta gap preserves list identity"), C->FindRouteItemForTest(0) == First);
+	TestEqual(TEXT("Stale row is explicitly syncing"), RowText(FirstEntry, TEXT("TXT_State")), FString(TEXT("Syncing")));
+	TestEqual(TEXT("Stale progress is not presented as current"), RowText(FirstEntry, TEXT("TXT_Progress")), FString(TEXT("--")));
+	// A gap forces a full re-page. Keep the same Job's item identities until
+	// the whole replacement page set is available, never publish partial rows.
+	++Snapshot.jobRevision;
+	++Snapshot.routeDeltaSequence;
+	Snapshot.snapshotToken = std::string(32, 'p');
+	TestTrue(TEXT("Recovery aggregate applies"), Upload->ApplySnapshotForTest(Snapshot));
+	Sync();
+	TestEqual(TEXT("Recovery keeps the existing list"), List->GetNumItems(), 2);
+	TestTrue(TEXT("Recovery is explicit"), Status->GetText().ToString().Contains(TEXT("Recovering")));
+	TestTrue(TEXT("Recovery first page applies"), Upload->ApplyRoutePageForTest(PageFor(0, true, 0)));
+	Sync();
+	TestTrue(TEXT("Partial recovery preserves first identity"), C->FindRouteItemForTest(0) == First);
+	TestEqual(TEXT("Partial recovery cannot overwrite row progress"), RowText(FirstEntry, TEXT("TXT_Progress")), FString(TEXT("--")));
+	TestTrue(TEXT("Recovery last page applies"), Upload->ApplyRoutePageForTest(PageFor(1, false, 1)));
+	Sync();
+	TestTrue(TEXT("Complete recovery preserves second identity"), C->FindRouteItemForTest(1) == Second);
+	TestEqual(TEXT("Recovery does not rebuild unchanged members"), C->GetRouteListRebuildCountForTest(), InitialRebuilds);
+	// Same count is not sufficient: changed RouteSlot membership must replace.
+	++Snapshot.jobRevision;
+	++Snapshot.routeDeltaSequence;
+	Snapshot.snapshotToken = std::string(32, 'q');
+	TestTrue(TEXT("Membership aggregate applies"), Upload->ApplySnapshotForTest(Snapshot));
+	TestTrue(TEXT("Membership first page applies"), Upload->ApplyRoutePageForTest(PageFor(0, true, 0)));
+	Sync();
+	TestNotNull(TEXT("Old membership retained during paging"), C->FindRouteItemForTest(1));
+	TestTrue(TEXT("Membership last page applies"), Upload->ApplyRoutePageForTest(PageFor(1, false, 7)));
+	Sync();
+	TestNull(TEXT("Removed slot disappears only after full page"), C->FindRouteItemForTest(1));
+	TestNotNull(TEXT("Replacement slot appears"), C->FindRouteItemForTest(7));
+	TestEqual(TEXT("Changed members rebuild once"), C->GetRouteListRebuildCountForTest(), InitialRebuilds + 1);
+	const UGCSRouteUploadListItem* TerminalItem = C->FindRouteItemForTest(7);
+	Delta.jobRevision = ++Snapshot.jobRevision;
+	Delta.deltaSequence = ++Snapshot.routeDeltaSequence;
+	Delta.routes = { PageFor(0, true, 0).routes[0], PageFor(1, false, 7).routes[0] };
+	for (auto& Route : Delta.routes)
+	{
+		Route.state = dspgcs::UploadRouteState::Succeeded;
+		Route.bytesCompleted = Route.totalBytes;
+	}
+	TestTrue(TEXT("Terminal route delta applies"), Upload->Mirror.ApplyRouteDelta(Delta, bDuplicate));
+	++Snapshot.jobRevision;
+	Snapshot.snapshotToken = std::string(32, 'r');
+	Snapshot.jobState = dspgcs::UploadJobState::Completed;
+	TestTrue(TEXT("Terminal aggregate applies"), Upload->ApplySnapshotForTest(Snapshot));
+	Sync();
+	TestTrue(TEXT("Terminal token preserves rows"), C->FindRouteItemForTest(7) == TerminalItem);
+	TestEqual(TEXT("Terminal row displays success"),
+		RowText(List->GetEntryWidgetFromItem(TerminalItem), TEXT("TXT_State")), FString(TEXT("Protocol Succeeded")));
+	TestEqual(TEXT("Terminal row displays full progress"),
+		RowText(List->GetEntryWidgetFromItem(TerminalItem), TEXT("TXT_Progress")), FString(TEXT("100%")));
+	// A new Job must never inherit the old Job's rows while its first page loads.
+	Snapshot.uploadJobId = std::string(32, 's');
+	Snapshot.snapshotToken = std::string(32, 't');
+	Snapshot.jobRevision = 1;
+	Snapshot.routeDeltaSequence = 0;
+	Snapshot.jobState = dspgcs::UploadJobState::Running;
+	Upload->BindUploadJobForTest(Snapshot.uploadJobId);
+	TestTrue(TEXT("New Job aggregate applies"), Upload->ApplySnapshotForTest(Snapshot));
+	Sync();
+	TestEqual(TEXT("New Job clears old list before paging"), List->GetNumItems(), 0);
+	TestTrue(TEXT("New Job first page applies"), Upload->ApplyRoutePageForTest(PageFor(0, true, 0)));
+	TestTrue(TEXT("New Job last page applies"), Upload->ApplyRoutePageForTest(PageFor(1, false, 1)));
+	Sync();
+	TestEqual(TEXT("New Job publishes its own rows"), List->GetNumItems(), 2);
+	TestTrue(TEXT("Same slot in new Job has new identity"), C->FindRouteItemForTest(0) != First);
+	Snapshot.matchedCount = 0;
+	++Snapshot.jobRevision;
+	++Snapshot.routeDeltaSequence;
+	TestTrue(TEXT("Empty membership snapshot applies"), Upload->ApplySnapshotForTest(Snapshot));
+	Sync();
+	TestEqual(TEXT("Complete empty membership clears list"), List->GetNumItems(), 0);
+	Snapshot.matchedCount = 2;
+	++Snapshot.jobRevision;
+	++Snapshot.routeDeltaSequence;
+	TestTrue(TEXT("Nonempty membership restored"), Upload->ApplySnapshotForTest(Snapshot));
+	TestTrue(TEXT("Restored first page applies"), Upload->ApplyRoutePageForTest(PageFor(0, true, 0)));
+	TestTrue(TEXT("Restored last page applies"), Upload->ApplyRoutePageForTest(PageFor(1, false, 1)));
+	Sync();
+	TestEqual(TEXT("Error fixture has visible rows to clear"), List->GetNumItems(), 2);
+	Snapshot.resultCode = dspgcs::UploadJobErrorCode::UnknownJob;
+	TestTrue(TEXT("Authoritative error applies"), Upload->ApplySnapshotForTest(Snapshot));
+	Sync();
+	TestEqual(TEXT("Authoritative error clears obsolete rows"), List->GetNumItems(), 0);
+	C->Shutdown();
+	PageWidget->ReleaseSlateResources(true);
+	GI->Shutdown();
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowRouteRowContractTest,

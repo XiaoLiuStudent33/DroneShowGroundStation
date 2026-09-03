@@ -31,6 +31,10 @@ Source of Truth 优先级：当前生产源码、已存在并通过的测试、�
 
 ## 3. CURRENT Supporting Documentation
 
+Route Upload ListView 的稳定行身份与分页恢复显示合同见 `UI_Architecture_CN.md`；对应 `RouteListSnapshotLifecycle` 回归与验收边界见 `Test_Architecture_CN.md`。
+
+启动预览与实际 Job 的区分、Artifact 校验拒绝和超时结果未知的显示合同同见 `UI_Architecture_CN.md`；不得把 `Start Sent` / `Awaiting Console` 当作已执行上传。
+
 | 文档 | 作用 |
 |---|---|
 | [../README.md](../README.md) | 仓库入口、系统边界、当前生产 Transport 与阅读顺序 |

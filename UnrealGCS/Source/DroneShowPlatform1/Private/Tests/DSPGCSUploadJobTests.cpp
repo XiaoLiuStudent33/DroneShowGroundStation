@@ -154,6 +154,7 @@ bool FDSPGCSUploadJobLiveAggregateTest::RunTest(const FString& Parameters)
 		Mirror.ApplyRouteDelta(Delta, bDuplicate));
 
 	auto Live = Aggregate;
+	Live.snapshotToken = Id('8'); // Console rotates the paging token on every poll.
 	Live.jobRevision = Delta.jobRevision + 1;
 	Live.snapshotSequence++;
 	Live.routeDeltaSequence = Delta.deltaSequence;
@@ -358,13 +359,18 @@ bool FDSPGCSUploadJobMirrorReliabilityTest::RunTest(const FString& Parameters)
 			ValidationFailure.safeDiagnostic);
 
 	const std::string JobB = Id('7');
+	Mirror.MarkTransportReconnected();
+	TestFalse(TEXT("Explicit rejection does not restart status recovery"), Mirror.IsRecoveryRequired());
 	Mirror.PrepareForNewJob(JobB);
+	Mirror.MarkTransportReconnected();
+	TestTrue(TEXT("Bound Start recovers even before its first snapshot"), Mirror.IsRecoveryRequired());
 	auto SnapshotB = Baseline;
 	SnapshotB.uploadJobId = JobB;
 	SnapshotB.snapshotToken = Id('8');
 	SnapshotB.jobState = dspgcs::UploadJobState::Ready;
 	TestTrue(TEXT("Explicit rebind accepts the requested new Job"),
 		Mirror.ApplySnapshot(SnapshotB));
+	TestFalse(TEXT("First authoritative snapshot ends pre-Job recovery"), Mirror.IsRecoveryRequired());
 	auto Unrelated = SnapshotB;
 	Unrelated.uploadJobId = Id('9');
 	TestFalse(TEXT("Explicit binding rejects an unrelated Job"),

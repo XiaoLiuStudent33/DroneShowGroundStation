@@ -66,6 +66,16 @@ UE Route Workflow
 
 ## 2. CURRENT / NEXT
 
+### Route Upload 列表稳定性修复（2026-09-03 工作树）
+
+- 修复同一 Upload Job 的 `snapshotToken` 轮换导致 ListView 周期性清空/重建：ListItem 改为稳定 `UploadJobID + RouteSlotIndex` 身份，保留现有成员并原位刷新进度。
+- 分页恢复期间保留同 Job 的行，明确显示同步中；不显示半份分页为完整结果，不将失效进度标为当前值。
+- Editor Development 构建成功；Route Workflow + DSP Upload Job 合并回归 24/24 PASS，含真实 Row 的离屏生命周期与进度更新测试，详细证据见 `Test_Architecture_CN.md`。本项为 UE C++ 展示层修复，未改 Console 上传、DSP 分页安全校验、UE 资源或配置。既有 V3 / 1.0.0 安装包未重新生成；实际上传画面与后续新 Shipping 包仍需操作员验收。
+
+2026-09-03 列表修复后的现场补查发现：手动无参数启动 Console 的默认 `gcs-config.ini` 未配置 `artifact_workspace_root`，不同于现有 `gcs-config-upload.ini`；截图返回的是 Artifact 校验拒绝，不是虚拟机 MAVFTP 上传阶段失败。UE 又把已派发的 Start 预览显示为 `Upload Job Started`，未投影后续拒绝。本次补修仅调整 UE 展示，改为等待/启动失败/结果未知、无 Job 统计 `--` 和完整错误 tooltip；不修改或切换 Console 配置，不启用实际上传权限。验收必须区分“启动校验拒绝”与“任务执行后的逐机失败”；现场上传和安装包仍需单独验收。
+
+补充测试还修复了“已绑定 Start、第一份任务快照丢失后未进入恢复查询”的 UE 状态镜像分支，仅重新查询权威状态，不重发 Start；明确校验拒绝仍保留为错误。最终 Editor Development 构建成功，Route Workflow + DSP Upload Job **25/25 PASS**，证据见 `Test_Architecture_CN.md` 的 Start 拒绝补充回归；尚未由用户复验本次编辑器现场画面。
+
 当前完成点：
 
 ```text

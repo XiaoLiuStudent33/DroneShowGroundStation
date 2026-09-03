@@ -21,6 +21,7 @@ enum class EGCSRouteAutoStartState : uint8
 	Freezing,
 	SyncingConsole,
 	StartingJob,
+	// The local orchestration dispatched Start; this is not Console acceptance.
 	Completed,
 	Failed,
 	CancelledAsStale
@@ -57,6 +58,7 @@ struct FGCSRouteAutoStartSnapshot
 	int64 ConfigRevision = 0;
 	FString ConfigDigest;
 	FString SyncTransactionID;
+	FString UploadJobID;
 	bool bJobStartAttempted = false;
 	bool bJobStartDispatched = false;
 	bool bUsesConfirmedNpzMapping = false;
@@ -108,7 +110,7 @@ struct FGCSRouteAutoStartSyncObservation
 	FString LastError;
 };
 
-/** Stable, identity-only ListView item. Route state remains in the Phase 2G mirror. */
+/** Stable JobID/RouteSlot ListView item. Paging tokens and state belong to the mirror. */
 UCLASS()
 class UGCSRouteUploadListItem final : public UObject
 {
@@ -117,7 +119,6 @@ class UGCSRouteUploadListItem final : public UObject
 public:
 	int32 GetRouteSlotIndex() const { return RouteSlotIndex; }
 	const FString& GetUploadJobID() const { return UploadJobID; }
-	const FString& GetSnapshotToken() const { return SnapshotToken; }
 	bool IsAutoStartPreview() const { return bAutoStartPreview; }
 	const FString& GetPreviewDroneID() const { return PreviewDroneID; }
 	const FString& GetPreviewRouteRelativePath() const { return PreviewRouteRelativePath; }
@@ -126,7 +127,6 @@ private:
 	friend class UGCSRouteWorkflowCoordinator;
 	int32 RouteSlotIndex = INDEX_NONE;
 	FString UploadJobID;
-	FString SnapshotToken;
 	bool bAutoStartPreview = false;
 	FString PreviewDroneID;
 	FString PreviewRouteRelativePath;
@@ -325,6 +325,8 @@ public:
 		FRouteAssignmentSourceSnapshot& OutSource,
 		FString& OutError);
 #if WITH_DEV_AUTOMATION_TESTS
+	friend class FGCSRouteWorkflowRouteListSnapshotLifecycleTest;
+	friend class FGCSRouteWorkflowPreJobPresentationTest;
 	void InitializeForTest(UGameInstance* InGameInstance);
 	void SetWorkflowFactoryForTest(
 		TFunction<UUserWidget*()> InFactory,
@@ -335,7 +337,6 @@ public:
 	bool IsBindingValidForTest() const { return bBindingValid; }
 	bool BuildRouteItemsForTest(
 		const FString& JobID,
-		const FString& SnapshotToken,
 		const TArray<int32>& SortedRouteSlots);
 	int32 GetRouteItemCountForTest() const { return RouteListItems.Num(); }
 	int64 GetRouteListRebuildCountForTest() const { return RouteListRebuildCount; }
@@ -513,12 +514,12 @@ private:
 	void ClearCommandError(EGCSRouteWorkflowCommandErrorCategory Category);
 	void ApplyCommandErrorPresentation();
 	void RefreshReadOnlyState();
+	FString GetAutoStartPresentation(FString& OutDiagnostic) const;
 	void RefreshArtifactIdentity();
 	void SyncRouteListModel();
 	void RefreshVisibleRouteRows();
 	bool ReplaceRouteListItems(
 		const FString& JobID,
-		const FString& SnapshotToken,
 		const TArray<int32>& SortedRouteSlots);
 	void ClearRouteListModel();
 	bool ReplaceAutoStartPreviewItems(const FGCSRouteAutoStartSnapshot& Snapshot);
@@ -575,7 +576,6 @@ private:
 	TMap<int32, TObjectPtr<UGCSRouteUploadListItem>> RouteItemsBySlot;
 
 	FString RouteListJobID;
-	FString RouteListSnapshotToken;
 	int64 RouteListRebuildCount = 0;
 	TSet<TWeakObjectPtr<UUserWidget>> ValidatedRouteRows;
 	TMap<TWeakObjectPtr<UUserWidget>, FString> RouteRowDiagnostics;

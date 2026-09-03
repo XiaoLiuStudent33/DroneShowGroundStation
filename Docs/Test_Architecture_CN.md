@@ -102,6 +102,23 @@ E.0.1 Console Render Integrity 另完成 Full ConsoleGCSTests 连续 3/3 PASS。
 
 UE Development/DebugGame Editor Build 均 PASS；AutoStart 6/6 PASS，Route Assignment + Frozen shared contract + DSP Upload Job + Route Workflow 合并回归 164/164 PASS。证据限定：本轮未运行真实飞控上传。
 
+### Route Upload ListView 稳定性回归（2026-09-03）
+
+- 先在未修复的生产逻辑上运行新增 `DroneGCS.UI.RouteWorkflow.RouteListSnapshotLifecycle`，确认 12 次 Token 轮换使重建次数从 1 增至 13，分页恢复时列表变为 0 行；该基线按预期失败。
+- 修复后 `DroneShowPlatform1Editor Win64 Development` 构建成功。`DroneGCS.UI.RouteWorkflow` 与 `DroneGCS.Data.DSPGCSUploadJob` 最终合并回归 **24/24 PASS**（22 无警告、2 带既有拒绝场景警告，0 failed / 0 not-run）；新增回归本身无警告/错误。
+- 生命周期回归使用真实 `WBP_GCS_RouteUpload` / `WBP_GCS_RouteUploadRow`，在离屏 Slate 布局中生成非空可见行；覆盖新 Token 保留 ListItem/Row/选择、Delta 更新至 25%、gap 标记 Syncing、部分分页不发布、完整恢复复用对象、同数量不同 RouteSlot 集合替换、终态 `Protocol Succeeded` / 100%、新 Job、空集合和权威错误清理。`LiveAggregate` 同时覆盖轮换 Token 后保留镜像 Route 数据。
+- 运行使用 `-NullRHI`，并通过仅本次进程的 `-ini:Game:[DSPGCS.ProductionTelemetry]:Enabled=False` 与 `-ini:Game:[DSPGCS.ProductionCommand]:Enabled=False` 关闭 Production 链路，不修改配置文件、不启动 Console、不进行真实上传。现有 UE 启动日志中的 Cesium metadata 初始化诊断和非首选 MSVC 版本提示仍存在，未混入本次修复。
+- 本地生成证据：`UnrealGCS/Saved/Automation/RouteListBaseline/index.json`、`UnrealGCS/Saved/Automation/RouteListFixFinal/index.json`，以及对应 `Saved/Logs/RouteListBaseline.log` / `RouteListFixFinal.log`。这些为开发机测试产物，不作为 Production 源码提交。
+- 本回归证明列表生命周期与行字段更新，不替代真实上传场景的肉眼验收；未重新生成 V3 Shipping 或 1.0.0 安装包。
+
+### Start 拒绝 / 首份快照丢失补充回归（2026-09-03）
+
+- 现场截图的 Artifact 校验拒绝发生在 Start 预览阶段，原 24 项回归未覆盖这个组合。新增 `DroneGCS.UI.RouteWorkflow.PreJobPresentation`，使用真实 Upload 页面/行的离屏 Slate 布局，输入 ACK/错误快照走实际编码、接收和处理路径；全部发送帧由测试拦截。
+- 覆盖 Start 已发送但未获权威结果、Rejected ACK、Accepted ACK 后直接失败、Validating 后失败、跨 Job 回传隔离、同一预览对象/Row 连续 12 次刷新不重建、短结果与完整 tooltip、无 Job 统计/重试为 `--`、禁止自动解锁和显式新数据集清理。ACK 超时使用实际 TickClient 重试截止分支；迟到 ACK 不能重新确认已关闭的请求，权威快照可恢复结果。
+- 扩展测试在 `RoutePreJobFixFinal` 抓到首份快照超时遗漏：`MarkTransportReconnected` 原本只在已有快照时标记恢复，已绑定但尚无快照的 Start 不再查询。现允许未被权威拒绝的已绑定 Job 恢复只读快照查询；测试证明下一轮实际发出状态查询，整个展示测试发送上传/控制 Command 数量为 **0**。明确拒绝不会触发该恢复。
+- 最终 `DroneShowPlatform1Editor Win64 Development` 构建成功；Route Workflow + DSP Upload Job 合并 **25/25 PASS**（23 无警告、2 带既有拒绝场景警告，0 failed / 0 not-run）。新增 PreJobPresentation 无警告/错误；此前 ListView 稳定性回归仍通过。
+- 最终证据：`UnrealGCS/Saved/Automation/RoutePreJobRecoveryFinal/index.json`、`UnrealGCS/Saved/Logs/RoutePreJobRecoveryFinal.log`。使用 `-NullRHI` 和进程级 Production Telemetry/Command 禁用参数，不改配置文件、不启动 Console、不运行虚拟机或真机上传。编辑器 UI 的现场复验仍待用户执行；Console 启动配置与现有 Shipping/安装包未改变。
+
 ## 6. 用户确认的硬件证据
 
 ```text

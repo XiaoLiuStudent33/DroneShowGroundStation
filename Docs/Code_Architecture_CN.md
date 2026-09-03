@@ -144,9 +144,15 @@ GCSRouteWorkflowCoordinator / WBP_GCS_RouteUpload
 
 Start 由 `UGCSRouteWorkflowCoordinator` 的 E.0 AutoStart 状态机拥有：`ValidatingMapping -> Freezing -> SyncingConsole -> StartingJob -> Completed/Failed/CancelledAsStale`。快照包含排序后的 Command Selection、Fleet session/revision、每台 endpoint、ArtifactSet/digests 以及 Manifest Route Record path/size/digest；Accepted 后重新捕获并逐项比较。`bJobStartAttempted` 在调用前设置，重复 Tick/ACK/重开 Widget 不会创建第二个 Job。
 
+展示边界补充（2026-09-03）：AutoStart `Completed` 仅完成本地 Start dispatch，记录发出的 `UploadJobID`，日志为 `State=StartDispatched`。`GetAutoStartPresentation` 按相同 Job 的 CommandStatus/Mirror 投影等待、校验、拒绝或结果未知；不修改协议/上传状态机。启动被拒绝时保留预览身份并更新结果，正式 Job 行仍由权威 Route 页拥有。显式新数据集替换是现有 Job 解绑入口，UI 失败提示不自动释放绑定或产生第二次 Start。
+
+镜像恢复补充：已绑定但尚未取得首份快照的 Job 同样需要 `MarkTransportReconnected` 标记只读恢复，后续 TickClient 重新查询同 Job；无绑定或已有权威错误不启用该恢复。此分支不清除错误、不解除绑定、不重发上传命令。
+
 已实现 Start、Pause、Resume、Cancel、RetryFailed 与 max concurrency 操作，以及 aggregate snapshot、route page 和 route delta。E.1 的 max concurrency 由 UE 已应用值拥有，合法范围 `1..50`；Start 快照后复用现有 DTO，Console 再次严格校验，`EffectiveMaxConcurrentTargets = min(DTO.MaxConcurrentTargets, MatchedTargetCount)`。运行中 Apply 被拒绝，当前 Job 不受后续 UI 修改影响。Upload Job 同时绑定 Artifact identity 与 Frozen Assignment identity；不能只凭任意路径或 UI 内存状态启动。
 
 `RouteUploadManager` 对 Target 使用动态容器和准入队列，不存在固定 2/16/50 长度。共享 `WritePermitPool` 对所有活动 Client 执行 round-robin 公平背压：每 Client `write_window=16`，全局 cap 独立配置 `1..800`，有效值为 `min(ConfiguredGlobalCap, EffectiveMaxConcurrentTargets * PerClientWriteWindow)`。同一 pending Write 的 retry 保留原 permit；成功 ACK、NAK、失败、Cancel、Shutdown 和 teardown 精确释放。控制请求不计入 Write cap。
+
+Route Upload ListView 的身份投影由 `UGCSRouteWorkflowCoordinator` 维护：稳定键为 `UploadJobID + RouteSlotIndex`，行数据仍只读取 `FDSPGCSUploadJobStateMirror`。Console 聚合查询每次生成的 `snapshotToken` 仅标识分页事务，不能触发 UI ListItem 重建。相同成员集合只原位刷新可见行；重新分页期间保留成员并标记同步中，完整分页到齐后才比较并替换变化的成员集合。网络 Token/revision/delta 校验及 Console 上传执行链不受此展示层修复影响。
 
 ## 8. Console Artifact Consumer 与 Upload Authority
 

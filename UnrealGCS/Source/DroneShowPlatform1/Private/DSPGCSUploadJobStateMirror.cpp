@@ -193,7 +193,10 @@ bool FDSPGCSUploadJobStateMirror::ApplyRouteDelta(
 
 void FDSPGCSUploadJobStateMirror::MarkTransportReconnected()
 {
-	if (bHasSnapshot) bRecoveryRequired = true;
+	// A dispatched Start can lose its very first snapshot. Its bound identity
+	// still needs read-only recovery; an explicit rejection must remain terminal.
+	if (!bHasAuthoritativeError && (bHasSnapshot || !BoundJobID.empty()))
+		bRecoveryRequired = true;
 }
 
 void FDSPGCSUploadJobStateMirror::MarkPageOpened()
