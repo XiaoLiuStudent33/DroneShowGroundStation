@@ -316,18 +316,14 @@ DroneSessionCommandSubmission DroneSession::SubmitCommand(
         return submission;
 
     case DroneCommandType::Disarm:
-        if (commandTarget.armed &&
-            (!commandTarget.altitudeValid ||
-             commandTarget.relativeAltitude > 0.3f))
-        {
-            ConsoleUI::AddLog(
-                requestPrefix +
-                "DISARM blocked: landing not confirmed");
-            submission.error = "landing not confirmed";
-            return submission;
-        }
-
-        ConsoleUI::AddLog(requestPrefix + "DISARM Command");
+        // GPS/AMSL validity is not relative-altitude validity or landed state.
+        // Nor does altitude relative to home prove ground contact (indoor GPS
+        // loss and landing above home must not prevent an ordinary request).
+        // The flight controller owns disarm safety checks: send normal #400
+        // (param1=0, param2=0), never force or retry with a force override.
+        // Queueing is not success; retain the normal matching ACK/timeout path.
+        ConsoleUI::AddLog(requestPrefix +
+            "DISARM Command (normal; flight-controller safety checks; awaiting ACK)");
         submission.dispatchRequestIds.push_back(dispatcher.QueueDisarm(
             commandTarget.systemID,
             commandTarget.componentID));

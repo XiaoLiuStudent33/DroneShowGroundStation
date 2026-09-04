@@ -2,7 +2,7 @@
 
 Status: CURRENT
 Authority: 当前实现状态与开发顺序
-Last Updated: 2026-09-03
+Last Updated: 2026-09-04
 Baseline: `master` / `03825841f81e516731d12df632867be67f72ad57` + 2026-09-03 联合打包工作树
 
 ## 1. DONE / IMPLEMENTED
@@ -65,6 +65,14 @@ UE Route Workflow
 生产 Route Upload 已冻结为 MAVFTP-only；旧 Transport 的源码、factory 分支、CLI、INI 和工程项已删除，失败不会触发协议回退。
 
 ## 2. CURRENT / NEXT
+
+### 室内普通上锁误拦截修复（2026-09-04 工作树）
+
+- 现场截图：ARM 收到 `MAV_RESULT_ACCEPTED`，随后 DISARM 被 Console 以 `landing not confirmed` 拒绝，未发送给飞控。旧判断把来自 GPS 3D Fix 的 AMSL `altitudeValid` 与相对高度 `relativeAltitude` 混用，不能代表是否着陆。
+- `DroneSession` 不再用 GPS 定位或相对起飞点高度推断着陆以拦截普通上锁；普通 DISARM 始终使用 MAV_CMD 400、param1=0、param2=0，由目标飞控执行自身安全判断。保留 receive-only、真实命令开关、在线检查、Endpoint 路由及 ACK/拒绝/超时处理；不新增强制上锁，不改飞控参数，不改变 GPS 遥测语义。
+- 普通上锁的实际允许条件取决于飞控固件、模式和配置，不能宣称所有空中上锁都会被固件拒绝；这不是新的紧急停机功能。ACK 接受也不等于已验证停桨，仍须核对 HEARTBEAT armed 状态及现场电机状态。
+- 新增 `ConsoleGCSTests.exe --disarm-tests` 内存捕获专项，覆盖无 GPS、GPS 地面、相对高度非零、ACK 接受/拒绝/缺失、错误 Endpoint/命令 ACK、普通重试与禁用边界。真机地面复测尚待操作员完成，旧 1.0.0 安装包未更新。
+- 验证：Console Debug/Release x64 构建及两配置上锁专项 PASS；Release 全回归的 command、DSP command 等通过，但 MissionUpload 模拟链报 `fake production chain did not complete authoritative Job state`。独立重跑以及临时恢复旧上锁判断的对照均同样失败；已恢复本次修复源码并重建/通过 Release 上锁专项。本轮未修复此上传测试问题，不将全回归标为 PASS。
 
 ### Route Upload 列表稳定性修复（2026-09-03 工作树）
 

@@ -2,7 +2,7 @@
 
 Status: CURRENT SUPPORTING
 Authority: 测试资产、运行入口与证据等级
-Last Updated: 2026-09-03
+Last Updated: 2026-09-04
 
 Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，当前调用链见 [Code_Architecture_CN.md](Code_Architecture_CN.md)，进度见 [Development_Status_CN.md](Development_Status_CN.md)。
 
@@ -28,6 +28,15 @@ Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，�
 - 2026-08-25 Gate：Console Render 连续 20/20 PASS，Console 全回归 PASS；`DroneGCS.UI` 22/22 PASS，`DroneGCS.Data.DSPGCSUploadJob` 3/3 PASS。规模热路径观测为 1000 台约 1.225 ms、20000 台约 11.454 ms（同机单次观测，不作为跨机器 SLA）。
 
 ## 2. Console Regression
+
+### 普通上锁专项（2026-09-04）
+
+- 入口：`ConsoleGCSTests.exe --disarm-tests`，同时并入完整回归的 `RunCommandTests()`。
+- 使用真实 `DroneSession -> CommandDispatcher -> MavlinkCommand`，发送端为纯内存 `CapturingDatagramSender`，不启动 Socket、不向真机或模拟器发送命令；armed/GPS/高度和 ACK 全部由测试注入。
+- 五种场景：室内无 GPS 接受/拒绝/超时、GPS 地面接受、相对高度 5m 时交由飞控拒绝。另检查离线、receive-only、关闭真实命令不会发普通控制包。
+- 检查每个上锁及重试报文为 `MAV_CMD_COMPONENT_ARM_DISARM`、正确 SYSID/COMPID、param1=0、param2=0；错误 Endpoint/MAV_CMD 的 ACK 不完成请求，发送不立即成功，ACK 不伪造已上锁遥测。
+- 修复前专项在三个无 GPS 场景及相对高度非零场景失败，修复后 Debug/Release x64 专项通过。软件测试不证明飞控落地判断、现场停桨或所有飞行模式下的安全拒绝行为。
+- 2026-09-04：Debug/Release Console 生产构建通过。Release 全回归中命令、DSP 命令相关测试通过，MissionUpload manager integration 的模拟上传链断言失败（`fake production chain did not complete authoritative Job state`）；独立 `--mission-upload-tests` 与恢复旧上锁判断的对照运行均复现同一失败。本次未扩大范围修复上传测试；最终已恢复修复源码、重建 Release 测试并再次通过两配置上锁专项。完整回归不是全绿。
 
 构建后从 `ConsoleGCS` 目录运行完整回归：
 

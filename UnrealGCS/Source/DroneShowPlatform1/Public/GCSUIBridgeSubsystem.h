@@ -20,6 +20,7 @@ class ADroneFleetVisualizationActor;
 class APlayerController;
 class UGCSDroneRowView;
 class UGCSRouteWorkflowCoordinator;
+class UGCSTelemetryFilterController;
 class UEditableTextBox;
 class UEditableText;
 class USlider;
@@ -79,6 +80,7 @@ public:
 
 	/** Native, once-per-authority-mutation notification used by bulk-selection consumers. */
 	FGCSCommandSelectionChanged OnCommandSelectionChanged;
+	bool IsCommandSelectionMutationBlocked() const;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	void ToggleFleetSelectAllForTest() { HandleFleetSelectAllClicked(); }
@@ -128,6 +130,12 @@ public:
 private:
 	friend class FGCSMarqueeInputProcessor;
 	friend class FGCSScheduledShowPreviewTest;
+	friend class FGCSTelemetryFilterToggleTest;
+
+	UFUNCTION()
+	void HandleTelemetryFilterToggleClicked();
+	void BindTelemetryFilterToggle();
+	void ResetTelemetryFilter();
 
 	UFUNCTION()
 	void HandleMenuClicked();
@@ -359,7 +367,6 @@ private:
 	void RefreshFleetSelectAll();
 	TArray<FString> BuildEligibleOnlineCommandDroneIDs() const;
 	bool IsExactCommandSelection(const TArray<FString>& EligibleDroneIDs) const;
-	bool IsCommandSelectionMutationBlocked() const;
 	FReply HandleFleetRowMouseButtonDown(
 		const FGeometry& Geometry,
 		const FPointerEvent& MouseEvent,
@@ -585,6 +592,11 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UGCSRouteWorkflowCoordinator> RouteWorkflowCoordinator;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UGCSTelemetryFilterController> TelemetryFilterController;
+	TWeakObjectPtr<UUserWidget> TelemetryFilterWidget;
+	TWeakObjectPtr<UButton> TelemetryFilterToggleButton;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	TFunction<UUserWidget*()> UploadDashboardFactoryForTest;

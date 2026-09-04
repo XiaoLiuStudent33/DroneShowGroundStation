@@ -43,6 +43,19 @@ bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("Nested RouteUpload"),Upload);
 	UUserWidget* Convert=First&&First->WidgetTree?Cast<UUserWidget>(First->WidgetTree->FindWidget(TEXT("WBP_GCS_RouteConvert"))):nullptr;
 	TestNotNull(TEXT("Nested RouteConvert"),Convert);
+	UTextBlock* ConvertArtifactID=Convert&&Convert->WidgetTree
+		? Cast<UTextBlock>(Convert->WidgetTree->FindWidget(TEXT("TXT_ArtifactIdValue"))):nullptr;
+	TestNotNull(TEXT("Convert Artifact ID TextBlock"),ConvertArtifactID);
+	if(ConvertArtifactID)
+	{
+		TestFalse(TEXT("Artifact ID has a value or unavailable placeholder"),ConvertArtifactID->GetText().IsEmpty());
+		TestEqual(TEXT("Artifact tooltip contains the full displayed ID or placeholder"),
+			ConvertArtifactID->GetToolTipText().ToString(),ConvertArtifactID->GetText().ToString());
+		ConvertArtifactID->SetToolTipText(FText::FromString(TEXT("stale previous Artifact ID")));
+		C->RefreshReadOnlyStateForTest();
+		TestEqual(TEXT("Refresh replaces stale Artifact tooltip from the same current ID source"),
+			ConvertArtifactID->GetToolTipText().ToString(),ConvertArtifactID->GetText().ToString());
+	}
 	UButton* ApplyNumbering=Convert&&Convert->WidgetTree?Cast<UButton>(Convert->WidgetTree->FindWidget(TEXT("BTN_ApplyNpzNumbering"))):nullptr;
 	UButton* CaptureStableGps=Convert&&Convert->WidgetTree?Cast<UButton>(Convert->WidgetTree->FindWidget(TEXT("BTN_CaptureStableGps"))):nullptr;
 	UButton* ClearNumbering=Convert&&Convert->WidgetTree?Cast<UButton>(Convert->WidgetTree->FindWidget(TEXT("BTN_ClearNpzNumbering"))):nullptr;

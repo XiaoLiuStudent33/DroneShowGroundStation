@@ -500,9 +500,180 @@ int RunCommandManagerSafeModeTests()
     return 1;
 }
 
+// Production Session/dispatcher/encoder, with an in-memory sender only. No
+// socket, real aircraft, arming command or flight-controller parameter write.
+int RunSessionDisarmTests()
+{
+    bool passed = true;
+    struct Scenario
+    {
+        const char* name;
+        bool gpsFixed;
+        int relativeAltitudeMm;
+        int ackResult; // -1: no ACK, exercise timeout/retry without wall-clock sleeps
+    };
+    const Scenario scenarios[] =
+    {
+        { "indoor no GPS accepted", false, -100, MAV_RESULT_ACCEPTED },
+        { "indoor no GPS denied", false, -100, MAV_RESULT_DENIED },
+        { "indoor no GPS timeout", false, -100, -1 },
+        { "GPS ground accepted", true, 0, MAV_RESULT_ACCEPTED },
+        { "relative height is not landing state", true, 5000, MAV_RESULT_DENIED }
+    };
+    for (const Scenario& scenario : scenarios)
+    {
+        const std::string label = std::string(scenario.name) + ": ";
+        CapturingDatagramSender endpoint;
+        DroneSessionConfig config;
+        config.droneId = "Drone000";
+        config.remoteIp = "127.0.0.1";
+        config.remotePort = 30001;
+        config.realCommandEnabled = true;
+        config.sharedMavlinkEndpoint = &endpoint;
+        config.discoveredSystemId = 1;
+        config.discoveredComponentId = 1;
+        DroneSession session(config);
+        passed &= Check(session.Start(), label + "session starts with capturing endpoint");
+
+        DroneCommandRequest request;
+        request.commandId = 1;
+        request.commandType = DroneCommandType::Disarm;
+        const auto offline = session.SubmitCommand(request);
+        passed &= Check(!offline.accepted && offline.error == "vehicle offline",
+            label + "offline gate retained");
+
+        DiscoveredDroneIdentity identity;
+        identity.sourceIp = config.remoteIp;
+        identity.sourcePort = static_cast<std::uint16_t>(config.remotePort);
+        identity.systemId = 1;
+        identity.componentId = 1;
+        identity.observedAt = std::chrono::steady_clock::now();
+        mavlink_message_t message{};
+        mavlink_msg_heartbeat_pack(1, 1, &message, MAV_TYPE_QUADROTOR,
+            MAV_AUTOPILOT_ARDUPILOTMEGA,
+            MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | MAV_MODE_FLAG_SAFETY_ARMED,
+            ArduCopterCustomMode::Stabilize, MAV_STATE_ACTIVE);
+        passed &= Check(session.ApplyDiscoveredHeartbeat(message, identity),
+            label + "armed telemetry applied, not an ARM command");
+
+        mavlink_gps_raw_int_t gps{};
+        gps.fix_type = scenario.gpsFixed ? 3 : 1;
+        mavlink_msg_gps_raw_int_encode(1, 1, &message, &gps);
+        passed &= Check(session.ApplyDiscoveredTelemetry(message, identity),
+            label + "GPS telemetry applied");
+        mavlink_global_position_int_t position{};
+        position.relative_alt = scenario.relativeAltitudeMm;
+        mavlink_msg_global_position_int_encode(1, 1, &message, &position);
+        passed &= Check(session.ApplyDiscoveredTelemetry(message, identity),
+            label + "relative altitude telemetry applied");
+        passed &= Check(session.GetFlightData().armed &&
+            session.GetFlightData().altitudeValid == scenario.gpsFixed,
+            label + "reproduces armed/GPS validity inputs");
+
+        const auto submission = session.SubmitCommand(request);
+        passed &= Check(submission.accepted && !submission.completedImmediately &&
+            !submission.simulated && submission.dispatchRequestIds.size() == 1,
+            label + "ordinary DISARM queues and waits for flight controller");
+        // Keep the baseline failure bounded: do not wait if the old GPS gate rejects.
+        if (!submission.accepted) continue;
+        const auto now = std::chrono::steady_clock::now();
+        session.Tick(now);
+        auto checkPackets = [&]()
+        {
+            int count = 0;
+            mavlink_message_t packet{};
+            while (endpoint.ConsumeMessage(packet))
+            {
+                if (packet.msgid != MAVLINK_MSG_ID_COMMAND_LONG) continue;
+                mavlink_command_long_t command{};
+                mavlink_msg_command_long_decode(&packet, &command);
+                passed &= Check(command.command == MAV_CMD_COMPONENT_ARM_DISARM &&
+                    command.target_system == 1 && command.target_component == 1 &&
+                    command.param1 == 0.0f && command.param2 == 0.0f,
+                    label + "only normal targeted DISARM, never ARM or forced DISARM");
+                ++count;
+            }
+            return count;
+        };
+        passed &= Check(checkPackets() == 1, label + "one DISARM packet emitted");
+        passed &= Check(session.ConsumeCommandResults().empty(),
+            label + "send alone is not success");
+
+        // Wrong endpoint and wrong MAV_CMD must not complete this request.
+        mavlink_msg_command_ack_pack(1, 1, &message, MAV_CMD_COMPONENT_ARM_DISARM,
+            MAV_RESULT_ACCEPTED, 100, 0, 255, MAV_COMP_ID_MISSIONPLANNER);
+        auto wrongEndpoint = identity;
+        wrongEndpoint.sourcePort = 30002;
+        passed &= Check(!session.ApplyDiscoveredCommandMessage(message, wrongEndpoint),
+            label + "other endpoint ACK rejected");
+        mavlink_msg_command_ack_pack(1, 1, &message, MAV_CMD_NAV_TAKEOFF,
+            MAV_RESULT_ACCEPTED, 100, 0, 255, MAV_COMP_ID_MISSIONPLANNER);
+        session.ApplyDiscoveredCommandMessage(message, identity);
+        session.Tick(now + std::chrono::milliseconds(1));
+        passed &= Check(session.ConsumeCommandResults().empty(),
+            label + "unrelated ACK does not succeed");
+
+        if (scenario.ackResult >= 0)
+        {
+            mavlink_msg_command_ack_pack(1, 1, &message, MAV_CMD_COMPONENT_ARM_DISARM,
+                static_cast<std::uint8_t>(scenario.ackResult), 100, 0,
+                255, MAV_COMP_ID_MISSIONPLANNER);
+            session.ApplyDiscoveredCommandMessage(message, identity);
+            session.Tick(now + std::chrono::milliseconds(2));
+        }
+        else
+        {
+            for (int tick = 1; tick <= 10; ++tick)
+                session.Tick(now + std::chrono::seconds(tick * 2));
+        }
+        const auto results = session.ConsumeCommandResults();
+        const auto expected = scenario.ackResult < 0 ? CommandOutcome::Timeout :
+            scenario.ackResult == MAV_RESULT_ACCEPTED ? CommandOutcome::Accepted :
+            CommandOutcome::Rejected;
+        passed &= Check(results.size() == 1 && results.front().outcome == expected &&
+            results.front().requestId == submission.dispatchRequestIds.front(),
+            label + "matching ACK or timeout determines result");
+        if (scenario.ackResult >= 0 && !results.empty())
+            passed &= Check(results.front().ackResult == scenario.ackResult,
+                label + "flight controller result preserved");
+        const int retries = checkPackets();
+        passed &= Check(scenario.ackResult < 0 ? retries > 0 : retries == 0,
+            label + "bounded normal retries only on missing ACK");
+        passed &= Check(session.GetFlightData().armed,
+            label + "ACK does not fabricate a disarmed heartbeat or stopped motors");
+    }
+
+    // Read-only and disabled real-command configurations never emit a packet.
+    for (const bool receiveOnly : { false, true })
+    {
+        CapturingDatagramSender endpoint;
+        DroneSessionConfig config;
+        config.droneId = "Drone000";
+        config.remoteIp = "127.0.0.1";
+        config.remotePort = 30001;
+        config.receiveOnly = receiveOnly;
+        config.realCommandEnabled = false;
+        config.sharedMavlinkEndpoint = &endpoint;
+        DroneSession session(config);
+        session.Start();
+        DroneCommandRequest request;
+        request.commandType = DroneCommandType::Disarm;
+        const auto submission = session.SubmitCommand(request);
+        passed &= Check(receiveOnly ? !submission.accepted :
+            (SafetyConfig::SAFE_TEST_MODE ? submission.simulated : !submission.accepted),
+            "disabled/receive-only gate retained");
+        session.Tick(std::chrono::steady_clock::now());
+        mavlink_message_t packet{};
+        passed &= Check(!endpoint.ConsumeMessage(packet), "disabled mode emits no packets");
+    }
+    if (passed) std::cout << "Session normal DISARM regression passed (memory-only sender)\n";
+    return passed ? 0 : 1;
+}
+
 int RunCommandTests()
 {
     const int dispatcherResult = RunCommandPacketTests();
     const int managerResult = RunCommandManagerSafeModeTests();
-    return dispatcherResult == 0 && managerResult == 0 ? 0 : 1;
+    const int disarmResult = RunSessionDisarmTests();
+    return dispatcherResult == 0 && managerResult == 0 && disarmResult == 0 ? 0 : 1;
 }

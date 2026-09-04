@@ -36,6 +36,7 @@
 #include "GCSBenchmarkExport.h"
 #include "GCSDroneRowView.h"
 #include "GCSRouteWorkflowCoordinator.h"
+#include "GCSTelemetryFilterController.h"
 #include "GCSUIWidgetPresenter.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/Actor.h"
@@ -552,6 +553,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	FleetPanelWidget = FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_FleetPanel"));
 	RightToolbarWidget =
 		FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_RightToolbar"));
+	BindTelemetryFilterToggle();
 	BindUploadDashboardControls();
 	RightPanelWidget =
 		FGCSUIWidgetPresenter::ResolveChildWidget(MainWidget, TEXT("CHILD_RightPanel"));
@@ -3418,6 +3420,7 @@ bool UGCSUIBridgeSubsystem::IsPointerOverBlockingGCSUI(
 		  RightToolbarWidget,
 		  RightPanelWidget,
 		  PlaybackWidget,
+		  TelemetryFilterWidget,
 		  MapPageWidget,
 		  SettingsPageWidget,
 		  LogsPageWidget })
@@ -5572,6 +5575,62 @@ void UGCSUIBridgeSubsystem::BindNavigationButtons()
 	}
 }
 
+void UGCSUIBridgeSubsystem::BindTelemetryFilterToggle()
+{
+	if (UButton* Previous = TelemetryFilterToggleButton.Get())
+		Previous->OnClicked.RemoveDynamic(this, &ThisClass::HandleTelemetryFilterToggleClicked);
+	TelemetryFilterToggleButton = FGCSUIWidgetPresenter::FindButton(RightToolbarWidget.Get(), TEXT("BTN_ShaiXuan"));
+	if (UButton* Button = TelemetryFilterToggleButton.Get())
+		Button->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleTelemetryFilterToggleClicked);
+	else
+		UE_LOG(LogTemp, Warning, TEXT("Telemetry filter toggle BTN_ShaiXuan is missing from the saved right toolbar."));
+}
+
+void UGCSUIBridgeSubsystem::HandleTelemetryFilterToggleClicked()
+{
+	UUserWidget* Filter = TelemetryFilterWidget.Get();
+	if (!Filter)
+	{
+		UUserWidget* Main = MainWidgetRef.Get();
+		if (!Main) return;
+		UClass* FilterClass = LoadClass<UUserWidget>(nullptr,
+			TEXT("/Game/UI/WBP_GCS_TelemetryFilter.WBP_GCS_TelemetryFilter_C"));
+		if (!FilterClass) return;
+		Filter = CreateWidget<UUserWidget>(Main, FilterClass);
+		if (!Filter) return;
+		TelemetryFilterController = NewObject<UGCSTelemetryFilterController>(this);
+		if (!TelemetryFilterController->Bind(Filter, this))
+		{
+			TelemetryFilterController = nullptr;
+			return;
+		}
+		TelemetryFilterWidget = Filter;
+		// Independent viewport layer above navigation pages (95), not a child
+		// of Logs. The bounded 300x820 panel leaves the toolbar/map outside it interactive.
+		Filter->SetVisibility(ESlateVisibility::Collapsed);
+		Filter->AddToViewport(96);
+		Filter->SetAlignmentInViewport(FVector2D(1, 0));
+		Filter->SetDesiredSizeInViewport(FVector2D(300, 820));
+		Filter->SetPositionInViewport(FVector2D(-400, 30), false);
+		// UE's size/position setters reset anchors; set the right anchor last.
+		Filter->SetAnchorsInViewport(FAnchors(1, 0));
+	}
+	const bool bShow = !Filter->IsVisible();
+	Filter->SetVisibility(bShow ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
+	if (bShow) RefreshTelemetryTableFromProduction();
+}
+
+void UGCSUIBridgeSubsystem::ResetTelemetryFilter()
+{
+	if (UButton* Button = TelemetryFilterToggleButton.Get())
+		Button->OnClicked.RemoveDynamic(this, &ThisClass::HandleTelemetryFilterToggleClicked);
+	TelemetryFilterToggleButton.Reset();
+	if (UUserWidget* Filter = TelemetryFilterWidget.Get()) Filter->RemoveFromParent();
+	TelemetryFilterWidget.Reset();
+	if (TelemetryFilterController) TelemetryFilterController->Shutdown();
+	TelemetryFilterController = nullptr;
+}
+
 void UGCSUIBridgeSubsystem::CreateNavigationPages()
 {
 	MapPageWidget = CreateNavigationPage(
@@ -5661,6 +5720,25 @@ void UGCSUIBridgeSubsystem::TickTelemetryTableUI(const float DeltaSeconds)
 
 void UGCSUIBridgeSubsystem::RefreshTelemetryTableFromProduction()
 {
+	// The filter always reads production data, including when the table is in
+	// authored mock-preview mode. Never feed designer sample rows into results.
+	if (TelemetryFilterController && GetGameInstance())
+	{
+		if (auto* Source = GetGameInstance()->GetSubsystem<UDSPGCSProductionTelemetryProviderSubsystem>())
+		{
+			TMap<FString, bool> Online;
+			const auto SourceRows = Source->GetMDHKTelemetryRows();
+			if (auto* Fleet = GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>())
+				for (const auto& Row : SourceRows)
+				{
+					FDroneData Drone;
+					if (Fleet->GetDroneByID(Row.DroneID, Drone)) Online.Add(Row.DroneID, Drone.bOnline);
+				}
+			const FDateTime Now = FDateTime::UtcNow();
+			TelemetryFilterController->UpdateTelemetry(SourceRows, Online, Source->IsTelemetryLinkConnected(),
+				Now.ToUnixTimestamp() * 1000 + Now.GetMillisecond(), Source->GetTelemetryTimeoutMs());
+		}
+	}
 	UUserWidget* LogsPage = LogsPageWidget.Get();
 	if (!LogsPage || !LogsPage->WidgetTree)
 	{
@@ -5795,6 +5873,7 @@ void UGCSUIBridgeSubsystem::RefreshTelemetryTableFromProduction()
 
 void UGCSUIBridgeSubsystem::ResetNavigationPages()
 {
+	ResetTelemetryFilter();
 	for (TWeakObjectPtr<UUserWidget>* Page :
 		{ &MapPageWidget, &SettingsPageWidget, &LogsPageWidget })
 	{

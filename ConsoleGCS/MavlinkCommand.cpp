@@ -179,7 +179,7 @@ bool MavlinkCommand::Disarm(
 
         0,      // param1 = 0 上锁
 
-        0,
+        0,      // param2 = 0: normal DISARM; never bypass flight-controller checks
         0,
         0,
         0,
