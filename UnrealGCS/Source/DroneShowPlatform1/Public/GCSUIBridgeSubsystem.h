@@ -26,6 +26,7 @@ class UEditableText;
 class USlider;
 class USpinBox;
 class UCheckBox;
+class UComboBoxString;
 class UTextBlock;
 class UUserWidget;
 class UWidget;
@@ -46,10 +47,7 @@ enum class EGCSDroneDisplayStatus : uint8
 enum class EGCSMainPage : uint8
 {
 	Fleet,
-	Control,
-	Map,
-	Settings,
-	Logs
+	Control
 };
 
 DECLARE_MULTICAST_DELEGATE(FGCSCommandSelectionChanged);
@@ -129,6 +127,7 @@ public:
 
 private:
 	friend class FGCSMarqueeInputProcessor;
+	friend class FGCSIndependentToolbarTogglesTest;
 	friend class FGCSScheduledShowPreviewTest;
 	friend class FGCSTelemetryFilterToggleTest;
 
@@ -246,6 +245,33 @@ private:
 	void HandleHoverClicked();
 
 	UFUNCTION()
+	void HandleHoverPanelToggleClicked();
+
+	UFUNCTION()
+	void HandleHoverGenerateLayersClicked();
+
+	UFUNCTION()
+	void HandleHoverLayerSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType);
+
+	UFUNCTION()
+	void HandleHoverAltitudeCommitted(const FText& Text, ETextCommit::Type CommitMethod);
+
+	UFUNCTION()
+	void HandleHoverUnlockClicked();
+
+	UFUNCTION()
+	void HandleHoverTakeoffClicked();
+
+	UFUNCTION()
+	void HandleHoverLandClicked();
+
+	UFUNCTION()
+	void HandleHoverLockClicked();
+
+	UFUNCTION()
+	void HandleHoverManualClicked();
+
+	UFUNCTION()
 	void HandleStopClicked();
 
 	UFUNCTION()
@@ -346,6 +372,7 @@ private:
 	USpinBox* FindRightPanelSpinBox(const FName Name) const;
 	UCheckBox* FindRightPanelCheckBox(const FName Name) const;
 	UTextBlock* FindRightPanelText(const FName Name) const;
+	UWidget* FindRightPanelWidget(const FName Name) const;
 	UTextBlock* FindText(const FName Name) const;
 	UTextBlock* FindFleetText(const FName Name) const;
 	UTextBlock* FindTopBarText(const FName Name) const;
@@ -388,6 +415,19 @@ private:
 	TArray<FString> GetCommandTargetDroneIDs() const;
 	void SyncCommandSelectionToVisualization() const;
 	void RefreshHoverMVPControls();
+	void BindHoverTestControls();
+	void UnbindHoverTestControls();
+	void RefreshHoverTestControls();
+	void ResetHoverLayerPlan(const FString& Status = {});
+	void HandleHoverCommandSelectionChanged();
+	bool BuildHoverPositions(
+		const TArray<FString>& DroneIDs,
+		TArray<struct FHoverLayerPosition>& OutPositions,
+		FString& OutError,
+		FString* OutPositionSource = nullptr) const;
+	bool TryReadHoverAltitude(FString& OutError);
+	bool PrepareHoverLayerAction(FString& OutError, bool bRequireCurrentSpacing);
+	void ApplyHoverLayerSelection(int32 ComboOptionIndex);
 	void SetFleetButtonLabel(FName ButtonName, const FString& Value) const;
 	void SetLegacyHoverSelectionVisible(bool bVisible) const;
 	void RegisterMarqueeInputProcessor();
@@ -448,12 +488,13 @@ private:
 	void CreateNavigationPages();
 	void ConfigureGroundStationInputPolicy(UUserWidget* MainWidget) const;
 	void ConfigureTelemetryTableInput() const;
+	void UpdateTelemetryHorizontalScrollInput(APlayerController* PlayerController);
+	void ResetTelemetryHorizontalDrag();
 	void TickTelemetryTableUI(float DeltaSeconds);
 	void RefreshTelemetryTableFromProduction();
 	void ResetNavigationPages();
 	void ShowMainPage(EGCSMainPage Page);
 	void ApplyNavigationVisibility();
-	void ApplyNavigationPageVisibility();
 	UUserWidget* CreateNavigationPage(const TCHAR* ClassPath) const;
 	void BindUploadDashboardControls();
 	void UnbindUploadDashboardControls();
@@ -519,7 +560,6 @@ private:
 	TWeakObjectPtr<UTextBlock> RouteFrameText;
 	TWeakObjectPtr<UWidget> SelectionRectangleWidget;
 	TWeakObjectPtr<UUserWidget> MapPageWidget;
-	TWeakObjectPtr<UUserWidget> SettingsPageWidget;
 	TWeakObjectPtr<UUserWidget> LogsPageWidget;
 	EGCSMainPage ActivePage = EGCSMainPage::Fleet;
 	bool bPanelsExpanded = true;
@@ -539,6 +579,9 @@ private:
 	bool bTopDownLocateLocked = false;
 	bool bTopDownMiddleMouseWasDown = false;
 	bool bTopDownPanning = false;
+	bool bTelemetryRightMouseWasDown = false;
+	bool bTelemetryHorizontalDragging = false;
+	FVector2D TelemetryHorizontalDragLastLocalPosition = FVector2D::ZeroVector;
 	bool bUpdatingRouteTimelineFromState = false;
 	bool bUpdatingMapCheckBoxFromScene = false;
 	float RouteUIRefreshAccumulator = 0.0f;
@@ -597,6 +640,19 @@ private:
 	TObjectPtr<UGCSTelemetryFilterController> TelemetryFilterController;
 	TWeakObjectPtr<UUserWidget> TelemetryFilterWidget;
 	TWeakObjectPtr<UButton> TelemetryFilterToggleButton;
+	TWeakObjectPtr<UWidget> HoverTestContentWidget;
+	TWeakObjectPtr<UEditableTextBox> HoverAltitudeInput;
+	TWeakObjectPtr<UComboBoxString> HoverLayerCombo;
+	TWeakObjectPtr<UButton> HoverGenerateLayersButton;
+	TArray<TArray<FString>> HoverLayers;
+	TArray<FString> HoverLayerBaseDroneIDs;
+	TArray<FString> HoverLayerOptions;
+	FString HoverLayerFleetSessionID;
+	FString HoverLayerPositionSource;
+	FString HoverTestStatus;
+	int32 ActiveHoverLayerOptionIndex = INDEX_NONE;
+	bool bUpdatingHoverLayerCombo = false;
+	bool bApplyingHoverLayerSelection = false;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	TFunction<UUserWidget*()> UploadDashboardFactoryForTest;
@@ -614,4 +670,5 @@ private:
 	static constexpr float UploadDashboardRefreshIntervalSeconds = 0.2f;
 	static constexpr float TelemetryTableRefreshIntervalSeconds = 1.0f;
 	float HoverAltitudeMeters = 5.0f;
+	static constexpr double HoverLayerMinimumSpacingMeters = 0.6;
 };

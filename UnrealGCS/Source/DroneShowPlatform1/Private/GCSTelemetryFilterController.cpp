@@ -7,11 +7,16 @@
 #include "Components/EditableTextBox.h"
 #include "Components/ListView.h"
 #include "Components/TextBlock.h"
+#include "Kismet/GameplayStatics.h"
 #include "GCSUIBridgeSubsystem.h"
 
 using namespace GCSTelemetryFilter;
 namespace
 {
+constexpr int32 MaxPresetCount = 64;
+constexpr int32 MaxPresetNameLength = 32;
+const FString TemporaryPresetName = TEXT("临时筛选");
+
 FRule BlankCondition()
 {
 	FRule Rule;
@@ -64,12 +69,23 @@ bool UGCSTelemetryFilterController::Bind(UUserWidget* InWidget, UGCSUIBridgeSubs
 	ErrorText = FindFilterWidget<UTextBlock>(Widget, TEXT("TXT_FilterError"));
 	CountText = FindFilterWidget<UTextBlock>(Widget, TEXT("TXT_ResultCount"));
 	SelectAll = FindFilterWidget<UCheckBox>(Widget, TEXT("CHK_SelectAllResults"));
+	PresetCombo = FindFilterWidget<UComboBoxString>(Widget, TEXT("CMB_FilterPreset"));
+	PresetName = FindFilterWidget<UEditableTextBox>(Widget, TEXT("EDT_PresetName"));
+	PresetErrorText = FindFilterWidget<UTextBlock>(Widget, TEXT("TXT_PresetError"));
+	PresetNameEditor = FindFilterWidget<UWidget>(Widget, TEXT("HBOX_PresetNameEditor"));
+	NewPresetButton = FindFilterWidget<UButton>(Widget, TEXT("BTN_NewPreset"));
+	SavePresetButton = FindFilterWidget<UButton>(Widget, TEXT("BTN_SavePreset"));
+	DeletePresetButton = FindFilterWidget<UButton>(Widget, TEXT("BTN_DeletePreset"));
+	ConfirmPresetButton = FindFilterWidget<UButton>(Widget, TEXT("BTN_ConfirmPreset"));
+	CancelPresetButton = FindFilterWidget<UButton>(Widget, TEXT("BTN_CancelPreset"));
 	UButton* Add = FindFilterWidget<UButton>(Widget, TEXT("BTN_AddCondition"));
 	UButton* Remove = FindFilterWidget<UButton>(Widget, TEXT("BTN_RemoveCondition"));
 	UButton* Apply = FindFilterWidget<UButton>(Widget, TEXT("BTN_ApplyCondition"));
 	UButton* Clear = FindFilterWidget<UButton>(Widget, TEXT("BTN_ClearConditions"));
 	if (!Conditions || !Results || !MatchMode || !Field || !Operator || !Value || !ErrorText || !CountText
-		|| !Add || !Remove || !Apply || !Clear || !SelectAll)
+		|| !Add || !Remove || !Apply || !Clear || !SelectAll || !PresetCombo || !PresetName
+		|| !PresetErrorText || !PresetNameEditor || !NewPresetButton || !SavePresetButton
+		|| !DeletePresetButton || !ConfirmPresetButton || !CancelPresetButton)
 	{
 		UE_LOG(LogTemp, Error, TEXT("TelemetryFilter: widget names/types do not match the filter contract."));
 		Shutdown();
@@ -94,6 +110,13 @@ bool UGCSTelemetryFilterController::Bind(UUserWidget* InWidget, UGCSUIBridgeSubs
 	Clear->OnClicked.AddDynamic(this, &ThisClass::ClearConditions);
 	MatchMode->OnSelectionChanged.AddDynamic(this, &ThisClass::MatchModeChanged);
 	Field->OnSelectionChanged.AddDynamic(this, &ThisClass::FieldChanged);
+	PresetCombo->OnSelectionChanged.AddDynamic(this, &ThisClass::PresetChanged);
+	NewPresetButton->OnClicked.AddDynamic(this, &ThisClass::NewPreset);
+	SavePresetButton->OnClicked.AddDynamic(this, &ThisClass::SavePreset);
+	DeletePresetButton->OnClicked.AddDynamic(this, &ThisClass::DeletePreset);
+	ConfirmPresetButton->OnClicked.AddDynamic(this, &ThisClass::ConfirmPreset);
+	CancelPresetButton->OnClicked.AddDynamic(this, &ThisClass::CancelPreset);
+	PresetName->OnTextCommitted.AddDynamic(this, &ThisClass::PresetNameCommitted);
 	bUpdating = true;
 	MatchMode->ClearOptions();
 	MatchMode->AddOption(TEXT("当前条件"));
@@ -105,6 +128,12 @@ bool UGCSTelemetryFilterController::Bind(UUserWidget* InWidget, UGCSUIBridgeSubs
 	for (const GCSTelemetryFilter::FField& F : Fields()) Field->AddOption(F.Label);
 	Field->SetSelectedIndex(0);
 	bUpdating = false;
+	LoadPresets();
+	ActivePresetName.Empty();
+	RebuildPresetOptions(TemporaryPresetName);
+	SetPresetEditorVisible(false);
+	SetPresetError(TEXT(""));
+	UpdatePresetButtons();
 	FieldChanged(Field->GetSelectedOption(), ESelectInfo::Direct);
 	SetError(TEXT(""));
 	RefreshResults();
@@ -143,6 +172,13 @@ void UGCSTelemetryFilterController::Shutdown()
 	}
 	if (MatchMode) MatchMode->OnSelectionChanged.RemoveDynamic(this, &ThisClass::MatchModeChanged);
 	if (Field) Field->OnSelectionChanged.RemoveDynamic(this, &ThisClass::FieldChanged);
+	if (PresetCombo) PresetCombo->OnSelectionChanged.RemoveDynamic(this, &ThisClass::PresetChanged);
+	if (PresetName) PresetName->OnTextCommitted.RemoveDynamic(this, &ThisClass::PresetNameCommitted);
+	if (NewPresetButton) NewPresetButton->OnClicked.RemoveDynamic(this, &ThisClass::NewPreset);
+	if (SavePresetButton) SavePresetButton->OnClicked.RemoveDynamic(this, &ThisClass::SavePreset);
+	if (DeletePresetButton) DeletePresetButton->OnClicked.RemoveDynamic(this, &ThisClass::DeletePreset);
+	if (ConfirmPresetButton) ConfirmPresetButton->OnClicked.RemoveDynamic(this, &ThisClass::ConfirmPreset);
+	if (CancelPresetButton) CancelPresetButton->OnClicked.RemoveDynamic(this, &ThisClass::CancelPreset);
 	if (UButton* B = FindFilterWidget<UButton>(Widget, TEXT("BTN_AddCondition"))) B->OnClicked.RemoveDynamic(this, &ThisClass::AddCondition);
 	if (UButton* B = FindFilterWidget<UButton>(Widget, TEXT("BTN_RemoveCondition"))) B->OnClicked.RemoveDynamic(this, &ThisClass::RemoveCondition);
 	if (UButton* B = FindFilterWidget<UButton>(Widget, TEXT("BTN_ApplyCondition"))) B->OnClicked.RemoveDynamic(this, &ThisClass::ApplyCondition);
@@ -150,9 +186,12 @@ void UGCSTelemetryFilterController::Shutdown()
 	Rules.Reset(); ResultItems.Reset(); Rows.Reset(); Online.Reset(); FreshIDs.Reset();
 	Widget = nullptr; Conditions = nullptr; Results = nullptr; MatchMode = nullptr;
 	Field = nullptr; Operator = nullptr; Value = nullptr; ErrorText = nullptr; CountText = nullptr;
-	SelectAll = nullptr;
+	SelectAll = nullptr; PresetCombo = nullptr; PresetName = nullptr; PresetErrorText = nullptr;
+	NewPresetButton = nullptr; SavePresetButton = nullptr; DeletePresetButton = nullptr;
+	ConfirmPresetButton = nullptr; CancelPresetButton = nullptr; PresetNameEditor = nullptr;
+	Presets.Reset(); ActivePresetName.Empty();
 	bPaintingSelection = false;
-	bUpdating = false; bLinkConnected = false;
+	bUpdating = false; bApplyingPreset = false; bPresetDirty = false; bLinkConnected = false;
 }
 
 FName UGCSTelemetryFilterController::EditorField() const
@@ -175,6 +214,269 @@ void UGCSTelemetryFilterController::SetError(const FString& Error)
 	ErrorText->SetText(FText::FromString(Error));
 	ErrorText->SetVisibility(Error.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
 }
+
+void UGCSTelemetryFilterController::SetPresetError(const FString& Error)
+{
+	if (!PresetErrorText) return;
+	PresetErrorText->SetText(FText::FromString(Error));
+	PresetErrorText->SetVisibility(Error.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+}
+
+void UGCSTelemetryFilterController::SetPresetEditorVisible(bool bVisible)
+{
+	if (PresetNameEditor)
+		PresetNameEditor->SetVisibility(bVisible ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+}
+
+int32 UGCSTelemetryFilterController::FindPreset(const FString& Name) const
+{
+	return Presets.IndexOfByPredicate([&Name](const FGCSTelemetryFilterPresetRecord& Preset)
+	{
+		return Preset.Name.Equals(Name, ESearchCase::IgnoreCase);
+	});
+}
+
+void UGCSTelemetryFilterController::LoadPresets()
+{
+	Presets.Reset();
+	if (!UGameplayStatics::DoesSaveGameExist(PresetSlotName, 0)) return;
+	const auto* Save = Cast<UGCSTelemetryFilterPresetSaveGame>(UGameplayStatics::LoadGameFromSlot(PresetSlotName, 0));
+	if (!Save)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("TelemetryFilter: preset save could not be loaded."));
+		return;
+	}
+	for (const FGCSTelemetryFilterPresetRecord& Stored : Save->Presets)
+	{
+		if (Presets.Num() >= MaxPresetCount) break;
+		FGCSTelemetryFilterPresetRecord Preset;
+		Preset.Name = Stored.Name.TrimStartAndEnd();
+		if (Preset.Name.IsEmpty() || Preset.Name.Len() > MaxPresetNameLength
+			|| Preset.Name.Equals(TemporaryPresetName, ESearchCase::IgnoreCase)
+			|| FindPreset(Preset.Name) != INDEX_NONE)
+			continue;
+		Preset.MatchModeIndex = FMath::Clamp(Stored.MatchModeIndex, 0, 2);
+		for (const FGCSTelemetryFilterPresetRule& StoredRule : Stored.Rules)
+		{
+			if (Preset.Rules.Num() >= 128) break;
+			FRule Rule;
+			Rule.Field = StoredRule.Field;
+			Rule.Operator = StoredRule.Operator;
+			Rule.Input = StoredRule.Input;
+			Rule.bEnabled = StoredRule.bEnabled;
+			FString Error;
+			if (!IsBlankCondition(Rule) && !Validate(Rule, Error)) Rule = BlankCondition();
+			FGCSTelemetryFilterPresetRule SavedRule;
+			SavedRule.Field = Rule.Field;
+			SavedRule.Operator = Rule.Operator;
+			SavedRule.Input = Rule.Input;
+			SavedRule.bEnabled = Rule.bEnabled;
+			Preset.Rules.Add(MoveTemp(SavedRule));
+		}
+		Preset.SelectedConditionIndex = Stored.SelectedConditionIndex >= 0
+			&& Stored.SelectedConditionIndex < Preset.Rules.Num() ? Stored.SelectedConditionIndex : INDEX_NONE;
+		Presets.Add(MoveTemp(Preset));
+	}
+}
+
+bool UGCSTelemetryFilterController::PersistPresets()
+{
+	auto* Save = Cast<UGCSTelemetryFilterPresetSaveGame>(
+		UGameplayStatics::CreateSaveGameObject(UGCSTelemetryFilterPresetSaveGame::StaticClass()));
+	if (!Save) return false;
+	Save->Presets = Presets;
+	return UGameplayStatics::SaveGameToSlot(Save, PresetSlotName, 0);
+}
+
+void UGCSTelemetryFilterController::RebuildPresetOptions(const FString& Selection)
+{
+	if (!PresetCombo) return;
+	TGuardValue<bool> Updating(bUpdating, true);
+	PresetCombo->ClearOptions();
+	PresetCombo->AddOption(TemporaryPresetName);
+	for (const FGCSTelemetryFilterPresetRecord& Preset : Presets) PresetCombo->AddOption(Preset.Name);
+	PresetCombo->SetSelectedOption(FindPreset(Selection) != INDEX_NONE ? Selection : TemporaryPresetName);
+}
+
+void UGCSTelemetryFilterController::UpdatePresetButtons()
+{
+	const bool bHasActivePreset = FindPreset(ActivePresetName) != INDEX_NONE;
+	if (SavePresetButton)
+	{
+		SavePresetButton->SetIsEnabled(bHasActivePreset);
+		SavePresetButton->SetToolTipText(FText::FromString(bHasActivePreset
+			? FString::Printf(TEXT("保存当前筛选配置到“%s”%s"), *ActivePresetName, bPresetDirty ? TEXT("（有未保存修改）") : TEXT(""))
+			: TEXT("请先选择或新建一个预设")));
+	}
+	if (DeletePresetButton)
+	{
+		DeletePresetButton->SetIsEnabled(bHasActivePreset);
+		DeletePresetButton->SetToolTipText(FText::FromString(bHasActivePreset
+			? FString::Printf(TEXT("删除本地预设“%s”"), *ActivePresetName)
+			: TEXT("临时筛选不能删除")));
+	}
+	if (NewPresetButton) NewPresetButton->SetToolTipText(FText::FromString(TEXT("将当前筛选配置保存为新预设")));
+}
+
+FGCSTelemetryFilterPresetRecord UGCSTelemetryFilterController::CapturePreset(const FString& Name) const
+{
+	FGCSTelemetryFilterPresetRecord Preset;
+	Preset.Name = Name;
+	Preset.MatchModeIndex = MatchMode ? FMath::Clamp(MatchMode->GetSelectedIndex(), 0, 2) : 0;
+	const auto* Selected = Conditions ? Cast<UGCSTelemetryFilterItem>(Conditions->GetSelectedItem()) : nullptr;
+	for (int32 Index = 0; Index < Rules.Num(); ++Index)
+	{
+		const UGCSTelemetryFilterItem* Item = Rules[Index];
+		if (!Item) continue;
+		if (Item == Selected) Preset.SelectedConditionIndex = Preset.Rules.Num();
+		FGCSTelemetryFilterPresetRule Rule;
+		Rule.Field = Item->Rule.Field;
+		Rule.Operator = Item->Rule.Operator;
+		Rule.Input = Item->Rule.Input;
+		Rule.bEnabled = Item->Rule.bEnabled;
+		Preset.Rules.Add(MoveTemp(Rule));
+	}
+	return Preset;
+}
+
+void UGCSTelemetryFilterController::ApplyPreset(const FGCSTelemetryFilterPresetRecord& Preset)
+{
+	UGCSTelemetryFilterItem* Selected = nullptr;
+	{
+		TGuardValue<bool> Updating(bUpdating, true);
+		Conditions->ClearSelection();
+		Conditions->ClearListItems();
+		Rules.Reset();
+		MatchMode->SetSelectedIndex(FMath::Clamp(Preset.MatchModeIndex, 0, 2));
+		for (int32 Index = 0; Index < Preset.Rules.Num() && Index < 128; ++Index)
+		{
+			const FGCSTelemetryFilterPresetRule& SavedRule = Preset.Rules[Index];
+			auto* Item = NewObject<UGCSTelemetryFilterItem>(this);
+			Item->Rule.Field = SavedRule.Field;
+			Item->Rule.Operator = SavedRule.Operator;
+			Item->Rule.Input = SavedRule.Input;
+			Item->Rule.bEnabled = SavedRule.bEnabled;
+			Item->Controller = this;
+			Rules.Add(Item);
+			Conditions->AddItem(Item);
+			if (Index == Preset.SelectedConditionIndex) Selected = Item;
+		}
+		if (Selected) Conditions->SetSelectedItem(Selected);
+	}
+	TGuardValue<bool> Applying(bApplyingPreset, true);
+	SelectionChanged(Selected);
+	RefreshConditions();
+}
+
+void UGCSTelemetryFilterController::MarkPresetDirty()
+{
+	if (bUpdating || bApplyingPreset || FindPreset(ActivePresetName) == INDEX_NONE) return;
+	bPresetDirty = true;
+	UpdatePresetButtons();
+}
+
+void UGCSTelemetryFilterController::PresetChanged(FString SelectedPreset, ESelectInfo::Type)
+{
+	if (bUpdating) return;
+	SetPresetError(TEXT(""));
+	const int32 Index = FindPreset(SelectedPreset);
+	if (Index == INDEX_NONE)
+	{
+		ActivePresetName.Empty();
+		bPresetDirty = false;
+		UpdatePresetButtons();
+		return;
+	}
+	ActivePresetName = Presets[Index].Name;
+	bPresetDirty = false;
+	ApplyPreset(Presets[Index]);
+	UpdatePresetButtons();
+}
+
+void UGCSTelemetryFilterController::NewPreset()
+{
+	SetPresetError(TEXT(""));
+	PresetName->SetText(FText::GetEmpty());
+	SetPresetEditorVisible(true);
+	PresetName->SetKeyboardFocus();
+}
+
+void UGCSTelemetryFilterController::ConfirmPreset()
+{
+	FString Name = PresetName->GetText().ToString().TrimStartAndEnd();
+	if (Name.IsEmpty()) { SetPresetError(TEXT("请输入预设名称")); return; }
+	if (Name.Len() > MaxPresetNameLength) { SetPresetError(TEXT("预设名称最多 32 个字符")); return; }
+	if (Name.Equals(TemporaryPresetName, ESearchCase::IgnoreCase))
+	{
+		SetPresetError(TEXT("“临时筛选”是保留名称"));
+		return;
+	}
+	if (FindPreset(Name) != INDEX_NONE) { SetPresetError(TEXT("该预设名称已经存在")); return; }
+	if (Presets.Num() >= MaxPresetCount) { SetPresetError(TEXT("最多保存 64 个筛选预设")); return; }
+	Presets.Add(CapturePreset(Name));
+	if (!PersistPresets())
+	{
+		Presets.Pop();
+		SetPresetError(TEXT("预设保存失败，请检查本地存储权限"));
+		return;
+	}
+	ActivePresetName = Name;
+	bPresetDirty = false;
+	RebuildPresetOptions(Name);
+	PresetName->SetText(FText::GetEmpty());
+	SetPresetEditorVisible(false);
+	SetPresetError(TEXT(""));
+	UpdatePresetButtons();
+}
+
+void UGCSTelemetryFilterController::CancelPreset()
+{
+	PresetName->SetText(FText::GetEmpty());
+	SetPresetEditorVisible(false);
+	SetPresetError(TEXT(""));
+}
+
+void UGCSTelemetryFilterController::PresetNameCommitted(const FText&, ETextCommit::Type CommitMethod)
+{
+	if (CommitMethod == ETextCommit::OnEnter) ConfirmPreset();
+}
+
+void UGCSTelemetryFilterController::SavePreset()
+{
+	const int32 Index = FindPreset(ActivePresetName);
+	if (Index == INDEX_NONE) { SetPresetError(TEXT("请先选择或新建一个预设")); return; }
+	const FGCSTelemetryFilterPresetRecord Previous = Presets[Index];
+	Presets[Index] = CapturePreset(Previous.Name);
+	if (!PersistPresets())
+	{
+		Presets[Index] = Previous;
+		SetPresetError(TEXT("预设保存失败，请检查本地存储权限"));
+		return;
+	}
+	bPresetDirty = false;
+	SetPresetError(TEXT(""));
+	UpdatePresetButtons();
+}
+
+void UGCSTelemetryFilterController::DeletePreset()
+{
+	const int32 Index = FindPreset(ActivePresetName);
+	if (Index == INDEX_NONE) return;
+	const FGCSTelemetryFilterPresetRecord Removed = Presets[Index];
+	Presets.RemoveAt(Index);
+	if (!PersistPresets())
+	{
+		Presets.Insert(Removed, Index);
+		SetPresetError(TEXT("预设删除失败，请检查本地存储权限"));
+		return;
+	}
+	ActivePresetName.Empty();
+	bPresetDirty = false;
+	RebuildPresetOptions(TemporaryPresetName);
+	SetPresetEditorVisible(false);
+	SetPresetError(TEXT(""));
+	UpdatePresetButtons();
+}
 void UGCSTelemetryFilterController::AddCondition()
 {
 	// New always creates a separate blank row, never a copy of the editor.
@@ -190,6 +492,7 @@ void UGCSTelemetryFilterController::AppendCondition(const FRule& Rule)
 	Conditions->AddItem(Item);
 	Conditions->SetSelectedItem(Item);
 	SetError(TEXT(""));
+	MarkPresetDirty();
 	RefreshResults();
 }
 void UGCSTelemetryFilterController::RemoveCondition()
@@ -204,6 +507,7 @@ void UGCSTelemetryFilterController::RemoveCondition()
 	}
 	SelectionChanged(nullptr);
 	SetError(TEXT(""));
+	MarkPresetDirty();
 	RefreshResults();
 }
 void UGCSTelemetryFilterController::ApplyCondition()
@@ -218,6 +522,7 @@ void UGCSTelemetryFilterController::ApplyCondition()
 	Rule.bEnabled = Item->Rule.bEnabled;
 	Item->Rule = Rule;
 	SetError(TEXT(""));
+	MarkPresetDirty();
 	RefreshConditions();
 	RefreshResults();
 }
@@ -233,11 +538,16 @@ void UGCSTelemetryFilterController::ClearConditions()
 	}
 	SelectionChanged(nullptr);
 	SetError(TEXT(""));
+	MarkPresetDirty();
 	RefreshResults();
 }
 void UGCSTelemetryFilterController::MatchModeChanged(FString, ESelectInfo::Type)
 {
-	if (!bUpdating) RefreshResults();
+	if (!bUpdating)
+	{
+		MarkPresetDirty();
+		RefreshResults();
+	}
 }
 void UGCSTelemetryFilterController::FieldChanged(FString, ESelectInfo::Type)
 {
@@ -280,6 +590,7 @@ void UGCSTelemetryFilterController::SelectionChanged(UObject* Object)
 		Value->SetText(FText::FromString(Item->Rule.Input));
 	}
 	SetError(TEXT(""));
+	MarkPresetDirty();
 	RefreshResults();
 }
 void UGCSTelemetryFilterController::ConditionGenerated(UUserWidget& Entry)
@@ -427,7 +738,11 @@ void UGCSTelemetryFilterController::RefreshConditions()
 {
 	for (UUserWidget* Entry : Conditions->GetDisplayedEntryWidgets()) if (Entry) PaintCondition(*Entry);
 }
-void UGCSTelemetryFilterController::RuleEnabledChanged() { RefreshResults(); }
+void UGCSTelemetryFilterController::RuleEnabledChanged()
+{
+	MarkPresetDirty();
+	RefreshResults();
+}
 
 void UGCSTelemetryFilterController::UpdateTelemetry(const TArray<FMDHKTelemetryTableRow>& InRows,
 	const TMap<FString, bool>& InOnline, bool bConnected, int64 NowUtcMs, int32 TimeoutMs)

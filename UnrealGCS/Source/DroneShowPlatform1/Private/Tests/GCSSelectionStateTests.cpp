@@ -233,7 +233,7 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 		AddExpectedError(
 			TEXT("Unable to load GCS navigation page"),
 			EAutomationExpectedErrorFlags::Contains,
-			3);
+			2);
 		Bridge->BindMainWidget(MainWidget);
 		if (FleetSelectAllButton && FleetSelectAllText)
 		{

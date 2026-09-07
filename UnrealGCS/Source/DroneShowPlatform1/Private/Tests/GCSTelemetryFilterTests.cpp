@@ -13,6 +13,7 @@
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
+#include "Kismet/GameplayStatics.h"
 #include "Widgets/SOverlay.h"
 #include "FleetManagerSubsystem.h"
 #include "GCSUIBridgeSubsystem.h"
@@ -230,6 +231,99 @@ bool FGCSTelemetryFilterWidgetTest::RunTest(const FString&)
 	C->Shutdown(); SlateWidget.Reset(); Widget->ReleaseSlateResources(true); GI->Shutdown();
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSTelemetryFilterPresetTest,
+	"DroneGCS.UI.TelemetryFilter.PresetsPersistLocally", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGCSTelemetryFilterPresetTest::RunTest(const FString&)
+{
+	using namespace GCSTelemetryFilter;
+	const FString Slot = FString::Printf(TEXT("TelemetryFilterPresetAutomation_%s"),
+		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
+	UGameplayStatics::DeleteGameInSlot(Slot, 0);
+	UClass* Class = LoadClass<UUserWidget>(nullptr, TEXT("/Game/UI/WBP_GCS_TelemetryFilter.WBP_GCS_TelemetryFilter_C"));
+	UGameInstance* GI = NewObject<UGameInstance>(GEngine);
+	GI->InitializeStandalone(TEXT("TelemetryFilterPresetWorld"));
+	UUserWidget* Widget = Class ? CreateWidget<UUserWidget>(GI, Class) : nullptr;
+	auto* C = NewObject<UGCSTelemetryFilterController>(GI);
+	C->PresetSlotName = Slot;
+	if (!Widget || !TestTrue(TEXT("Preset controls bind"), C->Bind(Widget)))
+	{
+		UGameplayStatics::DeleteGameInSlot(Slot, 0);
+		GI->Shutdown();
+		return false;
+	}
+	TSharedPtr<SWidget> SlateWidget = Widget->TakeWidget();
+	TestEqual(TEXT("Only temporary option initially"), C->PresetCombo->GetOptionCount(), 1);
+	TestEqual(TEXT("Temporary option selected"), C->PresetCombo->GetSelectedOption(), FString(TEXT("临时筛选")));
+	TestFalse(TEXT("Save disabled for temporary option"), C->SavePresetButton->GetIsEnabled());
+	TestFalse(TEXT("Delete disabled for temporary option"), C->DeletePresetButton->GetIsEnabled());
+	TestEqual(TEXT("Name editor starts collapsed"), C->PresetNameEditor->GetVisibility(), ESlateVisibility::Collapsed);
+
+	C->Field->SetSelectedOption(FindField(TEXT("UavID"))->Label);
+	C->Operator->SetSelectedOption(TEXT(">="));
+	C->Value->SetText(FText::FromString(TEXT("0")));
+	C->ApplyCondition();
+	UGCSTelemetryFilterItem* First = C->Rules[0];
+	First->OnEnabledChanged(false);
+	C->AddCondition();
+	C->MatchMode->SetSelectedIndex(2);
+
+	C->NewPresetButton->OnClicked.Broadcast();
+	TestEqual(TEXT("New reveals name editor"), C->PresetNameEditor->GetVisibility(), ESlateVisibility::Visible);
+	C->PresetName->SetText(FText::FromString(TEXT("低电量待检")));
+	C->ConfirmPresetButton->OnClicked.Broadcast();
+	TestTrue(TEXT("Preset save file created"), UGameplayStatics::DoesSaveGameExist(Slot, 0));
+	TestEqual(TEXT("Saved preset added to combo"), C->PresetCombo->GetOptionCount(), 2);
+	TestEqual(TEXT("Created preset selected"), C->PresetCombo->GetSelectedOption(), FString(TEXT("低电量待检")));
+	TestTrue(TEXT("Save enabled for stored preset"), C->SavePresetButton->GetIsEnabled());
+	TestTrue(TEXT("Delete enabled for stored preset"), C->DeletePresetButton->GetIsEnabled());
+	TestEqual(TEXT("Successful create collapses editor"), C->PresetNameEditor->GetVisibility(), ESlateVisibility::Collapsed);
+
+	C->NewPresetButton->OnClicked.Broadcast();
+	C->PresetName->SetText(FText::FromString(TEXT("低电量待检")));
+	C->ConfirmPresetButton->OnClicked.Broadcast();
+	TestEqual(TEXT("Duplicate name does not add preset"), C->Presets.Num(), 1);
+	TestEqual(TEXT("Duplicate error is visible"), C->PresetErrorText->GetVisibility(), ESlateVisibility::HitTestInvisible);
+	C->CancelPresetButton->OnClicked.Broadcast();
+	TestEqual(TEXT("Cancel clears preset error"), C->PresetErrorText->GetVisibility(), ESlateVisibility::Collapsed);
+
+	C->Conditions->SetSelectedItem(First);
+	C->MatchMode->SetSelectedIndex(1);
+	C->SavePresetButton->OnClicked.Broadcast();
+	TestFalse(TEXT("Save clears dirty state"), C->bPresetDirty);
+	C->Shutdown();
+	SlateWidget.Reset();
+	Widget->ReleaseSlateResources(true);
+
+	UUserWidget* ReloadedWidget = Class ? CreateWidget<UUserWidget>(GI, Class) : nullptr;
+	auto* Reloaded = NewObject<UGCSTelemetryFilterController>(GI);
+	Reloaded->PresetSlotName = Slot;
+	if (!ReloadedWidget || !TestTrue(TEXT("Reloaded preset controls bind"), Reloaded->Bind(ReloadedWidget)))
+	{
+		UGameplayStatics::DeleteGameInSlot(Slot, 0);
+		GI->Shutdown();
+		return false;
+	}
+	TSharedPtr<SWidget> ReloadedSlate = ReloadedWidget->TakeWidget();
+	TestEqual(TEXT("Stored preset available after controller restart"), Reloaded->PresetCombo->GetOptionCount(), 2);
+	Reloaded->PresetCombo->SetSelectedOption(TEXT("低电量待检"));
+	TestEqual(TEXT("Preset restores condition count"), Reloaded->Rules.Num(), 2);
+	TestEqual(TEXT("Preset restores match mode"), Reloaded->MatchMode->GetSelectedIndex(), 1);
+	TestFalse(TEXT("Preset restores enabled state"), Reloaded->Rules[0]->Rule.bEnabled);
+	TestTrue(TEXT("Preset restores blank row"), Reloaded->Rules[1]->Rule.Field.IsNone());
+	TestTrue(TEXT("Preset restores selected current row"), Reloaded->Conditions->GetSelectedItem() == Reloaded->Rules[0]);
+	Reloaded->DeletePresetButton->OnClicked.Broadcast();
+	TestEqual(TEXT("Delete returns combo to temporary only"), Reloaded->PresetCombo->GetOptionCount(), 1);
+	const auto* EmptySave = Cast<UGCSTelemetryFilterPresetSaveGame>(UGameplayStatics::LoadGameFromSlot(Slot, 0));
+	TestTrue(TEXT("Deletion persisted locally"), EmptySave && EmptySave->Presets.IsEmpty());
+	Reloaded->Shutdown();
+	ReloadedSlate.Reset();
+	ReloadedWidget->ReleaseSlateResources(true);
+	UGameplayStatics::DeleteGameInSlot(Slot, 0);
+	GI->Shutdown();
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSTelemetryFilterModesTest,
 	"DroneGCS.UI.TelemetryFilter.CurrentAndCombinedModes", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FGCSTelemetryFilterModesTest::RunTest(const FString&)
@@ -471,7 +565,7 @@ bool FGCSTelemetryFilterToggleTest::RunTest(const FString&)
 	UButton* Button = Bridge->TelemetryFilterToggleButton.Get();
 	if (!TestNotNull(TEXT("Saved BTN_ShaiXuan binds"), Button)) { GI->Shutdown(); return false; }
 	TestFalse(TEXT("Filter not created at startup"), Bridge->TelemetryFilterWidget.IsValid());
-	Bridge->ShowMainPage(EGCSMainPage::Logs);
+	Bridge->HandleLogsPageClicked();
 	TestFalse(TEXT("Opening logs does not open filter"), Bridge->TelemetryFilterWidget.IsValid());
 	Button->OnClicked.Broadcast();
 	UUserWidget* Filter = Bridge->TelemetryFilterWidget.Get();
@@ -491,14 +585,14 @@ bool FGCSTelemetryFilterToggleTest::RunTest(const FString&)
 	Cast<UButton>(Filter->WidgetTree->FindWidget(TEXT("BTN_ApplyCondition")))->OnClicked.Broadcast();
 	TestEqual(TEXT("Condition added"), Conditions->GetNumItems(), 1);
 	UObject* Rule = Conditions->GetItemAt(0);
-	Bridge->ShowMainPage(EGCSMainPage::Logs);
+	Bridge->HandleLogsPageClicked();
 	TestTrue(TEXT("Closing logs does not hide filter"), Filter->IsVisible());
-	Bridge->ShowMainPage(EGCSMainPage::Map);
+	Bridge->HandleMapPageClicked();
 	TestTrue(TEXT("Changing pages does not hide filter"), Filter->IsVisible());
 	Bridge->BindTelemetryFilterToggle();
 	Button->OnClicked.Broadcast();
 	TestFalse(TEXT("One click hides after rebind (no duplicate handler)"), Filter->IsVisible());
-	Bridge->ShowMainPage(EGCSMainPage::Logs);
+	Bridge->HandleLogsPageClicked();
 	TestFalse(TEXT("Opening logs does not reopen hidden filter"), Filter->IsVisible());
 	Button->OnClicked.Broadcast();
 	TestTrue(TEXT("Next click reopens same widget"), Bridge->TelemetryFilterWidget.Get() == Filter && Filter->IsVisible());

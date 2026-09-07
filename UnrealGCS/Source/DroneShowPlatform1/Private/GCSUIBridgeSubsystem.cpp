@@ -13,6 +13,7 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/CheckBox.h"
+#include "Components/ComboBoxString.h"
 #include "Components/EditableText.h"
 #include "Components/EditableTextBox.h"
 #include "Components/ListView.h"
@@ -37,6 +38,7 @@
 #include "GCSDroneRowView.h"
 #include "GCSRouteWorkflowCoordinator.h"
 #include "GCSTelemetryFilterController.h"
+#include "HoverLayerSelectionModel.h"
 #include "GCSUIWidgetPresenter.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/Actor.h"
@@ -50,10 +52,13 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Math/RotationMatrix.h"
+#include "Layout/WidgetPath.h"
 #include "UObject/StructOnScope.h"
 #include "UObject/UnrealType.h"
 #include "RoutePreviewSubsystem.h"
 #include "RouteArtifactWorkspaceSubsystem.h"
+#include "RouteAssignmentGeo.h"
+#include "RouteAssignmentSubsystem.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/SWidget.h"
 
@@ -71,6 +76,57 @@ namespace
 	constexpr float FixedPileAxisLengthMeters = 1000.0f;
 	constexpr float FixedPileAxisDepthOffsetUU = 300.0f;
 	const FName SceneMapActorTag(TEXT("GCS.SceneMap"));
+
+	bool IsVisibleWidgetUnderLocation(
+		const UWidget* Widget,
+		const FVector2D& ScreenPosition)
+	{
+		if (!Widget || !Widget->IsVisible())
+		{
+			return false;
+		}
+
+		const FGeometry& Geometry = Widget->GetCachedGeometry();
+		const FVector2D LocalSize = Geometry.GetLocalSize();
+		return LocalSize.X > KINDA_SMALL_NUMBER
+			&& LocalSize.Y > KINDA_SMALL_NUMBER
+			&& Geometry.IsUnderLocation(ScreenPosition);
+	}
+
+	bool IsPointerOverInteractableSlateWidget(const FVector2D& ScreenPosition)
+	{
+		if (!FSlateApplication::IsInitialized())
+		{
+			return false;
+		}
+
+		FSlateApplication& SlateApplication = FSlateApplication::Get();
+		const FWidgetPath WidgetPath = SlateApplication.LocateWindowUnderMouse(
+			ScreenPosition,
+			SlateApplication.GetInteractiveTopLevelWindows());
+		for (int32 WidgetIndex = 0; WidgetIndex < WidgetPath.Widgets.Num(); ++WidgetIndex)
+		{
+			const FArrangedWidget& ArrangedWidget = WidgetPath.Widgets[WidgetIndex];
+			if (ArrangedWidget.Widget->IsInteractable())
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool HaveSameDroneIDs(const TArray<FString>& Left, const TArray<FString>& Right)
+	{
+		if (Left.Num() != Right.Num())
+		{
+			return false;
+		}
+		TArray<FString> SortedLeft = Left;
+		TArray<FString> SortedRight = Right;
+		SortedLeft.Sort();
+		SortedRight.Sort();
+		return SortedLeft == SortedRight;
+	}
 
 	int32 ParseLogicalDroneNumber(const FString& DroneID)
 	{
@@ -545,6 +601,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	ResetNavigationPages();
 	UnbindUploadDashboardControls();
 	UnbindReferenceAndMapControls();
+	UnbindHoverTestControls();
 
 	MainWidgetRef = MainWidget;
 	ConfigureGroundStationInputPolicy(MainWidget);
@@ -588,6 +645,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	FGCSUIWidgetPresenter::SetWidgetVisible(FleetPanelWidget, false);
 	FGCSUIWidgetPresenter::SetWidgetVisible(DroneDetailWidget, false);
 	FGCSUIWidgetPresenter::SetWidgetVisible(RightPanelWidget, false);
+	FGCSUIWidgetPresenter::SetWidgetVisible(PlaybackWidget, false);
 	UpdateSelectionRectangleVisual(FVector2D::ZeroVector, FVector2D::ZeroVector, false);
 
 	if (UButton* ViewButton =
@@ -647,8 +705,10 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	BindReferenceAndMapControls();
 	BindRoutePlaybackControls();
 	BindFleetPanelButtons();
+	BindHoverTestControls();
 	SetLegacyHoverSelectionVisible(false);
 	RefreshHoverMVPControls();
+	RefreshHoverTestControls();
 
 	if (UDSPGCSProductionCommandProviderSubsystem* Commands =
 		GetGameInstance()->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>())
@@ -699,6 +759,7 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 {
 	UnregisterMarqueeInputProcessor();
 	EndTopDownLocateLock();
+	UnbindHoverTestControls();
 	UnbindReferenceAndMapControls();
 	ResetUploadDashboard();
 	if (UButton* SelectAllButton = FindFleetButton(TEXT("BTN_FleetSelectALL")))
@@ -746,6 +807,19 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 	DroneDetailWidget.Reset();
 	RightToolbarWidget.Reset();
 	RightPanelWidget.Reset();
+	HoverTestContentWidget.Reset();
+	HoverAltitudeInput.Reset();
+	HoverLayerCombo.Reset();
+	HoverGenerateLayersButton.Reset();
+	HoverLayers.Reset();
+	HoverLayerBaseDroneIDs.Reset();
+	HoverLayerOptions.Reset();
+	HoverLayerFleetSessionID.Reset();
+	HoverLayerPositionSource.Reset();
+	HoverTestStatus.Reset();
+	ActiveHoverLayerOptionIndex = INDEX_NONE;
+	bUpdatingHoverLayerCombo = false;
+	bApplyingHoverLayerSelection = false;
 	PlaybackWidget.Reset();
 	RouteImportWidget.Reset();
 	RouteImportButton.Reset();
@@ -1675,17 +1749,43 @@ void UGCSUIBridgeSubsystem::HandleControlPageClicked()
 
 void UGCSUIBridgeSubsystem::HandleMapPageClicked()
 {
-	ShowMainPage(EGCSMainPage::Map);
+	if (UUserWidget* Page = MapPageWidget.Get())
+	{
+		const ESlateVisibility Visibility = Page->GetVisibility();
+		const bool bIsShown = Visibility != ESlateVisibility::Collapsed
+			&& Visibility != ESlateVisibility::Hidden;
+		FGCSUIWidgetPresenter::SetWidgetVisible(
+			MapPageWidget,
+			!bIsShown,
+			true);
+	}
 }
 
 void UGCSUIBridgeSubsystem::HandleSettingsPageClicked()
 {
-	ShowMainPage(EGCSMainPage::Settings);
+	if (UUserWidget* Playback = PlaybackWidget.Get())
+	{
+		const ESlateVisibility Visibility = Playback->GetVisibility();
+		const bool bIsShown = Visibility != ESlateVisibility::Collapsed
+			&& Visibility != ESlateVisibility::Hidden;
+		FGCSUIWidgetPresenter::SetWidgetVisible(
+			PlaybackWidget,
+			!bIsShown);
+	}
 }
 
 void UGCSUIBridgeSubsystem::HandleLogsPageClicked()
 {
-	ShowMainPage(EGCSMainPage::Logs);
+	if (UUserWidget* Page = LogsPageWidget.Get())
+	{
+		const ESlateVisibility Visibility = Page->GetVisibility();
+		const bool bIsShown = Visibility != ESlateVisibility::Collapsed
+			&& Visibility != ESlateVisibility::Hidden;
+		FGCSUIWidgetPresenter::SetWidgetVisible(
+			LogsPageWidget,
+			!bIsShown,
+			true);
+	}
 }
 
 void UGCSUIBridgeSubsystem::HandleArmClicked()
@@ -2279,6 +2379,199 @@ FString UGCSUIBridgeSubsystem::SubmitProductionCommandForTargets(
 		Parameters);
 }
 
+void UGCSUIBridgeSubsystem::HandleHoverPanelToggleClicked()
+{
+	if (UWidget* Content = HoverTestContentWidget.Get())
+	{
+		Content->SetVisibility(
+			Content->GetVisibility() == ESlateVisibility::Collapsed
+				? ESlateVisibility::Visible
+				: ESlateVisibility::Collapsed);
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleHoverGenerateLayersClicked()
+{
+	const UFleetManagerSubsystem* Fleet = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>()
+		: nullptr;
+	if (!Fleet)
+	{
+		ResetHoverLayerPlan(TEXT("无法读取机群数据。"));
+		return;
+	}
+	if (IsCommandSelectionMutationBlocked())
+	{
+		ResetHoverLayerPlan(TEXT("当前任务已锁定选择，暂时不能生成分层。"));
+		return;
+	}
+
+	TArray<FString> ScopeDroneIDs = GetCommandTargetDroneIDs();
+	const bool bUsingCurrentSelection = !ScopeDroneIDs.IsEmpty();
+	if (!bUsingCurrentSelection)
+	{
+		for (const FDroneData& Drone : Fleet->GetDronePage(0, Fleet->GetDroneCount()))
+		{
+			if (Drone.bOnline)
+			{
+				ScopeDroneIDs.Add(Drone.DroneID);
+			}
+		}
+	}
+
+	TArray<FHoverLayerPosition> Positions;
+	FString Error;
+	FString PositionSource;
+	if (!BuildHoverPositions(ScopeDroneIDs, Positions, Error, &PositionSource))
+	{
+		ResetHoverLayerPlan(Error);
+		return;
+	}
+
+	FHoverLayerPlan Plan;
+	if (!HoverLayerSelection::BuildPlan(
+		Positions,
+		HoverLayerMinimumSpacingMeters,
+		Plan,
+		Error))
+	{
+		ResetHoverLayerPlan(Error);
+		return;
+	}
+
+	HoverLayerBaseDroneIDs = MoveTemp(Plan.BaseDroneIDs);
+	HoverLayers = MoveTemp(Plan.Layers);
+	HoverLayerFleetSessionID = Fleet->GetActiveFleetSessionID();
+	HoverLayerPositionSource = MoveTemp(PositionSource);
+	HoverLayerOptions.Reset();
+	HoverLayerOptions.Add(FString::Printf(
+		TEXT("全部（%d架，仅选择）"),
+		HoverLayerBaseDroneIDs.Num()));
+	for (int32 Index = 0; Index < HoverLayers.Num(); ++Index)
+	{
+		HoverLayerOptions.Add(FString::Printf(
+			TEXT("第%d层（%d架）"),
+			Index + 1,
+			HoverLayers[Index].Num()));
+	}
+
+	if (UComboBoxString* Combo = HoverLayerCombo.Get())
+	{
+		bUpdatingHoverLayerCombo = true;
+		Combo->ClearOptions();
+		for (const FString& Option : HoverLayerOptions)
+		{
+			Combo->AddOption(Option);
+		}
+		bUpdatingHoverLayerCombo = false;
+	}
+
+	HoverTestStatus = bUsingCurrentSelection
+		? FString::Printf(
+			TEXT("已按当前选择生成分层（%s）。"),
+			*HoverLayerPositionSource)
+		: FString::Printf(
+			TEXT("未选择目标，已按全部在线无人机生成分层（%s）。"),
+			*HoverLayerPositionSource);
+	ApplyHoverLayerSelection(1);
+}
+
+void UGCSUIBridgeSubsystem::HandleHoverLayerSelectionChanged(
+	const FString SelectedItem,
+	const ESelectInfo::Type SelectionType)
+{
+	(void)SelectionType;
+	if (bUpdatingHoverLayerCombo)
+	{
+		return;
+	}
+	ApplyHoverLayerSelection(HoverLayerOptions.IndexOfByKey(SelectedItem));
+}
+
+void UGCSUIBridgeSubsystem::HandleHoverAltitudeCommitted(
+	const FText& Text,
+	const ETextCommit::Type CommitMethod)
+{
+	(void)Text;
+	(void)CommitMethod;
+	FString Error;
+	if (!TryReadHoverAltitude(Error))
+	{
+		HoverTestStatus = Error;
+	}
+	RefreshHoverTestControls();
+}
+
+void UGCSUIBridgeSubsystem::HandleHoverUnlockClicked()
+{
+	FString Error;
+	if (PrepareHoverLayerAction(Error, false))
+	{
+		HandleArmClicked();
+	}
+	else
+	{
+		HoverTestStatus = Error;
+		RefreshHoverTestControls();
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleHoverTakeoffClicked()
+{
+	FString Error;
+	if (TryReadHoverAltitude(Error) && PrepareHoverLayerAction(Error, true))
+	{
+		HandleHoverClicked();
+	}
+	else
+	{
+		HoverTestStatus = Error;
+		RefreshHoverTestControls();
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleHoverLandClicked()
+{
+	FString Error;
+	if (PrepareHoverLayerAction(Error, false))
+	{
+		HandleLandClicked();
+	}
+	else
+	{
+		HoverTestStatus = Error;
+		RefreshHoverTestControls();
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleHoverLockClicked()
+{
+	FString Error;
+	if (PrepareHoverLayerAction(Error, false))
+	{
+		HandleDisarmClicked();
+	}
+	else
+	{
+		HoverTestStatus = Error;
+		RefreshHoverTestControls();
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleHoverManualClicked()
+{
+	FString Error;
+	if (PrepareHoverLayerAction(Error, false))
+	{
+		HandleManualModeClicked();
+	}
+	else
+	{
+		HoverTestStatus = Error;
+		RefreshHoverTestControls();
+	}
+}
+
 void UGCSUIBridgeSubsystem::HandleFleetRowSelectionClicked(const int32 RowIndex)
 {
 	if (!CurrentFleetPageDroneIDs.IsValidIndex(RowIndex)
@@ -2469,6 +2762,7 @@ void UGCSUIBridgeSubsystem::UnregisterMarqueeInputProcessor()
 		FSlateApplication::Get().UnregisterInputPreProcessor(MarqueeInputProcessor);
 	}
 	MarqueeInputProcessor.Reset();
+	ResetTelemetryHorizontalDrag();
 	EndMarqueeCameraLock();
 	EndTopDownLocateLock();
 	UpdateSelectionRectangleVisual(FVector2D::ZeroVector, FVector2D::ZeroVector, false);
@@ -2484,6 +2778,7 @@ void UGCSUIBridgeSubsystem::PollMarqueePlayerControllerInput()
 	UWorld* World = MainWidget ? MainWidget->GetWorld() : nullptr;
 	if (!MainWidget || !PlayerController || !World)
 	{
+		ResetTelemetryHorizontalDrag();
 		EndMarqueeCameraLock();
 		EndTopDownLocateLock();
 		UpdateSelectionRectangleVisual(FVector2D::ZeroVector, FVector2D::ZeroVector, false);
@@ -2494,6 +2789,7 @@ void UGCSUIBridgeSubsystem::PollMarqueePlayerControllerInput()
 	}
 	if (!FApp::HasFocus())
 	{
+		ResetTelemetryHorizontalDrag();
 		EndMarqueeCameraLock();
 		UpdateSelectionRectangleVisual(FVector2D::ZeroVector, FVector2D::ZeroVector, false);
 		bMarqueePointerDown = false;
@@ -2511,6 +2807,7 @@ void UGCSUIBridgeSubsystem::PollMarqueePlayerControllerInput()
 		? UWidgetLayoutLibrary::GetMousePositionOnViewport(World)
 		: MarqueeCurrentLocalPosition;
 
+	UpdateTelemetryHorizontalScrollInput(PlayerController);
 	UpdateTopDownViewInput(PlayerController);
 	UpdateTopDownLocateLock(PlayerController);
 
@@ -2628,7 +2925,8 @@ void UGCSUIBridgeSubsystem::UpdateTopDownViewInput(APlayerController* PlayerCont
 		return;
 	}
 
-	if (IsPointerOverBlockingGCSUI(FSlateApplication::Get().GetCursorPos()))
+	if (bTelemetryHorizontalDragging
+		|| IsPointerOverBlockingGCSUI(FSlateApplication::Get().GetCursorPos()))
 	{
 		ResetTopDownViewInputState();
 		return;
@@ -3412,6 +3710,23 @@ void UGCSUIBridgeSubsystem::HandleMarqueeMouseButtonUp(
 bool UGCSUIBridgeSubsystem::IsPointerOverBlockingGCSUI(
 	const FVector2D& ScreenPosition) const
 {
+	// Once a telemetry-table drag starts, it owns the right mouse button until
+	// release even if the cursor leaves the scroll box. Camera look must not
+	// begin halfway through that drag.
+	if (bTelemetryHorizontalDragging)
+	{
+		return true;
+	}
+
+	// Slate interactables cover buttons, list rows, scroll bars and popup menu
+	// entries, including combo-box menus that can extend outside their owner.
+	if (IsPointerOverInteractableSlateWidget(ScreenPosition))
+	{
+		return true;
+	}
+
+	// These authored child widgets are compact panels, so their entire visible
+	// rectangles are UI, including non-interactive padding/background space.
 	for (const TWeakObjectPtr<UUserWidget>& WidgetRef :
 		{ TopBarWidget,
 		  LeftToolbarWidget,
@@ -3420,23 +3735,45 @@ bool UGCSUIBridgeSubsystem::IsPointerOverBlockingGCSUI(
 		  RightToolbarWidget,
 		  RightPanelWidget,
 		  PlaybackWidget,
-		  TelemetryFilterWidget,
-		  MapPageWidget,
-		  SettingsPageWidget,
-		  LogsPageWidget })
+		  TelemetryFilterWidget })
 	{
 		const UUserWidget* Widget = WidgetRef.Get();
-		if (Widget
-			&& Widget->IsVisible()
-			&& Widget->GetCachedGeometry().IsUnderLocation(ScreenPosition))
+		if (IsVisibleWidgetUnderLocation(Widget, ScreenPosition))
 		{
 			return true;
 		}
 	}
-	if (const UUserWidget* ImportWidget = RouteImportWidget.Get();
-		ImportWidget
-		&& ImportWidget->IsVisible()
-		&& ImportWidget->GetCachedGeometry().IsUnderLocation(ScreenPosition))
+
+	// Navigation pages are full-screen viewport overlays, while their authored
+	// content occupies only part of the screen. Test the real panel instead of
+	// the page root so transparent scene space remains available for marquee
+	// selection and camera gestures. SelectionRectangle is intentionally absent:
+	// it is scene feedback, not blocking UI.
+	const auto IsUnderNavigationContent = [&ScreenPosition](
+		const TWeakObjectPtr<UUserWidget>& PageRef,
+		const FName ContentName)
+	{
+		const UUserWidget* Page = PageRef.Get();
+		if (!Page || !Page->IsVisible() || !Page->WidgetTree)
+		{
+			return false;
+		}
+		return IsVisibleWidgetUnderLocation(
+			Page->WidgetTree->FindWidget(ContentName),
+			ScreenPosition);
+	};
+	if (IsUnderNavigationContent(MapPageWidget, TEXT("PANEL_Page"))
+		|| IsUnderNavigationContent(LogsPageWidget, TEXT("VB_Page")))
+	{
+		return true;
+	}
+
+	const UUserWidget* ImportWidget = RouteImportWidget.Get();
+	const UWidget* ImportBorder = ImportWidget && ImportWidget->IsVisible()
+		&& ImportWidget->WidgetTree
+		? ImportWidget->WidgetTree->FindWidget(TEXT("BORDER_RouteImport"))
+		: nullptr;
+	if (IsVisibleWidgetUnderLocation(ImportBorder, ScreenPosition))
 	{
 		return true;
 	}
@@ -3668,6 +4005,452 @@ void UGCSUIBridgeSubsystem::RefreshHoverMVPControls()
 			: TEXT("GCS MODE  MANUAL"));
 }
 
+void UGCSUIBridgeSubsystem::BindHoverTestControls()
+{
+	UnbindHoverTestControls();
+	HoverTestContentWidget = FindRightPanelWidget(TEXT("VB_HoverTestContent"));
+	HoverAltitudeInput = Cast<UEditableTextBox>(FindRightPanelWidget(TEXT("EDT_HoverAltitude")));
+	HoverLayerCombo = Cast<UComboBoxString>(FindRightPanelWidget(TEXT("CMB_HoverLayer")));
+	HoverGenerateLayersButton = FindRightPanelButton(TEXT("BTN_HoverGenerateLayers"));
+
+#define BIND_HOVER_BUTTON(Name, Handler) \
+	if (UButton* Button = FindRightPanelButton(Name)) \
+	{ \
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::Handler); \
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::Handler); \
+	}
+	BIND_HOVER_BUTTON(TEXT("BTN_ConsoleHoverTest_1"), HandleHoverPanelToggleClicked);
+	BIND_HOVER_BUTTON(TEXT("BTN_HoverGenerateLayers"), HandleHoverGenerateLayersClicked);
+	BIND_HOVER_BUTTON(TEXT("BTN_HoverUnlock"), HandleHoverUnlockClicked);
+	BIND_HOVER_BUTTON(TEXT("BTN_HoverTakeoff"), HandleHoverTakeoffClicked);
+	BIND_HOVER_BUTTON(TEXT("BTN_HoverLand"), HandleHoverLandClicked);
+	BIND_HOVER_BUTTON(TEXT("BTN_HoverLock"), HandleHoverLockClicked);
+	BIND_HOVER_BUTTON(TEXT("BTN_HoverManual"), HandleHoverManualClicked);
+#undef BIND_HOVER_BUTTON
+
+	if (UEditableTextBox* Input = HoverAltitudeInput.Get())
+	{
+		Input->OnTextCommitted.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleHoverAltitudeCommitted);
+		Input->OnTextCommitted.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleHoverAltitudeCommitted);
+		Input->SetText(FText::AsNumber(HoverAltitudeMeters));
+	}
+	if (UComboBoxString* Combo = HoverLayerCombo.Get())
+	{
+		Combo->OnSelectionChanged.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleHoverLayerSelectionChanged);
+		Combo->OnSelectionChanged.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleHoverLayerSelectionChanged);
+	}
+	OnCommandSelectionChanged.RemoveAll(this);
+	OnCommandSelectionChanged.AddUObject(this, &UGCSUIBridgeSubsystem::HandleHoverCommandSelectionChanged);
+	ResetHoverLayerPlan();
+}
+
+void UGCSUIBridgeSubsystem::UnbindHoverTestControls()
+{
+#define UNBIND_HOVER_BUTTON(Name, Handler) \
+	if (UButton* Button = FindRightPanelButton(Name)) \
+	{ \
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::Handler); \
+	}
+	UNBIND_HOVER_BUTTON(TEXT("BTN_ConsoleHoverTest_1"), HandleHoverPanelToggleClicked);
+	UNBIND_HOVER_BUTTON(TEXT("BTN_HoverGenerateLayers"), HandleHoverGenerateLayersClicked);
+	UNBIND_HOVER_BUTTON(TEXT("BTN_HoverUnlock"), HandleHoverUnlockClicked);
+	UNBIND_HOVER_BUTTON(TEXT("BTN_HoverTakeoff"), HandleHoverTakeoffClicked);
+	UNBIND_HOVER_BUTTON(TEXT("BTN_HoverLand"), HandleHoverLandClicked);
+	UNBIND_HOVER_BUTTON(TEXT("BTN_HoverLock"), HandleHoverLockClicked);
+	UNBIND_HOVER_BUTTON(TEXT("BTN_HoverManual"), HandleHoverManualClicked);
+#undef UNBIND_HOVER_BUTTON
+	if (UEditableTextBox* Input = HoverAltitudeInput.Get())
+	{
+		Input->OnTextCommitted.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleHoverAltitudeCommitted);
+	}
+	if (UComboBoxString* Combo = HoverLayerCombo.Get())
+	{
+		Combo->OnSelectionChanged.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleHoverLayerSelectionChanged);
+	}
+	OnCommandSelectionChanged.RemoveAll(this);
+}
+
+void UGCSUIBridgeSubsystem::ResetHoverLayerPlan(const FString& Status)
+{
+	HoverLayers.Reset();
+	HoverLayerBaseDroneIDs.Reset();
+	HoverLayerOptions.Reset();
+	HoverLayerFleetSessionID.Reset();
+	HoverLayerPositionSource.Reset();
+	ActiveHoverLayerOptionIndex = INDEX_NONE;
+	HoverTestStatus = Status;
+	if (UComboBoxString* Combo = HoverLayerCombo.Get())
+	{
+		bUpdatingHoverLayerCombo = true;
+		Combo->ClearOptions();
+		Combo->AddOption(TEXT("未生成"));
+		Combo->SetSelectedOption(TEXT("未生成"));
+		bUpdatingHoverLayerCombo = false;
+	}
+	RefreshHoverTestControls();
+}
+
+bool UGCSUIBridgeSubsystem::BuildHoverPositions(
+	const TArray<FString>& DroneIDs,
+	TArray<FHoverLayerPosition>& OutPositions,
+	FString& OutError,
+	FString* OutPositionSource) const
+{
+	OutPositions.Reset();
+	OutError.Reset();
+	if (OutPositionSource)
+	{
+		OutPositionSource->Reset();
+	}
+	const UFleetManagerSubsystem* Fleet = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>()
+		: nullptr;
+	if (!Fleet || DroneIDs.IsEmpty())
+	{
+		OutError = TEXT("没有可用于分层的在线无人机。");
+		return false;
+	}
+
+	TArray<FDroneData> Drones;
+	Drones.Reserve(DroneIDs.Num());
+	bool bAllGpsValid = true;
+	for (const FString& DroneID : DroneIDs)
+	{
+		FDroneData Drone;
+		if (!Fleet->GetDroneByID(DroneID, Drone))
+		{
+			OutError = FString::Printf(TEXT("找不到无人机 %s。"), *DroneID);
+			return false;
+		}
+		if (!Drone.bOnline)
+		{
+			OutError = FString::Printf(TEXT("无人机 %s 当前不在线。"), *DroneID);
+			return false;
+		}
+		bAllGpsValid = bAllGpsValid && DroneGPS::IsValid(Drone);
+		Drones.Add(MoveTemp(Drone));
+	}
+
+	if (bAllGpsValid)
+	{
+		const double OriginLatitudeRadians = FMath::DegreesToRadians(Drones[0].GPSLat);
+		const double OriginLongitudeRadians = FMath::DegreesToRadians(Drones[0].GPSLon);
+		const double SinLatitude = FMath::Sin(OriginLatitudeRadians);
+		const double CosLatitude = FMath::Cos(OriginLatitudeRadians);
+		const double SinLongitude = FMath::Sin(OriginLongitudeRadians);
+		const double CosLongitude = FMath::Cos(OriginLongitudeRadians);
+		const RouteAssignmentGeo::FEcefPosition OriginEcef =
+			RouteAssignmentGeo::GeodeticToEcef(Drones[0].GPSLat, Drones[0].GPSLon, 0.0);
+
+		OutPositions.Reserve(Drones.Num());
+		for (const FDroneData& Drone : Drones)
+		{
+			const RouteAssignmentGeo::FEcefPosition Ecef =
+				RouteAssignmentGeo::GeodeticToEcef(Drone.GPSLat, Drone.GPSLon, 0.0);
+			const double DeltaX = Ecef.X - OriginEcef.X;
+			const double DeltaY = Ecef.Y - OriginEcef.Y;
+			const double DeltaZ = Ecef.Z - OriginEcef.Z;
+			FHoverLayerPosition& Position = OutPositions.AddDefaulted_GetRef();
+			Position.DroneID = Drone.DroneID;
+			Position.EastMeters = -SinLongitude * DeltaX + CosLongitude * DeltaY;
+			Position.NorthMeters = -SinLatitude * CosLongitude * DeltaX
+				- SinLatitude * SinLongitude * DeltaY
+				+ CosLatitude * DeltaZ;
+		}
+		if (OutPositionSource)
+		{
+			*OutPositionSource = TEXT("室外 GPS");
+		}
+		return true;
+	}
+
+	// Indoor mode: use the imported route's frame-0 Local ENU positions. A
+	// frozen/working assignment takes precedence; canonical DroneNNN IDs retain
+	// the legacy RouteSlot-number fallback when no assignment exists yet.
+	const URoutePreviewSubsystem* RoutePreview = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>()
+		: nullptr;
+	const FRoutePreviewData* RouteData = RoutePreview && RoutePreview->IsRouteLoaded()
+		? &RoutePreview->GetRouteData()
+		: nullptr;
+	TMap<FString, int32> RouteSlotByDroneID;
+	if (const URouteAssignmentSubsystem* Assignment = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<URouteAssignmentSubsystem>()
+		: nullptr)
+	{
+		FRouteAssignmentSnapshot Snapshot;
+		if ((Assignment->GetFrozenSnapshot(Snapshot)
+				|| Assignment->GetWorkingSnapshot(Snapshot))
+			&& RoutePreview
+			&& Snapshot.SourceIdentity.RouteDatasetGeneration
+				== RoutePreview->GetRouteDatasetGeneration()
+			&& Snapshot.SourceIdentity.FleetSessionID
+				== Fleet->GetActiveFleetSessionID())
+		{
+			for (const FRouteAssignmentEntry& Entry : Snapshot.MatchedEntries)
+			{
+				RouteSlotByDroneID.Add(Entry.DroneID, Entry.RouteSlotIndex);
+			}
+		}
+	}
+
+	bool bHaveAllRoutePositions = RouteData != nullptr;
+	if (RouteData)
+	{
+		OutPositions.Reserve(Drones.Num());
+		for (const FDroneData& Drone : Drones)
+		{
+			const int32* AssignedSlot = RouteSlotByDroneID.Find(Drone.DroneID);
+			const int32 RouteSlot = AssignedSlot
+				? *AssignedSlot
+				: ParseLogicalDroneNumber(Drone.DroneID);
+			if (!RouteData->IsValidSample(0, RouteSlot))
+			{
+				bHaveAllRoutePositions = false;
+				break;
+			}
+			const FVector3f& RoutePosition = RouteData->GetPosition(0, RouteSlot);
+			if (!FMath::IsFinite(RoutePosition.X) || !FMath::IsFinite(RoutePosition.Y))
+			{
+				bHaveAllRoutePositions = false;
+				break;
+			}
+			FHoverLayerPosition& Position = OutPositions.AddDefaulted_GetRef();
+			Position.DroneID = Drone.DroneID;
+			Position.EastMeters = RoutePosition.X;
+			Position.NorthMeters = RoutePosition.Y;
+		}
+	}
+	if (bHaveAllRoutePositions && OutPositions.Num() == Drones.Num())
+	{
+		if (OutPositionSource)
+		{
+			*OutPositionSource = TEXT("室内 NPZ 初始位置");
+		}
+		return true;
+	}
+
+	// Without any trustworthy horizontal position, isolate every drone by using
+	// one coincident placeholder. The greedy model consequently emits one drone
+	// per layer instead of rejecting indoor operation or guessing adjacency.
+	OutPositions.Reset();
+	OutPositions.Reserve(Drones.Num());
+	for (const FDroneData& Drone : Drones)
+	{
+		FHoverLayerPosition& Position = OutPositions.AddDefaulted_GetRef();
+		Position.DroneID = Drone.DroneID;
+	}
+	if (OutPositionSource)
+	{
+		*OutPositionSource = TEXT("室内单机独立层（无位置数据）");
+	}
+	return true;
+}
+
+bool UGCSUIBridgeSubsystem::TryReadHoverAltitude(FString& OutError)
+{
+	OutError.Reset();
+	const UEditableTextBox* Input = HoverAltitudeInput.Get();
+	if (!Input)
+	{
+		OutError = TEXT("未找到悬停高度输入框。 ");
+		return false;
+	}
+	const FString ValueText = Input->GetText().ToString().TrimStartAndEnd();
+	float ParsedValue = 0.0f;
+	if (!LexTryParseString(ParsedValue, *ValueText) || !FMath::IsFinite(ParsedValue))
+	{
+		OutError = TEXT("请输入有效的悬停高度数值。");
+		return false;
+	}
+	if (ParsedValue < 0.5f || ParsedValue > 120.0f)
+	{
+		OutError = TEXT("悬停高度范围为 0.5～120.0 m。");
+		return false;
+	}
+	HoverAltitudeMeters = ParsedValue;
+	if (UEditableTextBox* MutableInput = HoverAltitudeInput.Get())
+	{
+		MutableInput->SetText(FText::FromString(FString::Printf(TEXT("%.1f"), HoverAltitudeMeters)));
+	}
+	RefreshHoverMVPControls();
+	return true;
+}
+
+void UGCSUIBridgeSubsystem::ApplyHoverLayerSelection(const int32 ComboOptionIndex)
+{
+	if (!HoverLayerOptions.IsValidIndex(ComboOptionIndex))
+	{
+		return;
+	}
+	if (IsCommandSelectionMutationBlocked())
+	{
+		HoverTestStatus = TEXT("当前任务已锁定选择，暂时不能切换分层。");
+		RefreshHoverTestControls();
+		return;
+	}
+
+	const TArray<FString>* TargetIDs = ComboOptionIndex == 0
+		? &HoverLayerBaseDroneIDs
+		: (HoverLayers.IsValidIndex(ComboOptionIndex - 1)
+			? &HoverLayers[ComboOptionIndex - 1]
+			: nullptr);
+	if (!TargetIDs)
+	{
+		return;
+	}
+	ActiveHoverLayerOptionIndex = ComboOptionIndex;
+	bApplyingHoverLayerSelection = true;
+	ReplaceCommandDroneSelection(*TargetIDs);
+	bApplyingHoverLayerSelection = false;
+
+	if (UComboBoxString* Combo = HoverLayerCombo.Get())
+	{
+		bUpdatingHoverLayerCombo = true;
+		Combo->SetSelectedOption(HoverLayerOptions[ComboOptionIndex]);
+		bUpdatingHoverLayerCombo = false;
+	}
+	HoverTestStatus = ComboOptionIndex == 0
+		? TEXT("已恢复全部分层目标；请选择具体层后再执行悬停动作。")
+		: FString::Printf(TEXT("当前已选择第 %d 层。"), ComboOptionIndex);
+	RefreshHoverTestControls();
+}
+
+void UGCSUIBridgeSubsystem::HandleHoverCommandSelectionChanged()
+{
+	if (bApplyingHoverLayerSelection || HoverLayers.IsEmpty())
+	{
+		return;
+	}
+	const TArray<FString> SelectedIDs = GetCommandTargetDroneIDs();
+	int32 MatchingOption = HaveSameDroneIDs(SelectedIDs, HoverLayerBaseDroneIDs) ? 0 : INDEX_NONE;
+	for (int32 Index = 0; MatchingOption == INDEX_NONE && Index < HoverLayers.Num(); ++Index)
+	{
+		if (HaveSameDroneIDs(SelectedIDs, HoverLayers[Index]))
+		{
+			MatchingOption = Index + 1;
+		}
+	}
+	ActiveHoverLayerOptionIndex = MatchingOption;
+	if (MatchingOption == INDEX_NONE)
+	{
+		HoverTestStatus = TEXT("当前选择已改变；请重新选择一个分层或重新生成分层。");
+	}
+	else if (UComboBoxString* Combo = HoverLayerCombo.Get())
+	{
+		bUpdatingHoverLayerCombo = true;
+		Combo->SetSelectedOption(HoverLayerOptions[MatchingOption]);
+		bUpdatingHoverLayerCombo = false;
+	}
+	RefreshHoverTestControls();
+}
+
+bool UGCSUIBridgeSubsystem::PrepareHoverLayerAction(
+	FString& OutError,
+	const bool bRequireCurrentSpacing)
+{
+	OutError.Reset();
+	const UFleetManagerSubsystem* Fleet = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>()
+		: nullptr;
+	if (!Fleet || HoverLayers.IsEmpty())
+	{
+		OutError = TEXT("请先生成分层。");
+		return false;
+	}
+	if (Fleet->GetActiveFleetSessionID() != HoverLayerFleetSessionID)
+	{
+		OutError = TEXT("机群会话已变化，请重新生成分层。");
+		return false;
+	}
+	if (ActiveHoverLayerOptionIndex <= 0
+		|| !HoverLayers.IsValidIndex(ActiveHoverLayerOptionIndex - 1))
+	{
+		OutError = TEXT("请选择一个具体分层后再执行操作。");
+		return false;
+	}
+	const TArray<FString>& ActiveLayer = HoverLayers[ActiveHoverLayerOptionIndex - 1];
+	if (!HaveSameDroneIDs(GetCommandTargetDroneIDs(), ActiveLayer))
+	{
+		OutError = TEXT("当前选择与分层不一致，请重新选择分层。");
+		return false;
+	}
+	if (!bRequireCurrentSpacing)
+	{
+		return true;
+	}
+	TArray<FHoverLayerPosition> CurrentPositions;
+	if (!BuildHoverPositions(ActiveLayer, CurrentPositions, OutError))
+	{
+		return false;
+	}
+	return HoverLayerSelection::ValidateLayerSpacing(
+		CurrentPositions,
+		HoverLayerMinimumSpacingMeters,
+		OutError);
+}
+
+void UGCSUIBridgeSubsystem::RefreshHoverTestControls()
+{
+	const UFleetManagerSubsystem* Fleet = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>()
+		: nullptr;
+	if (Fleet && !HoverLayerFleetSessionID.IsEmpty()
+		&& Fleet->GetActiveFleetSessionID() != HoverLayerFleetSessionID)
+	{
+		ResetHoverLayerPlan(TEXT("机群会话已变化，请重新生成分层。"));
+		return;
+	}
+
+	SetRightPanelText(
+		TEXT("TXT_HoverTargetSummary"),
+		FString::Printf(TEXT("目标：当前选择 %d 架"), GetCommandTargetDroneIDs().Num()));
+	SetRightPanelText(
+		TEXT("TXT_HoverLayerSummary"),
+		HoverLayers.IsEmpty()
+			? FString::Printf(TEXT("尚未生成分层｜安全间距 %.1f m"), HoverLayerMinimumSpacingMeters)
+			: FString::Printf(
+				TEXT("已生成 %d 层｜共 %d 架｜安全间距 %.1f m｜%s"),
+				HoverLayers.Num(),
+				HoverLayerBaseDroneIDs.Num(),
+				HoverLayerMinimumSpacingMeters,
+				*HoverLayerPositionSource));
+	SetRightPanelText(TEXT("TXT_HoverTestStatus"), HoverTestStatus);
+
+	const UGameInstance* GameInstance = GetGameInstance();
+	const UDSPGCSProductionCommandProviderSubsystem* Commands = GameInstance
+		? GameInstance->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>()
+		: nullptr;
+	const UDSPGCSProductionTelemetryProviderSubsystem* Telemetry = GameInstance
+		? GameInstance->GetSubsystem<UDSPGCSProductionTelemetryProviderSubsystem>()
+		: nullptr;
+	const bool bProductionReady = Commands && Commands->IsEnabled()
+		&& Telemetry && Telemetry->IsEnabled()
+		&& Telemetry->IsTelemetryLinkConnected();
+	const bool bLayerActionReady = bProductionReady
+		&& ActiveHoverLayerOptionIndex > 0
+		&& HoverLayers.IsValidIndex(ActiveHoverLayerOptionIndex - 1)
+		&& HaveSameDroneIDs(
+			GetCommandTargetDroneIDs(),
+			HoverLayers[ActiveHoverLayerOptionIndex - 1]);
+	for (const FName ButtonName :
+		{ FName(TEXT("BTN_HoverUnlock")),
+		  FName(TEXT("BTN_HoverTakeoff")),
+		  FName(TEXT("BTN_HoverLand")),
+		  FName(TEXT("BTN_HoverLock")),
+		  FName(TEXT("BTN_HoverManual")) })
+	{
+		if (UButton* Button = FindRightPanelButton(ButtonName))
+		{
+			Button->SetIsEnabled(bLayerActionReady);
+		}
+	}
+	if (UButton* Button = HoverGenerateLayersButton.Get())
+	{
+		Button->SetIsEnabled(!IsCommandSelectionMutationBlocked());
+	}
+}
+
 void UGCSUIBridgeSubsystem::SetFleetButtonLabel(
 	const FName ButtonName,
 	const FString& Value) const
@@ -3859,6 +4642,7 @@ void UGCSUIBridgeSubsystem::RefreshFromFleet()
 	{
 		UpdateDroneInfo(SelectedDrone);
 	}
+	RefreshHoverTestControls();
 }
 
 void UGCSUIBridgeSubsystem::RefreshFleetRows(
@@ -4093,6 +4877,12 @@ UCheckBox* UGCSUIBridgeSubsystem::FindRightPanelCheckBox(const FName Name) const
 UTextBlock* UGCSUIBridgeSubsystem::FindRightPanelText(const FName Name) const
 {
 	return FGCSUIWidgetPresenter::FindText(RightPanelWidget.Get(), Name);
+}
+
+UWidget* UGCSUIBridgeSubsystem::FindRightPanelWidget(const FName Name) const
+{
+	UUserWidget* Panel = RightPanelWidget.Get();
+	return Panel && Panel->WidgetTree ? Panel->WidgetTree->FindWidget(Name) : nullptr;
 }
 
 UTextBlock* UGCSUIBridgeSubsystem::FindText(const FName Name) const
@@ -5021,6 +5811,14 @@ void UGCSUIBridgeSubsystem::BindRoutePlaybackControls()
 
 void UGCSUIBridgeSubsystem::OpenRouteImport()
 {
+	// A top-level UI opening must cancel any scene gesture that may have started
+	// on the same mouse interaction.
+	EndMarqueeCameraLock();
+	bMarqueePointerDown = false;
+	bMarqueeSelecting = false;
+	bMarqueeLeftMouseWasDown = false;
+	UpdateSelectionRectangleVisual(FVector2D::ZeroVector, FVector2D::ZeroVector, false);
+
 	UUserWidget* ImportWidget = RouteImportWidget.Get();
 	if (!ImportWidget)
 	{
@@ -5056,6 +5854,9 @@ void UGCSUIBridgeSubsystem::OpenRouteImport()
 				TEXT("[RoutePreviewUI] RouteImport requires Canvas_RouteImport root and BORDER_RouteImport Canvas slot."));
 			return;
 		}
+		// The root canvas fills the viewport for layout only. It must not block
+		// the toolbar or the authored controls inside BORDER_RouteImport.
+		RootWidget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 
 		// AddToViewport's default slot stretches the root canvas across the live
 		// viewport. Center only the authored 420x400 border inside that canvas;
@@ -5068,7 +5869,7 @@ void UGCSUIBridgeSubsystem::OpenRouteImport()
 		RouteImportWidget = ImportWidget;
 	}
 
-	ImportWidget->SetVisibility(ESlateVisibility::Visible);
+	ImportWidget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	RefreshRouteImportMetadata();
 }
 
@@ -5635,8 +6436,6 @@ void UGCSUIBridgeSubsystem::CreateNavigationPages()
 {
 	MapPageWidget = CreateNavigationPage(
 		TEXT("/Game/UI/WBP_GCS_PageMap.WBP_GCS_PageMap_C"));
-	SettingsPageWidget = CreateNavigationPage(
-		TEXT("/Game/UI/WBP_GCS_PageSettings.WBP_GCS_PageSettings_C"));
 	LogsPageWidget = CreateNavigationPage(
 		TEXT("/Game/UI/WBP_GCS_PageLogs.WBP_GCS_PageLogs_C"));
 	ConfigureTelemetryTableInput();
@@ -5705,6 +6504,65 @@ void UGCSUIBridgeSubsystem::ConfigureTelemetryTableInput() const
 			Error,
 			TEXT("LV_Telemetry must remain vertical so it owns the mouse wheel."));
 	}
+}
+
+void UGCSUIBridgeSubsystem::UpdateTelemetryHorizontalScrollInput(
+	APlayerController* PlayerController)
+{
+	UUserWidget* LogsPage = LogsPageWidget.Get();
+	UScrollBox* HorizontalScroll = LogsPage && LogsPage->IsVisible() && LogsPage->WidgetTree
+		? Cast<UScrollBox>(LogsPage->WidgetTree->FindWidget(TEXT("SB_Table_H")))
+		: nullptr;
+	const bool bRightMouseDown = PlayerController
+		&& PlayerController->IsInputKeyDown(EKeys::RightMouseButton);
+	const FVector2D ScreenPosition = FSlateApplication::IsInitialized()
+		? FSlateApplication::Get().GetCursorPos()
+		: FVector2D::ZeroVector;
+
+	if (bRightMouseDown && !bTelemetryRightMouseWasDown)
+	{
+		bTelemetryRightMouseWasDown = true;
+		if (IsVisibleWidgetUnderLocation(HorizontalScroll, ScreenPosition))
+		{
+			bTelemetryHorizontalDragging = true;
+			TelemetryHorizontalDragLastLocalPosition =
+				HorizontalScroll->GetCachedGeometry().AbsoluteToLocal(ScreenPosition);
+		}
+	}
+
+	if (bRightMouseDown && bTelemetryHorizontalDragging)
+	{
+		if (!HorizontalScroll)
+		{
+			ResetTelemetryHorizontalDrag();
+			return;
+		}
+
+		const FVector2D CurrentLocalPosition =
+			HorizontalScroll->GetCachedGeometry().AbsoluteToLocal(ScreenPosition);
+		const float HorizontalDelta =
+			CurrentLocalPosition.X - TelemetryHorizontalDragLastLocalPosition.X;
+		if (!FMath::IsNearlyZero(HorizontalDelta))
+		{
+			HorizontalScroll->SetScrollOffset(FMath::Clamp(
+				HorizontalScroll->GetScrollOffset() - HorizontalDelta,
+				0.0f,
+				HorizontalScroll->GetScrollOffsetOfEnd()));
+		}
+		TelemetryHorizontalDragLastLocalPosition = CurrentLocalPosition;
+	}
+
+	if (!bRightMouseDown && bTelemetryRightMouseWasDown)
+	{
+		ResetTelemetryHorizontalDrag();
+	}
+}
+
+void UGCSUIBridgeSubsystem::ResetTelemetryHorizontalDrag()
+{
+	bTelemetryRightMouseWasDown = false;
+	bTelemetryHorizontalDragging = false;
+	TelemetryHorizontalDragLastLocalPosition = FVector2D::ZeroVector;
 }
 
 void UGCSUIBridgeSubsystem::TickTelemetryTableUI(const float DeltaSeconds)
@@ -5873,9 +6731,10 @@ void UGCSUIBridgeSubsystem::RefreshTelemetryTableFromProduction()
 
 void UGCSUIBridgeSubsystem::ResetNavigationPages()
 {
+	ResetTelemetryHorizontalDrag();
 	ResetTelemetryFilter();
 	for (TWeakObjectPtr<UUserWidget>* Page :
-		{ &MapPageWidget, &SettingsPageWidget, &LogsPageWidget })
+		{ &MapPageWidget, &LogsPageWidget })
 	{
 		if (UUserWidget* Widget = Page->Get())
 		{
@@ -5888,14 +6747,9 @@ void UGCSUIBridgeSubsystem::ResetNavigationPages()
 
 void UGCSUIBridgeSubsystem::ShowMainPage(const EGCSMainPage Page)
 {
-	const bool bToggleOffActiveNavigationPage =
-		ActivePage == Page
-		&& (Page == EGCSMainPage::Map
-			|| Page == EGCSMainPage::Settings
-			|| Page == EGCSMainPage::Logs);
-	ActivePage = bToggleOffActiveNavigationPage ? EGCSMainPage::Fleet : Page;
+	ActivePage = Page;
 	bPanelsExpanded = true;
-	ApplyNavigationPageVisibility();
+	ApplyNavigationVisibility();
 }
 
 void UGCSUIBridgeSubsystem::ApplyNavigationVisibility()
@@ -5909,25 +6763,8 @@ void UGCSUIBridgeSubsystem::ApplyNavigationVisibility()
 
 	FGCSUIWidgetPresenter::SetWidgetVisible(FleetPanelWidget, bShowFleet);
 	FGCSUIWidgetPresenter::SetWidgetVisible(DroneDetailWidget, bShowDroneDetail);
-	ApplyNavigationPageVisibility();
 
 	UE_LOG(LogTemp, Log, TEXT("GCS UI navigation changed to page %d"), static_cast<int32>(ActivePage));
-}
-
-void UGCSUIBridgeSubsystem::ApplyNavigationPageVisibility()
-{
-	FGCSUIWidgetPresenter::SetWidgetVisible(
-		MapPageWidget,
-		ActivePage == EGCSMainPage::Map,
-		true);
-	FGCSUIWidgetPresenter::SetWidgetVisible(
-		SettingsPageWidget,
-		ActivePage == EGCSMainPage::Settings,
-		true);
-	FGCSUIWidgetPresenter::SetWidgetVisible(
-		LogsPageWidget,
-		ActivePage == EGCSMainPage::Logs,
-		true);
 }
 
 UUserWidget* UGCSUIBridgeSubsystem::CreateNavigationPage(
