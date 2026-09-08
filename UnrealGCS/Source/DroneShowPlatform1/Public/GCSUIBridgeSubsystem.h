@@ -18,7 +18,6 @@ class ACameraActor;
 class AActor;
 class ADroneFleetVisualizationActor;
 class APlayerController;
-class UGCSDroneRowView;
 class UGCSFleetRowCheckBinding;
 class UGCSRouteWorkflowCoordinator;
 class UGCSTelemetryFilterController;
@@ -76,7 +75,7 @@ public:
 	bool IsCommandSelectionMutationBlocked() const;
 
 #if WITH_DEV_AUTOMATION_TESTS
-	void ToggleFleetSelectAllForTest() { HandleFleetSelectAllClicked(); }
+	void SelectAllEligibleFleetForTest() { HandleFleetSelectAllCheckStateChanged(true); }
 	void RefreshFleetSelectAllForTest() { RefreshFleetSelectAll(); }
 	void RebindFleetPanelButtonsForTest() { BindFleetPanelButtons(); }
 	void BindUploadDashboardForTest(UUserWidget* MainWidget, UUserWidget* RightToolbar);
@@ -271,31 +270,7 @@ private:
 	void HandleStopClicked();
 
 	UFUNCTION()
-	void HandleFleetRow1SelectionClicked();
-
-	UFUNCTION()
-	void HandleFleetRow2SelectionClicked();
-
-	UFUNCTION()
-	void HandleFleetRow3SelectionClicked();
-
-	UFUNCTION()
-	void HandleFleetRow4SelectionClicked();
-
-	UFUNCTION()
-	void HandleFleetRow5SelectionClicked();
-
-	UFUNCTION()
-	void HandleFleetSelectAllClicked();
-
-	UFUNCTION()
 	void HandleFleetSelectAllCheckStateChanged(bool bIsChecked);
-
-	UFUNCTION()
-	void HandleFleetPreviousPageClicked();
-
-	UFUNCTION()
-	void HandleFleetNextPageClicked();
 
 	UFUNCTION()
 	void HandleHoverAltitudeMinusClicked();
@@ -365,7 +340,6 @@ private:
 	void HandleUploadDashboardRestoreClicked();
 
 	UButton* FindButton(const FName Name) const;
-	UButton* FindFleetButton(const FName Name) const;
 	UButton* FindToolbarButton(const FName Name) const;
 	UButton* FindRightPanelButton(const FName Name) const;
 	USpinBox* FindRightPanelSpinBox(const FName Name) const;
@@ -377,19 +351,11 @@ private:
 	UTextBlock* FindTopBarText(const FName Name) const;
 	void SetText(const FName Name, const FString& Value) const;
 	void SetFleetText(const FName Name, const FString& Value) const;
-	void SetFleetStatus(
-		FName Name,
-		const FString& Value,
-		const FLinearColor& Color) const;
 	void SetTopBarText(const FName Name, const FString& Value) const;
 	void SetRightPanelText(const FName Name, const FString& Value) const;
 	void RefreshFromFleet();
 	void RefreshProductionCommandAvailability();
 	EDSPGCSTelemetryLinkState GetProductionTelemetryLinkState() const;
-	void RefreshFleetRows(
-		const TArray<FDroneData>& Drones,
-		int32 TotalCount,
-		const FString& CurrentSelectedDroneID);
 	void RefreshFleetListRows(
 		const TArray<FDroneData>& Drones,
 		int32 TotalCount,
@@ -402,17 +368,6 @@ private:
 	void HandleFleetListDetailClicked(UObject* RowObject);
 	TArray<FString> BuildEligibleOnlineCommandDroneIDs() const;
 	bool IsExactCommandSelection(const TArray<FString>& EligibleDroneIDs) const;
-	FReply HandleFleetRowMouseButtonDown(
-		const FGeometry& Geometry,
-		const FPointerEvent& MouseEvent,
-		int32 RowIndex);
-	void HandleFleetRowDetailClicked(int32 RowIndex);
-	void HandleFleetRowSelectionClicked(int32 RowIndex);
-	void InitializeFleetRowViews();
-	void UpdateFleetRowView(
-		int32 RowIndex,
-		const FString& DroneID,
-		const FString& CurrentSelectedDroneID);
 	FString SubmitSelectedProductionCommand(
 		EGCSProductionCommandType CommandType,
 		const FGCSProductionCommandParameters& Parameters = {});
@@ -436,14 +391,12 @@ private:
 	bool TryReadHoverAltitude(FString& OutError);
 	bool PrepareHoverLayerAction(FString& OutError, bool bRequireCurrentSpacing);
 	void ApplyHoverLayerSelection(int32 ComboOptionIndex);
-	void SetFleetButtonLabel(FName ButtonName, const FString& Value) const;
 	void SetLegacyHoverSelectionVisible(bool bVisible) const;
 	void RegisterMarqueeInputProcessor();
 	void UnregisterMarqueeInputProcessor();
 	void PollMarqueePlayerControllerInput();
 	void TickRoutePlaybackUI(float DeltaSeconds);
 	void TickTimeControlUI(float DeltaSeconds);
-	bool BeginScheduledRoutePreview(FString& OutError);
 	void ResetTimeControlPreparationState();
 	void RefreshTimeControlPreparationStatus(const FString& Prefix = {});
 	void BeginMarqueeCameraLock(APlayerController* PlayerController);
@@ -574,7 +527,6 @@ private:
 	FString LastCommandResultText;
 	FString SelectedRouteImportFilePath;
 	TSet<FString> SelectedCommandDroneIDs;
-	TArray<FString> CurrentFleetPageDroneIDs;
 	TWeakObjectPtr<class UListView> FleetListView;
 	TWeakObjectPtr<UCheckBox> FleetSelectAllCheckBox;
 	TMap<TWeakObjectPtr<UUserWidget>, TWeakObjectPtr<UGCSFleetRowCheckBinding>>
@@ -601,9 +553,6 @@ private:
 	float RouteUIRefreshAccumulator = 0.0f;
 	float TimeControlUIRefreshAccumulator = 0.0f;
 	bool bTimeControlCountdownActive = false;
-	bool bTimeControlPerformanceActive = false;
-	double TimeControlPerformanceElapsedSeconds = 0.0;
-	int64 TimeControlPreviewDatasetGeneration = INDEX_NONE;
 	FDateTime ScheduledTimeLocal;
 	TArray<FString> TimeControlTargetDroneIDs;
 	TSet<FString> TimeControlScheduleSentDroneIDs;
@@ -642,9 +591,6 @@ private:
 	bool bHasPreviousTopDownControlRotation = false;
 
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<UGCSDroneRowView>> FleetRowViews;
-
-	UPROPERTY(Transient)
 	TMap<FString, TObjectPtr<UObject>> FleetListRowObjects;
 
 	UPROPERTY(Transient)
@@ -679,8 +625,6 @@ private:
 	int32 UploadDashboardToggleCountForTest = 0;
 #endif
 
-	int32 FleetPageOffset = 0;
-	static constexpr int32 FleetPageSize = 5;
 	static constexpr float MarqueeDragThresholdPixels = 5.0f;
 	static constexpr float TopDownZoomFactor = 0.85f;
 	static constexpr float TopDownMinOrthoWidthFactor = 0.03f;

@@ -37,12 +37,19 @@ namespace
 	constexpr float FlightMarkerTargetPixels = 6.0f;
 	constexpr float FlightMarkerMinWorldSize = 24.0f;
 	constexpr float FlightMarkerMaxWorldSize = 64.0f;
-	constexpr float FlightMarkerUpdateIntervalSeconds = 0.05f;
+	constexpr float LivePositionUpdateIntervalSeconds = 1.0f / 60.0f;
+	constexpr int64 LivePositionInterpolationDelayMs = 300;
 	constexpr float FlightMarkerInterpolationSpeed = 8.0f;
 	constexpr float FlightMarkerWriteThreshold = 0.25f;
 	constexpr float DroneSphereWorldDiameterUU = 30.0f;
 	constexpr float EnterMeshProjectedDiameterPixels = 14.0f;
 	constexpr float ExitMeshProjectedDiameterPixels = 10.0f;
+
+	int64 UtcNowMilliseconds()
+	{
+		const FDateTime Now = FDateTime::UtcNow();
+		return Now.ToUnixTimestamp() * 1000 + Now.GetMillisecond();
+	}
 }
 
 ADroneFleetVisualizationActor::ADroneFleetVisualizationActor()
@@ -50,7 +57,7 @@ ADroneFleetVisualizationActor::ADroneFleetVisualizationActor()
 	// One bounded global update keeps the shared marker renderer screen-readable.
 	// This remains independent of fleet size and never creates per-drone ticks.
 	PrimaryActorTick.bCanEverTick = true;
-	PrimaryActorTick.TickInterval = FlightMarkerUpdateIntervalSeconds;
+	PrimaryActorTick.TickInterval = LivePositionUpdateIntervalSeconds;
 	SetAutoDestroyWhenFinished(false);
 	InitialLifeSpan = 0.0f;
 
@@ -111,6 +118,7 @@ void ADroneFleetVisualizationActor::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	FlushDeferredNiagaraArrayRebind();
+	UpdateLiveInterpolatedPositions(UtcNowMilliseconds(), true);
 	UpdateAdaptiveFlightMarkerSize(DeltaSeconds);
 }
 
@@ -765,6 +773,7 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 	TArray<FDroneData> OrderedDrones;
 	TArray<FString> NewParticleDroneIDs;
 	TArray<FLinearColor> NewDroneColors;
+	TSet<FString> ActiveLiveDroneIDs;
 	if (Fleet)
 	{
 		// GetDronePage 保留 Fleet DroneOrder，因此 ParticleIndex -> DroneID 映射稳定。
@@ -772,17 +781,21 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 		OrderedDrones = Fleet->GetDronePage(0, Fleet->GetDroneCount());
 		NewParticleDroneIDs.Reserve(OrderedDrones.Num());
 		NewDroneColors.Reserve(OrderedDrones.Num());
+		ActiveLiveDroneIDs.Reserve(OrderedDrones.Num());
 		DronePositions.SetNumZeroed(OrderedDrones.Num());
 
 		const FFleetGeoOrigin FleetGeoOrigin = Fleet->GetFleetGeoOrigin();
 		UpdateOriginWorldPosition(FleetGeoOrigin);
-		FBox FleetVisualBounds(ForceInit);
 		for (int32 Index = 0; Index < OrderedDrones.Num(); ++Index)
 		{
 			const FDroneData& Drone = OrderedDrones[Index];
 			NewParticleDroneIDs.Add(Drone.DroneID);
+			ActiveLiveDroneIDs.Add(Drone.DroneID);
 			const FLinearColor* ExistingColor = ExistingColorsByDroneID.Find(Drone.DroneID);
-			NewDroneColors.Add(ExistingColor ? *ExistingColor : Drone.LEDColor);
+			NewDroneColors.Add(
+				Drone.bLEDColorValid
+					? Drone.LEDColor
+					: (ExistingColor ? *ExistingColor : Drone.LEDColor));
 
 			// FleetGeoOrigin 尚未建立时，任何后续无人机都不能抢占逻辑原点。
 			// 单机 GPS 无效时必须回到 ZeroVector，禁止保留历史坐标或使用索引占位。
@@ -790,29 +803,66 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 				&& bOriginWorldPositionInitialized
 				&& DroneGPS::IsValid(Drone))
 			{
-				DronePositions[Index] = ConvertDroneGPSPosition(Drone, FleetGeoOrigin);
-				FleetVisualBounds += DronePositions[Index];
+				const FVector SampleWorldPosition = ConvertDroneGPSPosition(Drone, FleetGeoOrigin);
+				CaptureLivePositionSample(
+					Drone.DroneID,
+					SampleWorldPosition,
+					Drone.GPSSampleTimestampUtcMs);
+				if (const FLivePositionInterpolationState* State = LivePositionStates.Find(Drone.DroneID))
+				{
+					DronePositions[Index] = State->RenderPosition;
+				}
+			}
+			else
+			{
+				LivePositionStates.Remove(Drone.DroneID);
 			}
 		}
 
-		if (FleetVisualBounds.IsValid)
+		for (auto StateIterator = LivePositionStates.CreateIterator(); StateIterator; ++StateIterator)
 		{
-			CachedFleetVisualCenter = FleetVisualBounds.GetCenter();
-			bCachedFleetVisualCenterValid = true;
+			if (!ActiveLiveDroneIDs.Contains(StateIterator.Key()))
+			{
+				StateIterator.RemoveCurrent();
+			}
 		}
 
 		// Offline 只改变状态，不删除粒子，也不改变 DroneOrder -> ParticleIndex 映射。
 	}
+	else
+	{
+		LivePositionStates.Reset();
+	}
 
-	if (ParticleDroneIDs != NewParticleDroneIDs
+	const bool bParticleLayoutChanged = ParticleDroneIDs != NewParticleDroneIDs
 		|| DroneColors.Num() != NewDroneColors.Num()
 		|| DroneDisplayIDs.Num() != NewParticleDroneIDs.Num()
-		|| DroneSelectedMasks.Num() != NewParticleDroneIDs.Num())
+		|| DroneSelectedMasks.Num() != NewParticleDroneIDs.Num();
+	const bool bColorsChanged = DroneColors != NewDroneColors;
+	if (bParticleLayoutChanged)
 	{
 		ParticleDroneIDs = MoveTemp(NewParticleDroneIDs);
+		RebuildDroneLabelAttributes();
+	}
+	if (bColorsChanged)
+	{
 		DroneColors = MoveTemp(NewDroneColors);
 		bDroneColorsDirty = true;
-		RebuildDroneLabelAttributes();
+	}
+
+	UpdateLiveInterpolatedPositions(UtcNowMilliseconds(), false);
+	FBox FleetVisualBounds(ForceInit);
+	for (int32 Index = 0; Index < OrderedDrones.Num() && Index < DronePositions.Num(); ++Index)
+	{
+		if (DroneGPS::IsValid(OrderedDrones[Index]))
+		{
+			FleetVisualBounds += DronePositions[Index];
+		}
+	}
+	if (FleetVisualBounds.IsValid)
+	{
+		CachedFleetVisualCenter = FleetVisualBounds.GetCenter();
+		bCachedFleetVisualCenterValid = true;
 	}
 
 	PushArraysToNiagara();
@@ -946,6 +996,112 @@ void ADroneFleetVisualizationActor::CacheCesiumGeoreference()
 	}
 }
 
+void ADroneFleetVisualizationActor::CaptureLivePositionSample(
+	const FString& DroneID,
+	const FVector& WorldPosition,
+	const int64 TimestampUtcMs)
+{
+	FLivePositionInterpolationState& State = LivePositionStates.FindOrAdd(DroneID);
+	if (TimestampUtcMs <= 0)
+	{
+		// Legacy/mock inputs have no sample time. Preserve their established
+		// immediate-position behavior instead of fabricating timing information.
+		State.bInitialized = true;
+		State.bHasPrevious = false;
+		State.Latest.TimestampUtcMs = 0;
+		State.Latest.WorldPosition = WorldPosition;
+		State.RenderPosition = WorldPosition;
+		return;
+	}
+
+	if (!State.bInitialized)
+	{
+		State.bInitialized = true;
+		State.bHasPrevious = false;
+		State.Latest.TimestampUtcMs = TimestampUtcMs;
+		State.Latest.WorldPosition = WorldPosition;
+		State.RenderPosition = WorldPosition;
+		return;
+	}
+
+	if (TimestampUtcMs < State.Latest.TimestampUtcMs)
+	{
+		// UDP snapshots can arrive out of order. Never rewind the live target.
+		return;
+	}
+	if (TimestampUtcMs == State.Latest.TimestampUtcMs)
+	{
+		State.Latest.WorldPosition = WorldPosition;
+		if (!State.bHasPrevious)
+		{
+			State.RenderPosition = WorldPosition;
+		}
+		return;
+	}
+
+	State.Previous = State.Latest;
+	State.Latest.TimestampUtcMs = TimestampUtcMs;
+	State.Latest.WorldPosition = WorldPosition;
+	State.bHasPrevious = true;
+}
+
+bool ADroneFleetVisualizationActor::UpdateLiveInterpolatedPositions(
+	const int64 NowUtcMs,
+	const bool bPushToNiagara)
+{
+	if (VisualizationMode != EGCSVisualizationMode::Live)
+	{
+		return false;
+	}
+
+	const int64 RenderTimestampUtcMs = NowUtcMs - LivePositionInterpolationDelayMs;
+	bool bAnyPositionChanged = false;
+	for (int32 Index = 0; Index < ParticleDroneIDs.Num() && Index < DronePositions.Num(); ++Index)
+	{
+		FLivePositionInterpolationState* State = LivePositionStates.Find(ParticleDroneIDs[Index]);
+		if (!State || !State->bInitialized)
+		{
+			continue;
+		}
+
+		FVector NewRenderPosition = State->Latest.WorldPosition;
+		if (State->bHasPrevious
+			&& State->Previous.TimestampUtcMs > 0
+			&& State->Latest.TimestampUtcMs > State->Previous.TimestampUtcMs)
+		{
+			const double Alpha = FMath::Clamp(
+				static_cast<double>(RenderTimestampUtcMs - State->Previous.TimestampUtcMs)
+					/ static_cast<double>(State->Latest.TimestampUtcMs - State->Previous.TimestampUtcMs),
+				0.0,
+				1.0);
+			NewRenderPosition = FMath::Lerp(
+				State->Previous.WorldPosition,
+				State->Latest.WorldPosition,
+				Alpha);
+		}
+
+		State->RenderPosition = NewRenderPosition;
+		if (!DronePositions[Index].Equals(NewRenderPosition, 0.01))
+		{
+			DronePositions[Index] = NewRenderPosition;
+			bAnyPositionChanged = true;
+		}
+	}
+
+	if (bAnyPositionChanged && bPushToNiagara)
+	{
+		PushDronePositionsToNiagara();
+	}
+	return bAnyPositionChanged;
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+void ADroneFleetVisualizationActor::AdvanceLiveInterpolationForTest(const int64 NowUtcMs)
+{
+	UpdateLiveInterpolatedPositions(NowUtcMs, false);
+}
+#endif
+
 bool ADroneFleetVisualizationActor::TryGetGeographicTangentBasis(
 	FVector& OutOriginWorld,
 	FVector& OutEastWorld,
@@ -1027,6 +1183,7 @@ void ADroneFleetVisualizationActor::UpdateOriginWorldPosition(const FFleetGeoOri
 {
 	if (!FleetGeoOrigin.bOriginInitialized)
 	{
+		LivePositionStates.Reset();
 		bOriginWorldPositionInitialized = false;
 		OriginWorldPosition = FVector::ZeroVector;
 		GeographicOriginWorldPosition = FVector::ZeroVector;
@@ -1037,6 +1194,7 @@ void ADroneFleetVisualizationActor::UpdateOriginWorldPosition(const FFleetGeoOri
 	ACesiumGeoreference* Georeference = CesiumGeoreference.Get();
 	if (!Georeference)
 	{
+		LivePositionStates.Reset();
 		bOriginWorldPositionInitialized = false;
 		OriginWorldPosition = FVector::ZeroVector;
 		GeographicOriginWorldPosition = FVector::ZeroVector;
@@ -1056,6 +1214,10 @@ void ADroneFleetVisualizationActor::UpdateOriginWorldPosition(const FFleetGeoOri
 		return;
 	}
 
+	// Position samples are expressed in the current display basis. A changed
+	// fixed pile, geographic origin, or actor anchor invalidates the old basis.
+	LivePositionStates.Reset();
+
 	// FleetGeoOrigin 是机群逻辑原点；CesiumGeoreference 是地图坐标参考。
 	// 此处只读取 Cesium 转换结果，绝不移动或重设整个 Cesium 世界的 Origin。
 	const double HeightMeters = FleetGeoOrigin.bOriginAltitudeValid
@@ -1070,6 +1232,7 @@ void ADroneFleetVisualizationActor::UpdateOriginWorldPosition(const FFleetGeoOri
 		Georeference->GetActorTransform().TransformPosition(GeoreferencePosition);
 	if (GeographicOriginWorldPosition.ContainsNaN())
 	{
+		LivePositionStates.Reset();
 		OriginWorldPosition = FVector::ZeroVector;
 		GeographicOriginWorldPosition = FVector::ZeroVector;
 		bOriginWorldPositionInitialized = false;
@@ -1232,6 +1395,18 @@ void ADroneFleetVisualizationActor::PushDroneLabelAttributesToNiagara()
 	bDroneLabelAttributesDirty = false;
 }
 
+void ADroneFleetVisualizationActor::PushDronePositionsToNiagara()
+{
+	if (!DroneFleetNiagara || !DroneFleetNiagara->GetAsset())
+	{
+		return;
+	}
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayPosition(
+		DroneFleetNiagara,
+		DronePositionsParameter,
+		DronePositions);
+}
+
 bool ADroneFleetVisualizationActor::PushDroneColorsToNiagara()
 {
 	if (!bDroneColorsDirty || !DroneFleetNiagara || !DroneFleetNiagara->GetAsset())
@@ -1281,10 +1456,7 @@ void ADroneFleetVisualizationActor::PushArraysToNiagara()
 	const int32 NewDroneCount = DronePositions.Num();
 	const bool bCountChanged = LastPushedDroneCount != NewDroneCount;
 	DroneFleetNiagara->SetVariableInt(DroneCountParameter, NewDroneCount);
-	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayPosition(
-		DroneFleetNiagara,
-		DronePositionsParameter,
-		DronePositions);
+	PushDronePositionsToNiagara();
 	PushDroneColorsToNiagara();
 	PushDroneLabelAttributesToNiagara();
 
@@ -1639,6 +1811,7 @@ void ADroneFleetVisualizationActor::ExitRoutePreview()
 	}
 
 	VisualizationMode = EGCSVisualizationMode::Live;
+	LivePositionStates.Reset();
 	UpdatePrimaryDroneRendererVisibility();
 	bRoutePreviewOriginWorldPositionInitialized = false;
 	RoutePreviewOriginWorldPosition = FVector::ZeroVector;

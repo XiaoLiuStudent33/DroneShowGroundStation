@@ -74,7 +74,6 @@ bool FGCSScheduledShowPreviewTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Explicit show profile is 10 Hz"), Preview->GetSampleRateHz(), 10.0);
 	TestEqual(TEXT("21 frames span 2 seconds"), Preview->GetDurationSeconds(), 2.0);
 	TestTrue(TEXT("Earlier manual inspection"), Preview->SeekToFrame(15, Error));
-	Bridge->TimeControlPreviewDatasetGeneration = Preview->GetRouteDatasetGeneration();
 	Bridge->ScheduledTimeLocal = FDateTime::Now() + FTimespan::FromSeconds(3.0);
 	Bridge->bTimeControlCountdownActive = true;
 	Bridge->TickTimeControlUI(0.2f);
@@ -82,34 +81,14 @@ bool FGCSScheduledShowPreviewTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Waiting task displays real remaining time"), Elapsed->GetText().ToString(), FString(TEXT("00:00:03")));
 	Bridge->ScheduledTimeLocal = FDateTime::Now() - FTimespan::FromSeconds(1.0);
 	Bridge->TickTimeControlUI(0.2f);
-	TestTrue(TEXT("Scheduled tick starts playback without pressing Play"),
+	TestTrue(TEXT("Scheduled tick does not start NPZ playback"),
+		Preview->GetPlaybackState() != ERoutePreviewPlaybackState::Playing);
+	TestEqual(TEXT("Scheduled tick preserves inspection cursor"), Preview->GetCurrentFrame(), 15);
+	TestEqual(TEXT("At scheduled time label remains countdown"), Label->GetText().ToString(), FString(TEXT("倒计时")));
+	TestEqual(TEXT("Countdown stops at zero"), Elapsed->GetText().ToString(), FString(TEXT("00:00:00")));
+	Bridge->HandleRoutePlayClicked();
+	TestTrue(TEXT("Bottom playback control still starts NPZ manually"),
 		Preview->GetPlaybackState() == ERoutePreviewPlaybackState::Playing);
-	TestEqual(TEXT("Starts at Frame 0, not inspection cursor"), Preview->GetCurrentFrame(), 0);
-	TestEqual(TEXT("At scheduled time label switches to performance"), Label->GetText().ToString(), FString(TEXT("表演时间")));
-	TestEqual(TEXT("Performance starts at zero"), Elapsed->GetText().ToString(), FString(TEXT("00:00:00")));
-	TestEqual(TEXT("Both planned drones rendered"), Visualization->GetVisualizationDroneCount(), 2);
-	const FVector InitialPosition = Visualization->GetDronePositions()[0];
-	Preview->TickPlayback(1.0f);
-	Bridge->TickTimeControlUI(0.2f);
-	Bridge->RefreshRoutePlaybackUI();
-	TestEqual(TEXT("One second is ten frames"), Preview->GetCurrentFrame(), 10);
-	TestEqual(TEXT("Count up"), Elapsed->GetText().ToString(), FString(TEXT("00:00:01")));
-	TestEqual(TEXT("Bottom progress advances to half"), Bridge->RouteTimelineSlider->GetValue(), 0.5f);
-	TestFalse(TEXT("Rendered sphere moves along route"), Visualization->GetDronePositions()[0].Equals(InitialPosition));
-	Preview->TickPlayback(1.1f);
-	Bridge->TickTimeControlUI(0.2f);
-	Bridge->RefreshRoutePlaybackUI();
-	TestTrue(TEXT("Route completed"), Preview->GetPlaybackState() == ERoutePreviewPlaybackState::Completed);
-	TestFalse(TEXT("Duration stops at completion"), Bridge->bTimeControlPerformanceActive);
-	TestEqual(TEXT("Final elapsed duration"), Elapsed->GetText().ToString(), FString(TEXT("00:00:02")));
-	TestEqual(TEXT("Bottom progress completes"), Bridge->RouteTimelineSlider->GetValue(), 1.0f);
-	TestTrue(TEXT("Another preview starts"), Bridge->BeginScheduledRoutePreview(Error));
-	Bridge->HandleRoutePauseClicked();
-	Bridge->TickTimeControlUI(0.2f);
-	TestFalse(TEXT("Manual pause detaches scheduled presentation"), Bridge->bTimeControlPerformanceActive);
-	Preview->PreparedRouteData = Fixture;
-	TestTrue(TEXT("Replacement import"), Preview->CommitPreparedRouteForWorkflow(31.9, 118.6, 30.0, false, Error));
-	TestFalse(TEXT("Cannot silently play a replacement dataset"), Bridge->BeginScheduledRoutePreview(Error));
 	return true;
 }
 

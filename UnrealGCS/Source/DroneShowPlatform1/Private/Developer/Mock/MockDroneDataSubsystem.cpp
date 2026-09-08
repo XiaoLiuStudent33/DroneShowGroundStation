@@ -1,7 +1,7 @@
 /**
- * @brief ÊµÏÖ¿ÉÅäÖÃµÄ Mock Fleet ¿ìÕÕÓë¸üĞÂ¡£
+ * @brief å®ç°å¯é…ç½®çš„ Mock Fleet å¿«ç…§ä¸æ›´æ–°ã€‚
  *
- * ·ÖÀà£ºDeveloper Mock£»ÓÃÓÚÎŞ Console/DSP Ê±µÄ UI/Fleet ¿ª·¢£¬¾ø²»×÷Îª Production fallback¡£
+ * åˆ†ç±»ï¼šDeveloper Mockï¼›ç”¨äºæ—  Console/DSP æ—¶çš„ UI/Fleet å¼€å‘ï¼Œç»ä¸ä½œä¸º Production fallbackã€‚
  */
 #include "Developer/Mock/MockDroneDataSubsystem.h"
 
@@ -100,6 +100,7 @@ bool UMockDroneDataSubsystem::Start(UGCSServerAdapterSubsystem& Adapter)
 		DroneData.RSSI = Seed.RSSI;
 		DroneData.bOnline = true;
 		DroneData.LEDColor = Seed.LEDColor;
+		DroneData.bLEDColorValid = true;
 		DroneData.bSelected = Seed.SysID == 1;
 		Snapshot.Drones.Add(MoveTemp(DroneData));
 	}

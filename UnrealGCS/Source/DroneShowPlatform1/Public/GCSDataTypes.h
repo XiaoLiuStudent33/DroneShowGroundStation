@@ -1,9 +1,9 @@
 /**
- * @brief ¶¨Òå UE ÄÚ²¿ Provider -> Adapter -> Fleet µÄ Snapshot/Delta Êı¾İÆõÔ¼¡£
+ * @brief å®šä¹‰ UE å†…éƒ¨ Provider -> Adapter -> Fleet çš„ Snapshot/Delta æ•°æ®å¥‘çº¦ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * ÊäÈë£ºProduction/Mock/Acceptance Provider£»Êä³ö£ºGCSServerAdapter Óë FleetManager¡£
- * ¹Ø¼üÔ¼Êø£ºÕâÊÇ UE ÄÚ²¿Êı¾İÄ£ĞÍ£¬²»ÊÇ DSP-GCS Wire Format¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è¾“å…¥ï¼šProduction/Mock/Acceptance Providerï¼›è¾“å‡ºï¼šGCSServerAdapter ä¸ FleetManagerã€‚
+ * å…³é”®çº¦æŸï¼šè¿™æ˜¯ UE å†…éƒ¨æ•°æ®æ¨¡å‹ï¼Œä¸æ˜¯ DSP-GCS Wire Formatã€‚
  */
 #pragma once
 
@@ -123,6 +123,7 @@ namespace GCSDataDelta
 			Target.GPSLon = Delta.Data.GPSLon;
 			Target.bGPSValid = Delta.Data.bGPSValid;
 			Target.GPSFixType = Delta.Data.GPSFixType;
+			Target.GPSSampleTimestampUtcMs = Delta.Data.GPSSampleTimestampUtcMs;
 		}
 		if (HasField(Delta, EGCSDroneDataField::Altitude))
 		{
@@ -134,7 +135,11 @@ namespace GCSDataDelta
 		if (HasField(Delta, EGCSDroneDataField::Mode)) Target.Mode = Delta.Data.Mode;
 		if (HasField(Delta, EGCSDroneDataField::RSSI)) Target.RSSI = Delta.Data.RSSI;
 		if (HasField(Delta, EGCSDroneDataField::Online)) Target.bOnline = Delta.Data.bOnline;
-		if (HasField(Delta, EGCSDroneDataField::LEDColor)) Target.LEDColor = Delta.Data.LEDColor;
+		if (HasField(Delta, EGCSDroneDataField::LEDColor))
+		{
+			Target.LEDColor = Delta.Data.LEDColor;
+			Target.bLEDColorValid = Delta.Data.bLEDColorValid;
+		}
 	}
 
 	inline void Merge(FDroneDataDelta& Target, const FDroneDataDelta& Source)

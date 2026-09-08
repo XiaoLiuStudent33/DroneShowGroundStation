@@ -2,7 +2,7 @@
 
 Status: CURRENT
 Authority: 当前 UMG 结构、C++ binding 和交互状态边界
-Last Updated: 2026-09-03
+Last Updated: 2026-09-08
 Applies To: `WBP_GCS_*`、`UGCSUIBridgeSubsystem`、`FGCSUIWidgetPresenter`
 
 ## 1. Purpose 与 Authority
@@ -19,10 +19,10 @@ C++不得无理由覆盖Designer geometry。只有修复根Canvas/viewport坐标
 ### Fleet Select-All 与 Command Selection
 
 - `SelectedCommandDroneIDs` 是 Command Selection 的唯一 Authority；详情选择仍由 `FleetManagerSubsystem::CurrentSelectedDroneID` 独立维护。
-- `BTN_FleetSelectALL` 不遍历五行分页 Widget。`UGCSUIBridgeSubsystem` 一次扫描完整 Fleet，构造排序后的非空 Online DroneID 集合，并与当前 Command Selection 做精确集合比较。
-- 非精确相等显示 `X`，点击后原子替换为全体 Online；精确相等显示 `✓`，点击后原子清空。零 Online 时显示 `X` 且 Disabled。
-- Fleet 上下线后按钮从 Authority 重新派生；新上线目标不会被静默加入。活动 AutoStart/Upload Job 期间复用 Route Workflow mutation gate，禁止改变 Frozen targets。
-- 批量替换最多产生一次 `OnCommandSelectionChanged`、一次 Visualization 同步和一次 Fleet 刷新；重复 Bind 使用 Remove/Add，关闭/重开不创建第二套选择状态。
+- `CHK_FleetSelectAll` 不遍历可见行 Widget。`UGCSUIBridgeSubsystem` 一次扫描完整 Fleet，构造排序后的非空 Online DroneID 集合，并与当前 Command Selection 做精确集合比较。
+- 未全选时勾选会原子替换为全体 Online，取消勾选会原子清空；零 Online 时 Disabled。
+- Fleet 上下线后复选框从 Authority 重新派生；新上线目标不会被静默加入。活动 AutoStart/Upload Job 期间复用 Route Workflow mutation gate，禁止改变 Frozen targets。
+- 批量替换最多产生一次 `OnCommandSelectionChanged`、一次 Visualization 同步和一次 Fleet 刷新；重复 Bind 使用唯一委托绑定，关闭/重开不创建第二套选择状态。
 
 ## 2. Startup 与 Main Widget
 
@@ -52,7 +52,9 @@ Main children：
 | `WBP_GCS_Main_V2` | viewport root和child composition |
 | `WBP_GCS_TopBar` | 顶部状态 |
 | `WBP_GCS_LeftToolbar` | Menu/Fleet/Control/Map/Settings/Logs入口 |
-| `WBP_GCS_FleetPanel` | Fleet分页、命令勾选、Selected Count |
+| `WBP_GCS_FleetPanel_V2` | 虚拟化 Fleet ListView、命令复选、Fleet/Selected Count |
+| `WBP_GCS_FleetRow` | 单机行展示、独立命令复选与详情点击区域 |
+| `BP_FleetRowData` | ListView 行数据对象 |
 | `WBP_GCS_DroneDetail` | 单机详情和飞行控制 |
 | `WBP_GCS_RightToolbar` | View/TopDown等视图入口 |
 | `WBP_GCS_RightPanel` | LED颜色控制等右侧功能 |
@@ -80,11 +82,11 @@ Map/Settings/Logs是独立viewport page。点击当前已显示页面会关闭�
 
 ## 5. Selection Semantics
 
-- 点击Fleet row：更新`FleetManager::CurrentSelectedDroneID`，只影响详情。
-- 点击row selector或Marquee：更新`SelectedCommandDroneIDs`，只影响命令目标。
+- 点击 Fleet row 的详情区域：更新`FleetManager::CurrentSelectedDroneID`，只影响详情。
+- 点击 row checkbox 或 Marquee：更新`SelectedCommandDroneIDs`，只影响命令目标。
 - Route Upload 自动分配只消费 `SelectedCommandDroneIDs`；零选择不会回退为全部 Online drones。
 - 两套选择禁止合并。
-- 隐藏Panel不会清空任何选择、分页、Selected Count或Drone detail state。
+- 隐藏 Panel 不会清空任何选择、滚动位置、Selected Count 或 Drone detail state。
 
 ## 6. Commands 与 LED
 

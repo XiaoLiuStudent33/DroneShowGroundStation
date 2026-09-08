@@ -391,6 +391,57 @@ bool FDroneFleetVisualizationBridgeTest::RunTest(const FString& Parameters)
 		Visualization->GetDroneDisplayIDsForTest()[1],
 		12.0f);
 
+	const FDateTime LiveSampleBaseUtc = FDateTime::UtcNow();
+	const int64 LiveSampleBaseUtcMs = LiveSampleBaseUtc.ToUnixTimestamp() * 1000
+		+ LiveSampleBaseUtc.GetMillisecond();
+	FGCSTelemetryBatch FirstLiveSampleBatch;
+	FirstLiveSampleBatch.FleetRevision = 14;
+	FDroneDataDelta FirstLiveSampleDelta;
+	FirstLiveSampleDelta.DroneID = TEXT("Drone050");
+	FirstLiveSampleDelta.ChangedFields = static_cast<int32>(
+		EGCSDroneDataField::GPS
+		| EGCSDroneDataField::Altitude
+		| EGCSDroneDataField::LEDColor);
+	FirstLiveSampleDelta.Data = MakeGPSDrone(50, 31.932961, 118.639021, true);
+	FirstLiveSampleDelta.Data.GPSSampleTimestampUtcMs = LiveSampleBaseUtcMs;
+	FirstLiveSampleDelta.Data.LEDColor = FLinearColor::Red;
+	FirstLiveSampleDelta.Data.bLEDColorValid = true;
+	FirstLiveSampleBatch.Deltas.Add(FirstLiveSampleDelta);
+	TestTrue(TEXT("First timestamped live sample applied"), Fleet->ApplyDeltaBatch(FirstLiveSampleBatch));
+	Visualization->RefreshFromFleet();
+	const FVector FirstLivePosition = Visualization->GetDronePositions()[1];
+	TestTrue(
+		TEXT("Confirmed aircraft LED feedback reaches the visualization color array"),
+		Visualization->GetDroneColorsForTest()[1].Equals(FLinearColor::Red));
+
+	FGCSTelemetryBatch SecondLiveSampleBatch;
+	SecondLiveSampleBatch.FleetRevision = 15;
+	FDroneDataDelta SecondLiveSampleDelta = FirstLiveSampleDelta;
+	SecondLiveSampleDelta.Data = MakeGPSDrone(50, 31.933061, 118.639121, true);
+	SecondLiveSampleDelta.Data.GPSSampleTimestampUtcMs = LiveSampleBaseUtcMs + 250;
+	SecondLiveSampleDelta.Data.LEDColor = FLinearColor::Blue;
+	SecondLiveSampleDelta.Data.bLEDColorValid = true;
+	SecondLiveSampleBatch.Deltas.Add(SecondLiveSampleDelta);
+	TestTrue(TEXT("Second timestamped live sample applied"), Fleet->ApplyDeltaBatch(SecondLiveSampleBatch));
+	Visualization->RefreshFromFleet();
+	TestTrue(
+		TEXT("Stable particle IDs still accept changed confirmed LED feedback"),
+		Visualization->GetDroneColorsForTest()[1].Equals(FLinearColor::Blue));
+	TestTrue(
+		TEXT("Interpolation buffer initially holds the previous real GPS sample"),
+		Visualization->GetDronePositions()[1].Equals(FirstLivePosition, 0.01));
+
+	Visualization->AdvanceLiveInterpolationForTest(LiveSampleBaseUtcMs + 400);
+	const FVector MidLivePosition = Visualization->GetDronePositions()[1];
+	Visualization->AdvanceLiveInterpolationForTest(LiveSampleBaseUtcMs + 550);
+	const FVector FinalLivePosition = Visualization->GetDronePositions()[1];
+	TestFalse(
+		TEXT("A frame between samples advances smoothly from the previous position"),
+		MidLivePosition.Equals(FirstLivePosition, 0.01));
+	TestFalse(
+		TEXT("The intermediate frame has not jumped directly to the latest position"),
+		MidLivePosition.Equals(FinalLivePosition, 0.01));
+
 	TArray<FVector> RouteTargets;
 	RouteTargets.Add(FVector(10.0, 20.0, 30.0));
 	RouteTargets.Add(FVector(40.0, 50.0, 60.0));
@@ -448,7 +499,7 @@ bool FDroneFleetVisualizationBridgeTest::RunTest(const FString& Parameters)
 	UE_LOG(
 		LogTemp,
 		Display,
-		TEXT("[DRONE_FLEET_VIZ_TEST] cesium=PASS originLocked=PASS invalidGPSZero=PASS gpsRecovery=PASS fleet100=PASS"));
+		TEXT("[DRONE_FLEET_VIZ_TEST] cesium=PASS originLocked=PASS invalidGPSZero=PASS gpsRecovery=PASS liveInterpolation=PASS liveColor=PASS fleet100=PASS"));
 
 	World->DestroyActor(Visualization);
 	GameInstance->Shutdown();

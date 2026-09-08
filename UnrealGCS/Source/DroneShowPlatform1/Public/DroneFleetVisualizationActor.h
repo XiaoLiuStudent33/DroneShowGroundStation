@@ -62,6 +62,8 @@ public:
 
 #if WITH_DEV_AUTOMATION_TESTS
 	TArray<float> GetDroneDisplayIDsForTest() const { return DroneDisplayIDs; }
+	TArray<FLinearColor> GetDroneColorsForTest() const { return DroneColors; }
+	void AdvanceLiveInterpolationForTest(int64 NowUtcMs);
 #endif
 
 	/** Updates the Niagara label highlight from the existing command selection authority. */
@@ -189,6 +191,21 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	struct FLivePositionSample
+	{
+		int64 TimestampUtcMs = 0;
+		FVector WorldPosition = FVector::ZeroVector;
+	};
+
+	struct FLivePositionInterpolationState
+	{
+		bool bInitialized = false;
+		bool bHasPrevious = false;
+		FLivePositionSample Previous;
+		FLivePositionSample Latest;
+		FVector RenderPosition = FVector::ZeroVector;
+	};
+
 	UPROPERTY(VisibleAnywhere, Category = "Drone GCS|Visualization")
 	TObjectPtr<USceneComponent> SceneRoot;
 
@@ -230,6 +247,8 @@ private:
 	FString FixedPileDroneID;
 	/** Display-only cache; these live drones are deliberately excluded from upload targets. */
 	TSet<FString> NpzNumberingAnomalyDroneIDs;
+	/** Two real GPS samples per drone; one shared actor tick evaluates all particles. */
+	TMap<FString, FLivePositionInterpolationState> LivePositionStates;
 	EGCSVisualizationMode VisualizationMode = EGCSVisualizationMode::Live;
 
 	/**
@@ -293,6 +312,12 @@ private:
 	void UnbindFleetManager();
 	void CacheCesiumGeoreference();
 	void UpdateOriginWorldPosition(const FFleetGeoOrigin& FleetGeoOrigin);
+	void CaptureLivePositionSample(
+		const FString& DroneID,
+		const FVector& WorldPosition,
+		int64 TimestampUtcMs);
+	bool UpdateLiveInterpolatedPositions(int64 NowUtcMs, bool bPushToNiagara);
+	void PushDronePositionsToNiagara();
 	FVector ConvertDroneGPSPosition(
 		const FDroneData& Drone,
 		const FFleetGeoOrigin& FleetGeoOrigin) const;

@@ -1,8 +1,8 @@
 /**
- * @brief ÊµÏÖ¾É Stage 4.2 Loopback acceptance ÃüÁî/Ò£²âÑéÖ¤Á÷³Ì¡£
+ * @brief å®ç°æ—§ Stage 4.2 Loopback acceptance å‘½ä»¤/é¥æµ‹éªŒè¯æµç¨‹ã€‚
  *
- * ·ÖÀà£ºDeveloper Acceptance£»Óë Console DSPGCSAcceptance Åä¶Ô£¬Ä¬ÈÏ¹Ø±Õ¡£
- * ËüÊÇ²âÊÔ Provider£¬¶ø FDSPGCSLoopbackTransport Í¬Ê±ÈÔÊÇ Production Transport¡£
+ * åˆ†ç±»ï¼šDeveloper Acceptanceï¼›ä¸ Console DSPGCSAcceptance é…å¯¹ï¼Œé»˜è®¤å…³é—­ã€‚
+ * å®ƒæ˜¯æµ‹è¯• Providerï¼Œè€Œ FDSPGCSLoopbackTransport åŒæ—¶ä»æ˜¯ Production Transportã€‚
  */
 #include "Developer/Acceptance/DSPGCSLoopbackProviderSubsystem.h"
 
@@ -40,6 +40,7 @@ namespace
 		Target.GPSLon = Source.gps.longitudeDeg;
 		Target.bGPSValid = Source.gps.valid;
 		Target.GPSFixType = static_cast<int32>(Source.gps.fixType);
+		Target.GPSSampleTimestampUtcMs = Source.sampleTimestampUtcMs;
 		Target.Altitude = Source.altitude.relativeMeters;
 		Target.AltitudeAMSL = Source.altitude.amslMeters;
 		Target.bAltitudeValid = Source.altitude.valid;
@@ -52,6 +53,7 @@ namespace
 			static_cast<float>(Source.led.green) / 255.0f,
 			static_cast<float>(Source.led.blue) / 255.0f,
 			1.0f);
+		Target.bLEDColorValid = Source.led.confirmed;
 		Target.bSelected = bSelected;
 		return Target;
 	}

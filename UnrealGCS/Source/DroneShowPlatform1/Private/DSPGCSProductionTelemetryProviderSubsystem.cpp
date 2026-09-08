@@ -92,6 +92,7 @@ namespace
 		Target.GPSLon = Source.gps.longitudeDeg;
 		Target.bGPSValid = Source.gps.valid;
 		Target.GPSFixType = static_cast<int32>(Source.gps.fixType);
+		Target.GPSSampleTimestampUtcMs = Source.sampleTimestampUtcMs;
 		Target.Altitude = Source.altitude.relativeMeters;
 		Target.AltitudeAMSL = Source.altitude.amslMeters;
 		Target.bAltitudeValid = Source.altitude.valid;
@@ -108,6 +109,7 @@ namespace
 			static_cast<float>(Source.led.green) / 255.0f,
 			static_cast<float>(Source.led.blue) / 255.0f,
 			1.0f);
+		Target.bLEDColorValid = Source.led.confirmed;
 		Target.bSelected = bSelected;
 		return Target;
 	}

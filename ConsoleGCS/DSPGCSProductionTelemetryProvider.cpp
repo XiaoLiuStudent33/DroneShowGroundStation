@@ -126,6 +126,19 @@ namespace
         dto.mdhkStatus.red = status.red;
         dto.mdhkStatus.green = status.green;
         dto.mdhkStatus.blue = status.blue;
+        // MDHK_STATUS (#187) is the flight controller's final logical LED
+        // output. Publish confirmed feedback through the protocol's standard
+        // LED channel so UE renders the real aircraft state instead of an NPZ
+        // preview color.
+        if (status.received)
+        {
+            dto.led.state = dspgcs::LEDState::Static;
+            dto.led.red = status.red;
+            dto.led.green = status.green;
+            dto.led.blue = status.blue;
+            dto.led.brightness = 255;
+            dto.led.confirmed = true;
+        }
         dto.mdhkStatus.flightCustomVersion.assign(
             status.flightCustomVersion.begin(), status.flightCustomVersion.end());
         dto.mdhkStatus.hardwareId = status.hardwareId;

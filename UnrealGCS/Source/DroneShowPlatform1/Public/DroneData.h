@@ -1,9 +1,9 @@
 /**
- * @brief ¶¨Òå UE Fleet/UI/Visualization Ê¹ÓÃµÄµ¥¼ÜÎŞÈË»úÁìÓò¿ìÕÕ¡£
+ * @brief å®šä¹‰ UE Fleet/UI/Visualization ä½¿ç”¨çš„å•æ¶æ— äººæœºé¢†åŸŸå¿«ç…§ã€‚
  *
- * ·ÖÀà£ºProduction¡£
- * ÊäÈë£ºĞ­Òé Provider ×ª»»ºóµÄ×Ö¶Î£»Êä³ö£ºFleetManager¡¢UI Bridge¡¢Cesium/Niagara¡£
- * ¹Ø¼üÔ¼Êø£º¸ÃÀàĞÍ²»±©Â¶ DSP-GCS »ò MAVLink Wire Format Ï¸½Ú¡£
+ * åˆ†ç±»ï¼šProductionã€‚
+ * è¾“å…¥ï¼šåè®® Provider è½¬æ¢åçš„å­—æ®µï¼›è¾“å‡ºï¼šFleetManagerã€UI Bridgeã€Cesium/Niagaraã€‚
+ * å…³é”®çº¦æŸï¼šè¯¥ç±»å‹ä¸æš´éœ² DSP-GCS æˆ– MAVLink Wire Format ç»†èŠ‚ã€‚
  */
 #pragma once
 
@@ -46,6 +46,10 @@ struct DRONESHOWPLATFORM1_API FDroneData
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone|GPS")
 	int32 GPSFixType = 0;
 
+	/** Console receive time of the GPS sample, in Unix UTC milliseconds. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone|GPS")
+	int64 GPSSampleTimestampUtcMs = 0;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone|Flight")
 	float Altitude = 0.0f;
 
@@ -70,6 +74,10 @@ struct DRONESHOWPLATFORM1_API FDroneData
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone|Show")
 	FLinearColor LEDColor = FLinearColor::Black;
+
+	/** True only when LEDColor came from confirmed aircraft feedback. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone|Show")
+	bool bLEDColorValid = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone|Selection")
 	bool bSelected = false;

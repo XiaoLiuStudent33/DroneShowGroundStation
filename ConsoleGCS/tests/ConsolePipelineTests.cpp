@@ -1579,6 +1579,12 @@ int RunConsolePipelineTests()
 				batch.items.front().mdhkStatus.red == 10 &&
 				batch.items.front().mdhkStatus.green == 20 &&
 				batch.items.front().mdhkStatus.blue == 30 &&
+				batch.items.front().led.state == dspgcs::LEDState::Static &&
+				batch.items.front().led.red == 10 &&
+				batch.items.front().led.green == 20 &&
+				batch.items.front().led.blue == 30 &&
+				batch.items.front().led.brightness == 255 &&
+				batch.items.front().led.confirmed &&
 				batch.items.front().mdhkStatus.flightCustomVersion ==
 					std::vector<std::uint8_t>({ 1, 2, 3, 4, 5, 6, 7, 8 }) &&
 				batch.items.front().mdhkStatus.hardwareId == "ABCDEFGHJKMNPQRSTVWX",

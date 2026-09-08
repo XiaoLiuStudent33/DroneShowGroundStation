@@ -2,7 +2,7 @@
 
 Status: CURRENT SUPPORTING
 Authority: 测试资产、运行入口与证据等级
-Last Updated: 2026-09-04
+Last Updated: 2026-09-08
 
 Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，当前调用链见 [Code_Architecture_CN.md](Code_Architecture_CN.md)，进度见 [Development_Status_CN.md](Development_Status_CN.md)。
 
@@ -23,7 +23,8 @@ Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，�
 ### E.0.2 Console/Fleet 证据
 
 - `--console-render-tests` 同时断言字符帧与 attribute 帧，包括数量色、ONLINE/OFFLINE token、状态反转、尾部默认色、Resize/Compact 边界、Linear 无控制序列及单 Renderer writer。
-- `DroneGCS.UI.Selection.DetailAndCommandStateSeparation` 使用真实 `WBP_GCS_Main_V2` / `WBP_GCS_FleetPanel` 控件，覆盖全选/清空、跨页、Online/Offline、新上线、stale ID、零 Online、重复绑定、Detail 隔离和 active Upload gate。
+- `DroneGCS.UI.FleetList.AuthoredContract` 使用真实 `WBP_GCS_Main_V2` / `WBP_GCS_FleetPanel_V2` / `WBP_GCS_FleetRow`，验证 ListView、全选复选框、行控件和非重叠点击区域的 authored contract。
+- `DroneGCS.UI.Selection.DetailAndCommandStateSeparation` 覆盖 Detail 与 Command Selection 的 Authority 隔离，并验证绑定真实 ListView 不会覆盖已有选择。
 - `DroneGCS.UI.FleetSelectAll.Scale1000` 与 `Scale20000` 使用单次 Fleet Snapshot 和 Authority toggle，断言完整数量、一次 SelectionChanged、零 per-drone Widget 创建。
 - 2026-08-25 Gate：Console Render 连续 20/20 PASS，Console 全回归 PASS；`DroneGCS.UI` 22/22 PASS，`DroneGCS.Data.DSPGCSUploadJob` 3/3 PASS。规模热路径观测为 1000 台约 1.225 ms、20000 台约 11.454 ms（同机单次观测，不作为跨机器 SLA）。
 

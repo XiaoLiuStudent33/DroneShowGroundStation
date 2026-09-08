@@ -35,7 +35,6 @@
 #include "Framework/Application/IInputProcessor.h"
 #include "Framework/Application/SlateApplication.h"
 #include "GCSBenchmarkExport.h"
-#include "GCSDroneRowView.h"
 #include "GCSFleetRowCheckBinding.h"
 #include "GCSRouteWorkflowCoordinator.h"
 #include "GCSTelemetryFilterController.h"
@@ -741,7 +740,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 
 	// Preserve the authored DroneDetail layout. The hover altitude and ground
 	// station mode controls remain in this asset, while fleet selection now
-	// belongs to WBP_GCS_FleetPanel.
+	// belongs to WBP_GCS_FleetPanel_V2.
 	if (UCanvasPanelSlot* DetailSlot = Cast<UCanvasPanelSlot>(DroneDetail->Slot))
 	{
 		FVector2D DetailSize = DetailSlot->GetSize();
@@ -817,12 +816,6 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 	UnbindHoverTestControls();
 	UnbindReferenceAndMapControls();
 	ResetUploadDashboard();
-	if (UButton* SelectAllButton = FindFleetButton(TEXT("BTN_FleetSelectALL")))
-	{
-		SelectAllButton->OnClicked.RemoveDynamic(
-			this,
-			&UGCSUIBridgeSubsystem::HandleFleetSelectAllClicked);
-	}
 	if (RouteWorkflowCoordinator)
 	{
 		RouteWorkflowCoordinator->Shutdown();
@@ -904,12 +897,9 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 	LastCommandResultText.Reset();
 	SelectedRouteImportFilePath.Reset();
 	SelectedCommandDroneIDs.Reset();
-	CurrentFleetPageDroneIDs.Reset();
-	FleetRowViews.Reset();
 	FleetListRowObjects.Reset();
 	FleetListCheckBindings.Reset();
 	TelemetryRowObjects.Reset();
-	FleetPageOffset = 0;
 	bMarqueePointerDown = false;
 	bMarqueeSelecting = false;
 	bMarqueeLeftMouseWasDown = false;
@@ -1883,50 +1873,6 @@ void UGCSUIBridgeSubsystem::HandleHoverClicked()
 		Parameters);
 }
 
-void UGCSUIBridgeSubsystem::HandleFleetRow1SelectionClicked()
-{
-	HandleFleetRowSelectionClicked(0);
-}
-
-void UGCSUIBridgeSubsystem::HandleFleetRow2SelectionClicked()
-{
-	HandleFleetRowSelectionClicked(1);
-}
-
-void UGCSUIBridgeSubsystem::HandleFleetRow3SelectionClicked()
-{
-	HandleFleetRowSelectionClicked(2);
-}
-
-void UGCSUIBridgeSubsystem::HandleFleetRow4SelectionClicked()
-{
-	HandleFleetRowSelectionClicked(3);
-}
-
-void UGCSUIBridgeSubsystem::HandleFleetRow5SelectionClicked()
-{
-	HandleFleetRowSelectionClicked(4);
-}
-
-void UGCSUIBridgeSubsystem::HandleFleetPreviousPageClicked()
-{
-	FleetPageOffset = FMath::Max(0, FleetPageOffset - FleetPageSize);
-	RefreshFromFleet();
-}
-
-void UGCSUIBridgeSubsystem::HandleFleetNextPageClicked()
-{
-	if (const UFleetManagerSubsystem* Fleet =
-		GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>())
-	{
-		if (FleetPageOffset + FleetPageSize < Fleet->GetDroneCount())
-		{
-			FleetPageOffset += FleetPageSize;
-		}
-	}
-	RefreshFromFleet();
-}
-
 void UGCSUIBridgeSubsystem::HandleHoverAltitudeMinusClicked()
 {
 	HoverAltitudeMeters = FMath::Clamp(HoverAltitudeMeters - 0.5f, 0.5f, 120.0f);
@@ -1983,8 +1929,7 @@ void UGCSUIBridgeSubsystem::HandleAutonomousModeClicked()
 
 void UGCSUIBridgeSubsystem::HandleTimeStartClicked()
 {
-	if (bTimeControlCountdownActive || bTimeControlPerformanceActive
-		|| !PendingTimeControlCommandID.IsEmpty())
+	if (bTimeControlCountdownActive || !PendingTimeControlCommandID.IsEmpty())
 	{
 		SetRightPanelText(
 			TEXT("TXT_TimeControlStatus"),
@@ -2042,7 +1987,6 @@ void UGCSUIBridgeSubsystem::HandleTimeStartClicked()
 
 	ResetTimeControlPreparationState();
 	ScheduledTimeLocal = RequestedTimeLocal;
-	TimeControlPreviewDatasetGeneration = RoutePreview->GetRouteDatasetGeneration();
 	SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("倒计时"));
 	SetRightPanelText(
 		TEXT("TXT_TimeCountdown"),
@@ -2147,18 +2091,8 @@ void UGCSUIBridgeSubsystem::HandleTimeStopClicked()
 	}
 
 	bTimeControlCountdownActive = false;
-	const bool bWasPerformanceActive = bTimeControlPerformanceActive;
-	bTimeControlPerformanceActive = false;
 	SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("倒计时"));
 	SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("--:--:--"));
-	if (URoutePreviewSubsystem* RoutePreview =
-		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>())
-	{
-		if (bWasPerformanceActive)
-		{
-			RoutePreview->Pause();
-		}
-	}
 	PendingTimeControlCommandID = CommandID;
 	PendingTimeControlCommandType = EGCSProductionCommandType::TimeStop;
 	PendingTimeControlTargetCount = Targets.Num();
@@ -2192,24 +2126,6 @@ void UGCSUIBridgeSubsystem::HandleExecuteDanceStepClicked()
 	{
 		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("执行舞步发送失败"));
 		return;
-	}
-
-	// The physical command must not depend on local NPZ state. If a matching
-	// route is loaded, start the UE visualization from frame zero as well.
-	if (URoutePreviewSubsystem* RoutePreview =
-		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>();
-		RoutePreview && RoutePreview->IsRouteLoaded())
-	{
-		ResetTimeControlPreparationState();
-		TimeControlTargetDroneIDs = Targets;
-		TimeControlPreviewDatasetGeneration = RoutePreview->GetRouteDatasetGeneration();
-		FString PreviewError;
-		if (!BeginScheduledRoutePreview(PreviewError))
-		{
-			UE_LOG(LogTemp, Warning,
-				TEXT("[TimeControlUI] EXECUTE local preview rejected: %s"),
-				*PreviewError);
-		}
 	}
 
 	SetRightPanelText(
@@ -2609,40 +2525,6 @@ void UGCSUIBridgeSubsystem::HandleHoverManualClicked()
 		HoverTestStatus = Error;
 		RefreshHoverTestControls();
 	}
-}
-
-void UGCSUIBridgeSubsystem::HandleFleetRowSelectionClicked(const int32 RowIndex)
-{
-	if (!CurrentFleetPageDroneIDs.IsValidIndex(RowIndex)
-		|| CurrentFleetPageDroneIDs[RowIndex].IsEmpty())
-	{
-		return;
-	}
-
-	const FString& DroneID = CurrentFleetPageDroneIDs[RowIndex];
-	SetCommandDroneSelected(DroneID, !SelectedCommandDroneIDs.Contains(DroneID));
-}
-
-void UGCSUIBridgeSubsystem::HandleFleetSelectAllClicked()
-{
-	if (IsCommandSelectionMutationBlocked())
-	{
-		UE_LOG(LogTemp, Warning,
-			TEXT("[GCS_FLEET_SELECT_ALL] Rejected: active AutoStart/Upload Job."));
-		RefreshFleetSelectAll();
-		return;
-	}
-
-	const TArray<FString> EligibleDroneIDs = BuildEligibleOnlineCommandDroneIDs();
-	if (EligibleDroneIDs.IsEmpty())
-	{
-		RefreshFleetSelectAll();
-		return;
-	}
-	ReplaceCommandDroneSelection(
-		IsExactCommandSelection(EligibleDroneIDs)
-			? TArray<FString>{}
-			: EligibleDroneIDs);
 }
 
 void UGCSUIBridgeSubsystem::HandleFleetSelectAllCheckStateChanged(
@@ -3978,46 +3860,6 @@ void UGCSUIBridgeSubsystem::CompleteMarqueeSelection(
 		Maximum.Y);
 }
 
-FReply UGCSUIBridgeSubsystem::HandleFleetRowMouseButtonDown(
-	const FGeometry& Geometry,
-	const FPointerEvent& MouseEvent,
-	const int32 RowIndex)
-{
-	(void)Geometry;
-	if (MouseEvent.GetEffectingButton() != EKeys::LeftMouseButton)
-	{
-		return FReply::Unhandled();
-	}
-
-	HandleFleetRowDetailClicked(RowIndex);
-	// The row is a UI-only detail-selection hit target. Explicitly release any
-	// viewport capture so a handled mouse-down can never hide the GCS cursor.
-	return FReply::Handled().ReleaseMouseCapture();
-}
-
-void UGCSUIBridgeSubsystem::HandleFleetRowDetailClicked(const int32 RowIndex)
-{
-	if (!CurrentFleetPageDroneIDs.IsValidIndex(RowIndex)
-		|| CurrentFleetPageDroneIDs[RowIndex].IsEmpty())
-	{
-		return;
-	}
-
-	// 点击行文本只更新详情选择；命令复选集合由独立按钮维护。
-	const FString& DroneID = CurrentFleetPageDroneIDs[RowIndex];
-	UFleetManagerSubsystem* Fleet =
-		GetGameInstance()->GetSubsystem<UFleetManagerSubsystem>();
-	if (!Fleet || !Fleet->SelectDrone(DroneID))
-	{
-		UE_LOG(
-			LogTemp,
-			Warning,
-			TEXT("GCS detail selection rejected: Row=%d DroneID=%s"),
-			RowIndex,
-			*DroneID);
-	}
-}
-
 TArray<FString> UGCSUIBridgeSubsystem::GetCommandTargetDroneIDs() const
 {
 	TArray<FString> Result = SelectedCommandDroneIDs.Array();
@@ -4510,16 +4352,6 @@ void UGCSUIBridgeSubsystem::RefreshHoverTestControls()
 	}
 }
 
-void UGCSUIBridgeSubsystem::SetFleetButtonLabel(
-	const FName ButtonName,
-	const FString& Value) const
-{
-	FGCSUIWidgetPresenter::SetButtonLabel(
-		FleetPanelWidget.Get(),
-		ButtonName,
-		Value);
-}
-
 void UGCSUIBridgeSubsystem::SetLegacyHoverSelectionVisible(const bool bVisible) const
 {
 	UUserWidget* DroneDetail = DroneDetailWidget.Get();
@@ -4679,32 +4511,10 @@ void UGCSUIBridgeSubsystem::RefreshFromFleet()
 	RefreshProductionCommandAvailability();
 
 	const int32 TotalCount = Fleet->GetDroneCount();
-	if (TotalCount == 0)
-	{
-		FleetPageOffset = 0;
-	}
-	else if (FleetPageOffset >= TotalCount)
-	{
-		FleetPageOffset = ((TotalCount - 1) / FleetPageSize) * FleetPageSize;
-	}
-
-	if (FleetListView.IsValid())
-	{
-		FleetPageOffset = 0;
-		RefreshFleetListRows(
-			Fleet->GetDronePage(0, TotalCount),
-			TotalCount,
-			Fleet->GetCurrentSelectedDroneID());
-	}
-	else
-	{
-		const TArray<FDroneData> VisibleDrones =
-			Fleet->GetDronePage(FleetPageOffset, FleetPageSize);
-		RefreshFleetRows(
-			VisibleDrones,
-			TotalCount,
-			Fleet->GetCurrentSelectedDroneID());
-	}
+	RefreshFleetListRows(
+		Fleet->GetDronePage(0, TotalCount),
+		TotalCount,
+		Fleet->GetCurrentSelectedDroneID());
 	RefreshFleetSelectAll();
 
 	FDroneData SelectedDrone;
@@ -4878,114 +4688,6 @@ void UGCSUIBridgeSubsystem::RefreshFleetListRows(
 	}
 }
 
-void UGCSUIBridgeSubsystem::RefreshFleetRows(
-	const TArray<FDroneData>& Drones,
-	const int32 TotalCount,
-	const FString& CurrentSelectedDroneID)
-{
-	const int32 PageCount = FMath::Max(1, FMath::DivideAndRoundUp(TotalCount, FleetPageSize));
-	const int32 PageIndex = TotalCount == 0 ? 1 : FleetPageOffset / FleetPageSize + 1;
-	SetFleetText(TEXT("FleetCount"), FString::Printf(TEXT("FLEET  %05d"), TotalCount));
-	SetFleetText(TEXT("Columns"), TEXT("      ID        MODE      GPS  BAT   HGT   RSS      STATUS"));
-	SetFleetText(
-		TEXT("TXT_FleetPage"),
-		FString::Printf(TEXT("PAGE %d / %d"), PageIndex, PageCount));
-	SetFleetText(
-		TEXT("TXT_FleetSelectedCount"),
-		FString::Printf(TEXT("SELECTED %d"), SelectedCommandDroneIDs.Num()));
-
-	CurrentFleetPageDroneIDs.Reset();
-	CurrentFleetPageDroneIDs.SetNum(FleetPageSize);
-	const EDSPGCSTelemetryLinkState ServerState =
-		GetProductionTelemetryLinkState();
-
-	for (int32 Index = 0; Index < FleetPageSize; ++Index)
-	{
-		const FName RowName(*FString::Printf(TEXT("Row%d"), Index + 1));
-		const FName SelectorName(*FString::Printf(TEXT("BTN_FleetSelectRow%d"), Index + 1));
-		const FName StatusName(*FString::Printf(TEXT("TXT_StatusRow%d"), Index + 1));
-		UButton* Selector = FindFleetButton(SelectorName);
-		if (!Drones.IsValidIndex(Index))
-		{
-			SetFleetText(RowName, FString());
-			SetFleetStatus(StatusName, FString(), FLinearColor::Transparent);
-			SetFleetButtonLabel(SelectorName, TEXT("[ ]"));
-			UpdateFleetRowView(Index, FString(), CurrentSelectedDroneID);
-			if (Selector)
-			{
-				Selector->SetVisibility(ESlateVisibility::Collapsed);
-			}
-			continue;
-		}
-
-		const FDroneData& Drone = Drones[Index];
-		const EGCSDroneDisplayStatus DisplayStatus =
-			ResolveDroneDisplayStatus(ServerState, Drone.bOnline);
-		CurrentFleetPageDroneIDs[Index] = Drone.DroneID;
-		SetFleetButtonLabel(
-			SelectorName,
-			SelectedCommandDroneIDs.Contains(Drone.DroneID) ? TEXT("✓") : TEXT("X"));
-		if (Selector)
-		{
-			Selector->SetVisibility(ESlateVisibility::Visible);
-		}
-
-		const bool bHasGPS =
-			!FMath::IsNearlyZero(Drone.GPSLat) || !FMath::IsNearlyZero(Drone.GPSLon);
-		SetFleetText(
-			RowName,
-			FString::Printf(
-				TEXT("      %-10s %-9s %-4s %3.0f%% %5.1f %4d"),
-				*Drone.DroneID,
-				*Drone.Mode,
-				bHasGPS ? TEXT("OK") : TEXT("--"),
-				Drone.Battery,
-				Drone.Altitude,
-				Drone.RSSI));
-		SetFleetStatus(
-			StatusName,
-			FGCSUIWidgetPresenter::DisplayStatusText(DisplayStatus),
-			FGCSUIWidgetPresenter::DisplayStatusColor(DisplayStatus));
-		UpdateFleetRowView(Index, Drone.DroneID, CurrentSelectedDroneID);
-	}
-}
-
-void UGCSUIBridgeSubsystem::InitializeFleetRowViews()
-{
-	FleetRowViews.Reset();
-	FleetRowViews.Reserve(FleetPageSize);
-	UUserWidget* FleetPanel = FleetPanelWidget.Get();
-	for (int32 Index = 0; Index < FleetPageSize; ++Index)
-	{
-		UGCSDroneRowView* RowView = NewObject<UGCSDroneRowView>(this);
-		if (!RowView->Initialize(FleetPanel, Index))
-		{
-			UE_LOG(
-				LogTemp,
-				Warning,
-				TEXT("Fleet row %d is missing authored SelectedOverlay_Row%d Border."),
-				Index + 1,
-				Index + 1);
-		}
-		FleetRowViews.Add(RowView);
-	}
-}
-
-void UGCSUIBridgeSubsystem::UpdateFleetRowView(
-	const int32 RowIndex,
-	const FString& DroneID,
-	const FString& CurrentSelectedDroneID)
-{
-	if (!FleetRowViews.IsValidIndex(RowIndex) || !FleetRowViews[RowIndex])
-	{
-		return;
-	}
-
-	UGCSDroneRowView* RowView = FleetRowViews[RowIndex];
-	RowView->SetDroneID(DroneID);
-	RowView->NotifyCurrentSelectedDroneID(CurrentSelectedDroneID);
-}
-
 void UGCSUIBridgeSubsystem::UpdateDroneInfo(const FDroneData& DroneData)
 {
 	const EGCSDroneDisplayStatus DisplayStatus = ResolveDroneDisplayStatus(
@@ -5063,11 +4765,6 @@ UButton* UGCSUIBridgeSubsystem::FindButton(const FName Name) const
 	return FGCSUIWidgetPresenter::FindButton(DroneDetailWidget.Get(), Name);
 }
 
-UButton* UGCSUIBridgeSubsystem::FindFleetButton(const FName Name) const
-{
-	return FGCSUIWidgetPresenter::FindButton(FleetPanelWidget.Get(), Name);
-}
-
 UButton* UGCSUIBridgeSubsystem::FindToolbarButton(const FName Name) const
 {
 	return FGCSUIWidgetPresenter::FindButton(LeftToolbarWidget.Get(), Name);
@@ -5081,16 +4778,6 @@ void UGCSUIBridgeSubsystem::RefreshFleetSelectAll()
 		TGuardValue<bool> UpdatingGuard(bUpdatingFleetList, true);
 		CheckBox->SetIsChecked(IsExactCommandSelection(EligibleDroneIDs));
 		CheckBox->SetIsEnabled(
-			!EligibleDroneIDs.IsEmpty() && !IsCommandSelectionMutationBlocked());
-		return;
-	}
-
-	SetFleetText(
-		TEXT("BTN_FleetSelectALL_Text"),
-		IsExactCommandSelection(EligibleDroneIDs) ? TEXT("✓") : TEXT("X"));
-	if (UButton* Button = FindFleetButton(TEXT("BTN_FleetSelectALL")))
-	{
-		Button->SetIsEnabled(
 			!EligibleDroneIDs.IsEmpty() && !IsCommandSelectionMutationBlocked());
 	}
 }
@@ -5154,18 +4841,6 @@ void UGCSUIBridgeSubsystem::SetFleetText(
 	const FString& Value) const
 {
 	FGCSUIWidgetPresenter::SetText(FleetPanelWidget.Get(), Name, Value);
-}
-
-void UGCSUIBridgeSubsystem::SetFleetStatus(
-	const FName Name,
-	const FString& Value,
-	const FLinearColor& Color) const
-{
-	FGCSUIWidgetPresenter::SetStatus(
-		FleetPanelWidget.Get(),
-		Name,
-		Value,
-		Color);
 }
 
 void UGCSUIBridgeSubsystem::SetTopBarText(
@@ -5414,7 +5089,7 @@ void UGCSUIBridgeSubsystem::BindTimeControlControls()
 	DurationLabel->SetText(FText::FromString(TEXT("倒计时")));
 	CountdownText->SetText(FText::FromString(TEXT("--:--:--")));
 	CountdownText->SetToolTipText(FText::FromString(
-		TEXT("授时任务等待期间显示剩余倒计时；到点后切换为表演时间并按NPZ计划正计时。")));
+		TEXT("授时任务等待期间显示剩余倒计时；到点后停在00:00:00，NPZ需使用底部播放控件手动播放。")));
 	StatusText->SetText(FText::FromString(TEXT("未设置授时任务")));
 
 	UE_LOG(
@@ -6246,9 +5921,6 @@ void UGCSUIBridgeSubsystem::TickRoutePlaybackUI(const float DeltaSeconds)
 void UGCSUIBridgeSubsystem::ResetTimeControlPreparationState()
 {
 	bTimeControlCountdownActive = false;
-	bTimeControlPerformanceActive = false;
-	TimeControlPerformanceElapsedSeconds = 0.0;
-	TimeControlPreviewDatasetGeneration = INDEX_NONE;
 	TimeControlTargetDroneIDs.Reset();
 	TimeControlScheduleSentDroneIDs.Reset();
 	TimeControlFailedDroneIDs.Reset();
@@ -6257,52 +5929,6 @@ void UGCSUIBridgeSubsystem::ResetTimeControlPreparationState()
 	PendingTimeControlResultCount = 0;
 	PendingTimeControlSucceededCount = 0;
 	PendingTimeControlCompletedDroneIDs.Reset();
-}
-
-bool UGCSUIBridgeSubsystem::BeginScheduledRoutePreview(FString& OutError)
-{
-	OutError.Reset();
-	URoutePreviewSubsystem* RoutePreview =
-		GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>();
-	if (!RoutePreview || !RoutePreview->IsRouteLoaded())
-	{
-		OutError = TEXT("未加载NPZ航线，无法启动UE表演预览");
-		return false;
-	}
-	if (RoutePreview->GetRouteDatasetGeneration() != TimeControlPreviewDatasetGeneration)
-	{
-		OutError = TEXT("授时后NPZ已更换，不能播放另一份航线");
-		return false;
-	}
-	if (!RoutePreview->SetSampleRateHz(URoutePreviewSubsystem::ScheduledShowSampleRateHz, OutError))
-	{
-		return false;
-	}
-
-	// A scheduled show always represents a fresh run. The bottom transport may
-	// have been used for inspection before scheduling, so explicitly restore
-	// Frame 0 before starting instead of resuming its previous cursor.
-	if (!RoutePreview->Stop(OutError))
-	{
-		return false;
-	}
-	if (!RoutePreview->Play(OutError))
-	{
-		return false;
-	}
-
-	bTimeControlPerformanceActive = true;
-	TimeControlPerformanceElapsedSeconds = 0.0;
-	SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("表演时间"));
-	SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("00:00:00"));
-	RefreshRoutePlaybackUI();
-	UE_LOG(
-		LogTemp,
-		Display,
-		TEXT("[TimeControlUI] SHOW_PREVIEW START Frames=%d Duration=%.3fs"),
-		RoutePreview->GetFrameCount(),
-		RoutePreview->GetDurationSeconds());
-	return true;
 }
 
 void UGCSUIBridgeSubsystem::RefreshTimeControlPreparationStatus(const FString& Prefix)
@@ -6319,7 +5945,7 @@ void UGCSUIBridgeSubsystem::RefreshTimeControlPreparationStatus(const FString& P
 
 void UGCSUIBridgeSubsystem::TickTimeControlUI(const float DeltaSeconds)
 {
-	if (!bTimeControlCountdownActive && !bTimeControlPerformanceActive)
+	if (!bTimeControlCountdownActive)
 	{
 		return;
 	}
@@ -6333,52 +5959,6 @@ void UGCSUIBridgeSubsystem::TickTimeControlUI(const float DeltaSeconds)
 		TimeControlUIRefreshAccumulator,
 		TimeControlUIRefreshIntervalSeconds);
 
-	if (bTimeControlPerformanceActive)
-	{
-		URoutePreviewSubsystem* RoutePreview =
-			GetGameInstance()->GetSubsystem<URoutePreviewSubsystem>();
-		if (!RoutePreview)
-		{
-			bTimeControlPerformanceActive = false;
-			SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("UE表演预览异常：播放器不可用"));
-			return;
-		}
-
-		const ERoutePreviewPlaybackState State = RoutePreview->GetPlaybackState();
-		if (!RoutePreview->IsRouteLoaded()
-			|| RoutePreview->GetRouteDatasetGeneration() != TimeControlPreviewDatasetGeneration
-			|| State == ERoutePreviewPlaybackState::Stopped
-			|| State == ERoutePreviewPlaybackState::Paused)
-		{
-			bTimeControlPerformanceActive = false;
-			SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("UE预览已停止或被调整，已退出同步；此操作不控制真机"));
-			return;
-		}
-
-		TimeControlPerformanceElapsedSeconds = RoutePreview->GetCurrentTime();
-		SetRightPanelText(
-			TEXT("TXT_TimeCountdown"),
-			FormatTimeControlDuration(FMath::FloorToInt(TimeControlPerformanceElapsedSeconds)));
-
-		if (State == ERoutePreviewPlaybackState::Completed)
-		{
-			bTimeControlPerformanceActive = false;
-			TimeControlPerformanceElapsedSeconds = RoutePreview->GetDurationSeconds();
-			SetRightPanelText(
-				TEXT("TXT_TimeCountdown"),
-				FormatTimeControlDuration(FMath::FloorToInt(TimeControlPerformanceElapsedSeconds)));
-			RefreshTimeControlPreparationStatus(TEXT("NPZ计划播放完成，真机完成状态未确认"));
-			UE_LOG(
-				LogTemp,
-				Display,
-				TEXT("[TimeControlUI] SHOW_PREVIEW COMPLETED Duration=%.3fs Frame=%d/%d"),
-				TimeControlPerformanceElapsedSeconds,
-				RoutePreview->GetCurrentFrame(),
-				RoutePreview->GetFrameCount());
-		}
-		return;
-	}
-
 	const FTimespan Remaining = ScheduledTimeLocal - FDateTime::Now();
 	const int32 TotalSeconds = FMath::Max(
 		0,
@@ -6391,26 +5971,18 @@ void UGCSUIBridgeSubsystem::TickTimeControlUI(const float DeltaSeconds)
 	if (TotalSeconds == 0)
 	{
 		bTimeControlCountdownActive = false;
-		SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("表演时间"));
+		SetRightPanelText(TEXT("TXT_TimeCountdownLabel"), TEXT("倒计时"));
 		SetRightPanelText(TEXT("TXT_TimeCountdown"), TEXT("00:00:00"));
-		FString PreviewError;
-		if (BeginScheduledRoutePreview(PreviewError))
-		{
-			RefreshTimeControlPreparationStatus(
-				FString::Printf(
-					TEXT("授时时刻 %02d:%02d:%02d 已到，UE按NPZ计划播放（非真机进度）"),
-					ScheduledTimeLocal.GetHour(),
-					ScheduledTimeLocal.GetMinute(),
-					ScheduledTimeLocal.GetSecond()));
-		}
-		else
-		{
-			RefreshTimeControlPreparationStatus(
-				FString::Printf(
-					TEXT("授时时刻已到；UE预览未启动：%s"),
-					*PreviewError));
-			UE_LOG(LogTemp, Warning, TEXT("[TimeControlUI] SHOW_PREVIEW rejected: %s"), *PreviewError);
-		}
+		RefreshTimeControlPreparationStatus(
+			FString::Printf(
+				TEXT("授时时刻 %02d:%02d:%02d 已到，NPZ未自动播放"),
+				ScheduledTimeLocal.GetHour(),
+				ScheduledTimeLocal.GetMinute(),
+				ScheduledTimeLocal.GetSecond()));
+		UE_LOG(
+			LogTemp,
+			Display,
+			TEXT("[TimeControlUI] SCHEDULE REACHED AutoPreview=disabled"));
 	}
 }
 
@@ -6627,111 +6199,38 @@ void UGCSUIBridgeSubsystem::BindFleetPanelButtons()
 	UListView* List = FleetPanel && FleetPanel->WidgetTree
 		? Cast<UListView>(FleetPanel->WidgetTree->FindWidget(TEXT("LV_FleetDrones")))
 		: nullptr;
-	if (List)
+	if (!List)
 	{
-		FleetListView = List;
-		// ListView itself is display/scroll virtualization only. Explicit child
-		// controls own both interactions, preventing checkbox clicks from also
-		// changing the single-drone detail selection.
-		List->SetSelectionMode(ESelectionMode::None);
-		List->OnEntryWidgetGenerated().AddUObject(
-			this,
-			&UGCSUIBridgeSubsystem::HandleFleetListEntryGenerated);
-		List->OnEntryWidgetReleased().AddUObject(
-			this,
-			&UGCSUIBridgeSubsystem::HandleFleetListEntryReleased);
-
-		FleetSelectAllCheckBox = FleetPanel->WidgetTree
-			? Cast<UCheckBox>(FleetPanel->WidgetTree->FindWidget(TEXT("CHK_FleetSelectAll")))
-			: nullptr;
-		if (UCheckBox* SelectAll = FleetSelectAllCheckBox.Get())
-		{
-			SelectAll->OnCheckStateChanged.AddUniqueDynamic(
-				this,
-				&UGCSUIBridgeSubsystem::HandleFleetSelectAllCheckStateChanged);
-		}
-		else
-		{
-			UE_LOG(LogTemp, Error, TEXT("Fleet ListView panel missing CHK_FleetSelectAll."));
-		}
-
-		UE_LOG(LogTemp, Log, TEXT("[GCS_FLEET_LIST] LV_FleetDrones bound."));
+		UE_LOG(LogTemp, Error, TEXT("Fleet panel missing required LV_FleetDrones."));
 		return;
 	}
 
-	InitializeFleetRowViews();
+	FleetListView = List;
+	// ListView itself is display/scroll virtualization only. Explicit child
+	// controls own both interactions, preventing checkbox clicks from also
+	// changing the single-drone detail selection.
+	List->SetSelectionMode(ESelectionMode::None);
+	List->OnEntryWidgetGenerated().AddUObject(
+		this,
+		&UGCSUIBridgeSubsystem::HandleFleetListEntryGenerated);
+	List->OnEntryWidgetReleased().AddUObject(
+		this,
+		&UGCSUIBridgeSubsystem::HandleFleetListEntryReleased);
 
-	if (UButton* Button = FindFleetButton(TEXT("BTN_FleetSelectALL")))
+	FleetSelectAllCheckBox = Cast<UCheckBox>(
+		FleetPanel->WidgetTree->FindWidget(TEXT("CHK_FleetSelectAll")));
+	if (UCheckBox* SelectAll = FleetSelectAllCheckBox.Get())
 	{
-		Button->OnClicked.RemoveDynamic(
+		SelectAll->OnCheckStateChanged.AddUniqueDynamic(
 			this,
-			&UGCSUIBridgeSubsystem::HandleFleetSelectAllClicked);
-		Button->OnClicked.AddDynamic(
-			this,
-			&UGCSUIBridgeSubsystem::HandleFleetSelectAllClicked);
+			&UGCSUIBridgeSubsystem::HandleFleetSelectAllCheckStateChanged);
 	}
 	else
 	{
-		UE_LOG(LogTemp, Error, TEXT("FleetPanel missing BTN_FleetSelectALL."));
-	}
-	if (!FindFleetText(TEXT("BTN_FleetSelectALL_Text")))
-	{
-		UE_LOG(LogTemp, Error, TEXT("FleetPanel missing BTN_FleetSelectALL_Text."));
+		UE_LOG(LogTemp, Error, TEXT("Fleet ListView panel missing CHK_FleetSelectAll."));
 	}
 
-	if (UButton* Button = FindFleetButton(TEXT("BTN_FleetSelectRow1")))
-	{
-		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetRow1SelectionClicked);
-		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetRow1SelectionClicked);
-	}
-	if (UButton* Button = FindFleetButton(TEXT("BTN_FleetSelectRow2")))
-	{
-		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetRow2SelectionClicked);
-		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetRow2SelectionClicked);
-	}
-	if (UButton* Button = FindFleetButton(TEXT("BTN_FleetSelectRow3")))
-	{
-		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetRow3SelectionClicked);
-		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetRow3SelectionClicked);
-	}
-	if (UButton* Button = FindFleetButton(TEXT("BTN_FleetSelectRow4")))
-	{
-		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetRow4SelectionClicked);
-		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetRow4SelectionClicked);
-	}
-	if (UButton* Button = FindFleetButton(TEXT("BTN_FleetSelectRow5")))
-	{
-		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetRow5SelectionClicked);
-		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetRow5SelectionClicked);
-	}
-
-	if (UButton* Button = FindFleetButton(TEXT("BTN_FleetPreviousPage")))
-	{
-		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetPreviousPageClicked);
-		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetPreviousPageClicked);
-	}
-	if (UButton* Button = FindFleetButton(TEXT("BTN_FleetNextPage")))
-	{
-		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetNextPageClicked);
-		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetNextPageClicked);
-	}
-
-	// The authored FleetPanel has separate checkbox buttons and row text.
-	// Reuse the row text hit area for the single detail selection without
-	// adding or rearranging any UMG widgets.
-	for (int32 Index = 0; Index < FleetPageSize; ++Index)
-	{
-		const FName RowName(*FString::Printf(TEXT("Row%d"), Index + 1));
-		if (UTextBlock* Row = FindFleetText(RowName))
-		{
-			Row->SetVisibility(ESlateVisibility::Visible);
-			Row->TakeWidget()->SetOnMouseButtonDown(
-				FPointerEventHandler::CreateUObject(
-					this,
-					&UGCSUIBridgeSubsystem::HandleFleetRowMouseButtonDown,
-					Index));
-		}
-	}
+	UE_LOG(LogTemp, Log, TEXT("[GCS_FLEET_LIST] LV_FleetDrones bound."));
 }
 
 void UGCSUIBridgeSubsystem::BindNavigationButtons()
