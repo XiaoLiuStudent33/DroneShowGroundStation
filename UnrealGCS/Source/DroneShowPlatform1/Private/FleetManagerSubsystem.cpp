@@ -112,7 +112,6 @@ bool UFleetManagerSubsystem::ApplySnapshot(const FGCSFleetSnapshot& Snapshot)
 	NewDronesByID.Reserve(Snapshot.Drones.Num());
 	NewDroneOrder.Reserve(Snapshot.Drones.Num());
 
-	FString SnapshotSelectedDroneID;
 	for (const FDroneData& InputDrone : Snapshot.Drones)
 	{
 		if (InputDrone.DroneID.IsEmpty() || NewDronesByID.Contains(InputDrone.DroneID))
@@ -121,10 +120,8 @@ bool UFleetManagerSubsystem::ApplySnapshot(const FGCSFleetSnapshot& Snapshot)
 		}
 
 		FDroneData Drone = InputDrone;
-		if (Drone.bSelected && SnapshotSelectedDroneID.IsEmpty())
-		{
-			SnapshotSelectedDroneID = Drone.DroneID;
-		}
+		// Incoming telemetry must not choose which detail panel the operator is
+		// viewing. Detail selection is a local UI action only.
 		Drone.bSelected = false;
 		NewDroneOrder.Add(Drone.DroneID);
 		NewDronesByID.Add(Drone.DroneID, MoveTemp(Drone));
@@ -146,10 +143,6 @@ bool UFleetManagerSubsystem::ApplySnapshot(const FGCSFleetSnapshot& Snapshot)
 	if (NewDronesByID.Contains(CurrentSelectedDroneID))
 	{
 		NewSelectedDroneID = CurrentSelectedDroneID;
-	}
-	else if (NewDronesByID.Contains(SnapshotSelectedDroneID))
-	{
-		NewSelectedDroneID = SnapshotSelectedDroneID;
 	}
 
 	// Snapshot 顺序来自 Console 稳定 SessionOrder。整批替换后保持

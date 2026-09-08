@@ -6,6 +6,7 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
+#include "Components/ListView.h"
 #include "Components/TextBlock.h"
 #include "DSPGCSProductionCommandProviderSubsystem.h"
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
@@ -21,6 +22,61 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FGCSSelectionStateSeparationTest,
 	"DroneGCS.UI.Selection.DetailAndCommandStateSeparation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGCSFleetSnapshotDoesNotAutoSelectDetailTest,
+	"DroneGCS.UI.Selection.SnapshotDoesNotAutoSelectDetail",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FGCSFleetSnapshotDoesNotAutoSelectDetailTest::RunTest(
+	const FString& Parameters)
+{
+	(void)Parameters;
+
+	UGameInstance* GameInstance = NewObject<UGameInstance>(GEngine);
+	if (!TestNotNull(TEXT("GameInstance created"), GameInstance))
+	{
+		return false;
+	}
+
+	GameInstance->InitializeStandalone(TEXT("GCSSnapshotSelectionTestWorld"));
+	UFleetManagerSubsystem* Fleet =
+		GameInstance->GetSubsystem<UFleetManagerSubsystem>();
+	if (!TestNotNull(TEXT("FleetManager subsystem initialized"), Fleet))
+	{
+		GameInstance->Shutdown();
+		return false;
+	}
+
+	FGCSFleetSnapshot InitialSnapshot;
+	InitialSnapshot.FleetRevision = 1;
+	FDroneData Drone;
+	Drone.DroneID = TEXT("Drone000");
+	Drone.bOnline = true;
+	Drone.bSelected = true;
+	InitialSnapshot.Drones.Add(Drone);
+	TestTrue(TEXT("Initial snapshot applied"), Fleet->ApplySnapshot(InitialSnapshot));
+	TestTrue(
+		TEXT("Incoming snapshot selection does not open detail"),
+		Fleet->GetCurrentSelectedDroneID().IsEmpty());
+	FDroneData SelectedDrone;
+	TestFalse(
+		TEXT("No detail drone exists before an operator click"),
+		Fleet->GetSelectedDrone(SelectedDrone));
+
+	TestTrue(TEXT("Operator can select Drone000"), Fleet->SelectDrone(TEXT("Drone000")));
+	FGCSFleetSnapshot RefreshSnapshot = InitialSnapshot;
+	RefreshSnapshot.FleetRevision = 2;
+	RefreshSnapshot.Drones[0].bSelected = false;
+	TestTrue(TEXT("Telemetry refresh snapshot applied"), Fleet->ApplySnapshot(RefreshSnapshot));
+	TestEqual(
+		TEXT("Telemetry refresh preserves explicit operator detail selection"),
+		Fleet->GetCurrentSelectedDroneID(),
+		FString(TEXT("Drone000")));
+
+	GameInstance->Shutdown();
+	return true;
+}
 
 bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 {
@@ -196,6 +252,32 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 		? Cast<UUserWidget>(MainWidget->WidgetTree->FindWidget(TEXT("CHILD_FleetPanel")))
 		: nullptr;
 	TestNotNull(TEXT("Fleet panel child found"), FleetPanel);
+
+	UListView* AuthoredFleetList = FleetPanel && FleetPanel->WidgetTree
+		? Cast<UListView>(FleetPanel->WidgetTree->FindWidget(TEXT("LV_FleetDrones")))
+		: nullptr;
+	if (AuthoredFleetList)
+	{
+		AddExpectedError(
+			TEXT("Unable to load GCS navigation page"),
+			EAutomationExpectedErrorFlags::Contains,
+			2);
+		Bridge->BindMainWidget(MainWidget);
+		TestEqual(
+			TEXT("Fleet ListView delegates detail selection to its row button"),
+			AuthoredFleetList->GetSelectionMode(),
+			ESelectionMode::None);
+		TestEqual(
+			TEXT("Binding the ListView preserves explicit detail selection"),
+			Fleet->GetCurrentSelectedDroneID(),
+			FString(TEXT("Drone004")));
+		TestEqual(
+			TEXT("Binding the ListView preserves command selection"),
+			Bridge->GetSelectedCommandDroneIDs().Num(),
+			2);
+		GameInstance->Shutdown();
+		return true;
+	}
 
 	UBorder* Row1Border = FleetPanel && FleetPanel->WidgetTree
 		? Cast<UBorder>(FleetPanel->WidgetTree->FindWidget(TEXT("SelectedOverlay_Row1")))

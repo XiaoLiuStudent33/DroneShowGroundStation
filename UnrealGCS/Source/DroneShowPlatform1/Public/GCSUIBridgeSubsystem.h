@@ -19,6 +19,7 @@ class AActor;
 class ADroneFleetVisualizationActor;
 class APlayerController;
 class UGCSDroneRowView;
+class UGCSFleetRowCheckBinding;
 class UGCSRouteWorkflowCoordinator;
 class UGCSTelemetryFilterController;
 class UEditableTextBox;
@@ -42,12 +43,6 @@ enum class EGCSDroneDisplayStatus : uint8
 	Online,
 	Offline,
 	LinkLost
-};
-
-enum class EGCSMainPage : uint8
-{
-	Fleet,
-	Control
 };
 
 DECLARE_MULTICAST_DELEGATE(FGCSCommandSelectionChanged);
@@ -127,6 +122,7 @@ public:
 
 private:
 	friend class FGCSMarqueeInputProcessor;
+	friend class UGCSFleetRowCheckBinding;
 	friend class FGCSIndependentToolbarTogglesTest;
 	friend class FGCSScheduledShowPreviewTest;
 	friend class FGCSTelemetryFilterToggleTest;
@@ -293,6 +289,9 @@ private:
 	void HandleFleetSelectAllClicked();
 
 	UFUNCTION()
+	void HandleFleetSelectAllCheckStateChanged(bool bIsChecked);
+
+	UFUNCTION()
 	void HandleFleetPreviousPageClicked();
 
 	UFUNCTION()
@@ -391,7 +390,16 @@ private:
 		const TArray<FDroneData>& Drones,
 		int32 TotalCount,
 		const FString& CurrentSelectedDroneID);
+	void RefreshFleetListRows(
+		const TArray<FDroneData>& Drones,
+		int32 TotalCount,
+		const FString& CurrentSelectedDroneID);
 	void RefreshFleetSelectAll();
+	void UnbindFleetList();
+	void HandleFleetListEntryGenerated(UUserWidget& Entry);
+	void HandleFleetListEntryReleased(UUserWidget& Entry);
+	void HandleFleetListCommandCheckChanged(UObject* RowObject, bool bIsChecked);
+	void HandleFleetListDetailClicked(UObject* RowObject);
 	TArray<FString> BuildEligibleOnlineCommandDroneIDs() const;
 	bool IsExactCommandSelection(const TArray<FString>& EligibleDroneIDs) const;
 	FReply HandleFleetRowMouseButtonDown(
@@ -493,7 +501,6 @@ private:
 	void TickTelemetryTableUI(float DeltaSeconds);
 	void RefreshTelemetryTableFromProduction();
 	void ResetNavigationPages();
-	void ShowMainPage(EGCSMainPage Page);
 	void ApplyNavigationVisibility();
 	UUserWidget* CreateNavigationPage(const TCHAR* ClassPath) const;
 	void BindUploadDashboardControls();
@@ -561,12 +568,19 @@ private:
 	TWeakObjectPtr<UWidget> SelectionRectangleWidget;
 	TWeakObjectPtr<UUserWidget> MapPageWidget;
 	TWeakObjectPtr<UUserWidget> LogsPageWidget;
-	EGCSMainPage ActivePage = EGCSMainPage::Fleet;
 	bool bPanelsExpanded = true;
+	bool bFleetPanelRequestedVisible = false;
+	bool bDroneDetailRequestedVisible = false;
 	FString LastCommandResultText;
 	FString SelectedRouteImportFilePath;
 	TSet<FString> SelectedCommandDroneIDs;
 	TArray<FString> CurrentFleetPageDroneIDs;
+	TWeakObjectPtr<class UListView> FleetListView;
+	TWeakObjectPtr<UCheckBox> FleetSelectAllCheckBox;
+	TMap<TWeakObjectPtr<UUserWidget>, TWeakObjectPtr<UGCSFleetRowCheckBinding>>
+		FleetListEntryBindings;
+	bool bUpdatingFleetList = false;
+	FString LastRenderedFleetDetailDroneID;
 	TSharedPtr<FGCSMarqueeInputProcessor> MarqueeInputProcessor;
 	TWeakObjectPtr<APlayerController> MarqueeCameraLockPlayerController;
 	FVector2D MarqueeStartScreenPosition = FVector2D::ZeroVector;
@@ -629,6 +643,12 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UGCSDroneRowView>> FleetRowViews;
+
+	UPROPERTY(Transient)
+	TMap<FString, TObjectPtr<UObject>> FleetListRowObjects;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UGCSFleetRowCheckBinding>> FleetListCheckBindings;
 
 	UPROPERTY(Transient)
 	TMap<FString, TObjectPtr<UObject>> TelemetryRowObjects;
