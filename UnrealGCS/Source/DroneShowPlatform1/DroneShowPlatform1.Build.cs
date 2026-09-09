@@ -19,8 +19,6 @@ public class DroneShowPlatform1 : ModuleRules
 			"UMG",
 			"Slate",
 			"SlateCore",
-			"Sockets",
-			"Networking",
 			"Niagara"
 		});
 
@@ -98,6 +96,8 @@ public class DroneShowPlatform1 : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
+			"Sockets",
+			"Networking",
 			"CesiumRuntime",
 			"EngineSettings"
 		});

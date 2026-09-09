@@ -23,6 +23,30 @@ namespace
             std::chrono::system_clock::now().time_since_epoch()).count();
     }
 
+    DroneCommandParameters ToInternalParameters(
+        const dspgcs::CommandParametersDTO& source)
+    {
+        DroneCommandParameters parameters;
+        parameters.takeoffAltitudeMeters =
+            source.takeoffAltitudeMeters;
+        parameters.hoverAltitudeMeters =
+            source.hoverAltitudeMeters;
+        parameters.hoverDurationSeconds =
+            source.hoverDurationSeconds;
+        parameters.customMode = source.customMode;
+        parameters.startHoverTest = source.start;
+        parameters.red = source.red;
+        parameters.green = source.green;
+        parameters.blue = source.blue;
+        parameters.timeControlMask = source.timeControlMask;
+        parameters.scheduledHour = source.scheduledHour;
+        parameters.scheduledMinute = source.scheduledMinute;
+        parameters.scheduledSecond = source.scheduledSecond;
+        parameters.advancedSpeedMetersPerSecond =
+            source.advancedSpeedMetersPerSecond;
+        return parameters;
+    }
+
     bool TryToInternalType(
         const dspgcs::CommandType type,
         DroneCommandType& result)
@@ -434,24 +458,8 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
                 }
                 else
                 {
-                    DroneCommandParameters parameters;
-                    parameters.takeoffAltitudeMeters =
-                        request.parameters.takeoffAltitudeMeters;
-                    parameters.hoverAltitudeMeters =
-                        request.parameters.hoverAltitudeMeters;
-                    parameters.hoverDurationSeconds =
-                        request.parameters.hoverDurationSeconds;
-                    parameters.customMode = request.parameters.customMode;
-                    parameters.startHoverTest = request.parameters.start;
-                    parameters.red = request.parameters.red;
-                    parameters.green = request.parameters.green;
-                    parameters.blue = request.parameters.blue;
-                    parameters.timeControlMask = request.parameters.timeControlMask;
-                    parameters.scheduledHour = request.parameters.scheduledHour;
-                    parameters.scheduledMinute = request.parameters.scheduledMinute;
-                    parameters.scheduledSecond = request.parameters.scheduledSecond;
-                    parameters.advancedSpeedMetersPerSecond =
-                        request.parameters.advancedSpeedMetersPerSecond;
+                    const DroneCommandParameters parameters =
+                        ToInternalParameters(request.parameters);
 
                     const std::uint64_t internalCommandId = commandManager.Submit(
                         internalType,
@@ -482,24 +490,8 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
             }
             else
             {
-                DroneCommandParameters parameters;
-                parameters.takeoffAltitudeMeters =
-                    request.parameters.takeoffAltitudeMeters;
-                parameters.hoverAltitudeMeters =
-                    request.parameters.hoverAltitudeMeters;
-                parameters.hoverDurationSeconds =
-                    request.parameters.hoverDurationSeconds;
-                parameters.customMode = request.parameters.customMode;
-                parameters.startHoverTest = request.parameters.start;
-                parameters.red = request.parameters.red;
-                parameters.green = request.parameters.green;
-                parameters.blue = request.parameters.blue;
-                parameters.timeControlMask = request.parameters.timeControlMask;
-                parameters.scheduledHour = request.parameters.scheduledHour;
-                parameters.scheduledMinute = request.parameters.scheduledMinute;
-                parameters.scheduledSecond = request.parameters.scheduledSecond;
-                parameters.advancedSpeedMetersPerSecond =
-                    request.parameters.advancedSpeedMetersPerSecond;
+                const DroneCommandParameters parameters =
+                    ToInternalParameters(request.parameters);
 
                 const std::uint64_t internalCommandId = commandManager.Submit(
                     internalType,

@@ -140,3 +140,7 @@ Console Release x64 Solution Build 已于 2026-08-25 通过（0 errors、12 warn
 ## 2026-09-09 Phase 0完成（架构重构未开始）
 
 用户仅授权Phase 0；构建/行为基线见 [Architecture/BASELINE.md](Architecture/BASELINE.md)。5项构建通过；Console 6次运行与Launcher Smoke 32检查通过；UE最终242+Synthetic1=243项通过。首轮3项Provider禁用配置相关失败保留；测试不能只看exit=0。762源码/配置与69资源内容对比不变，无生产源码/资产/配置修改、无真机操作。真机、人工UI、实际安装包和真实NPZ fixture性能基准仍未验证。Phase1未开始，须另行授权。
+
+## 2026-09-09 Phase 1完成，Phase 2未开始
+
+正式基线b3da56f；本轮仅3个生产文件局部整理：Receiver纯参数组装去重、CommandProvider公共头前置声明、Sockets/Networking降Private。未改业务行为/Blueprint/协议/Authority。Console Release/Debug、UE Development构建通过；UE243/243、Console6次运行、Launcher32检查通过。生产代码+38/-39行。未自行stage/commit；详见 [Architecture/17_PHASE1_REPORT.md](Architecture/17_PHASE1_REPORT.md)。

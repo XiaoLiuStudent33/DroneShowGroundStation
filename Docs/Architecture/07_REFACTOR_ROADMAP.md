@@ -1,7 +1,7 @@
 # 分阶段施工路线图
 
-Status: Phase 0 COMPLETE WITH DOCUMENTED LIMITATIONS / Phase 1–10 NOT STARTED；基线 `a95309d8`；2026-09-09。
-**用户已授权且仅执行Phase 0；结果见 [BASELINE.md](BASELINE.md)。Phase 1未开始。** 以下为原施工配方；Phase 0实际执行命令、测试配置差异和结果以基线10/11为准。每阶段以先决阶段已合并且工作树保护检查完成为起点；“独立”指单一小改、可单独编译/测试/commit/revert，不表示可乱序同时改Owner。
+Status: Phase 0 COMPLETE WITH DOCUMENTED LIMITATIONS / Phase 1 COMPLETE / Phase 2–10 NOT STARTED；基线 `a95309d8`；2026-09-09。
+**Phase 0基线见 [BASELINE.md](BASELINE.md)；本轮用户仅授权Phase 1，已完成，见 [17_PHASE1_REPORT.md](17_PHASE1_REPORT.md)。Phase 2未开始，不自行提交。** 以下为原施工配方；Phase 0实际执行命令、测试配置差异和结果以基线10/11为准。每阶段以先决阶段已合并且工作树保护检查完成为起点；“独立”指单一小改、可单独编译/测试/commit/revert，不表示可乱序同时改Owner。
 
 ## 1. 共用编译与测试配方
 
@@ -56,8 +56,8 @@ Phase 0发现上面的全局Enabled=False配方不适用于依赖启用Provider�
 | 项目 | 说明 |
 |---|---|
 | 目的 | 减少低风险重复 |
-| 当前问题 | CommandReceiver真实/模拟分支重复复制参数，局部helper增加漏字段风险。 |
-| 修改范围 | 只提取相同参数转换，不合并门禁/known-ID/日志/发送分支；一次commit仅处理一个转换族。 |
+| 当前状态 | 已提取真实/模拟分支相同13字段组装；局部前置声明与Sockets/Networking Private收窄完成；构建/243项UE回归通过。 |
+| 实际修改范围 | 相同参数转换，不合并门禁/known-ID/日志/发送分支；附件另授权的局部Public头与Build.cs依赖收窄。无Phase2新合同/接口，未提交。 |
 | 涉及文件 | ConsoleGCS/DSPGCSProductionCommandReceiver.cpp；ConsoleGCS/tests/DSPCommandTests.cpp。 |
 | 预期新增文件 | 默认无；优先匿名namespace纯函数。 |
 | 预期删除文件 | 无。 |

@@ -50,3 +50,7 @@ A=在当前扫描边界能确定是冗余文本/结构；B=静态引用不足，
 应拆职责：UIBridge的操作策略/Presenter、Coordinator的事务/展示、TelemetryProvider的格式化/协议入口、Receiver重复映射。可做局部拆分：Session::SubmitCommand、Application组装、ArtifactManager schema恢复helper。
 
 不应拆Authority：DroneManager/Session身份、RouteAssignment、UploadJobAuthority、RouteUploadManager、MissionFtpCompiler、单Niagara Actor。不强建CommandTracker、VehicleManager或第二份TelemetryState；已有Owner可提供稳定API。
+
+## 2026-09-09 Phase 1增量结论
+
+A07 Receiver重复13字段组装已消除；enum名称/允许列表未统一，不改变边界校验。A04 CommandProvider公共头已移除完整DSP include，以两个既有struct前置声明替代；Telemetry/Upload/Frozen按值合同仍保留。A10 Sockets/Networking已Public→Private，其余模块和Shared路径未大扫除。控件查找/格式化的根对象/顺序/空值/日志语义尚未逐例证明；InputCore/EnhancedInput及MAVLink路径保留为后续独立验证候选。无不确定死代码删除。详见 [17_PHASE1_REPORT.md](17_PHASE1_REPORT.md)。

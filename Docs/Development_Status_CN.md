@@ -216,3 +216,7 @@ UE Development/DebugGame Editor Build 均为 PASS；`DroneGCS.Data.DSPGCSUploadJ
 ## 2026-09-09 架构治理Phase 0
 
 Phase 0已完成并记录局限，见 [Architecture/BASELINE.md](Architecture/BASELINE.md)。Console Release/Debug完整重建、UE Editor Development/DebugGame、Launcher Release成功；最终本地自动化通过，首轮配置失败与现存警告保留。只新增文档/证据/只读比较helper，未改生产行为；未进入Phase1。
+
+## 2026-09-09 架构治理Phase 1
+
+Phase1限定范围已完成；Phase2未开始。核心重复组装与两项低风险依赖收窄通过编译和Phase0完整可用自动回归。没有新增类/接口/状态或生产行为变化；未提交。逐文件理由、保留债务与验证见 [Architecture/17_PHASE1_REPORT.md](Architecture/17_PHASE1_REPORT.md)。

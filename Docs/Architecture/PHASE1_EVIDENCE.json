@@ -1,0 +1,3988 @@
+{
+  "base": "b3da56f6bcf6410fb69b0f1db1f209fe0e4fc117",
+  "date": "2026-09-09",
+  "productionDiff": "28\t36\tConsoleGCS/DSPGCSProductionCommandReceiver.cpp\n2\t2\tUnrealGCS/Source/DroneShowPlatform1/DroneShowPlatform1.Build.cs\n8\t1\tUnrealGCS/Source/DroneShowPlatform1/Public/DSPGCSProductionCommandProviderSubsystem.h\n",
+  "build-results": [
+    {
+      "name": "Console-Release",
+      "exit": 0,
+      "seconds": 3.3510281
+    },
+    {
+      "name": "Console-Debug",
+      "exit": 0,
+      "seconds": 1.794268
+    }
+  ],
+  "ue-build-results": [
+    {
+      "name": "UE-Development",
+      "exit": 0,
+      "seconds": 45.5089967
+    }
+  ],
+  "console-test-results": [
+    {
+      "name": "full",
+      "exit": 0,
+      "seconds": 60.4594015
+    },
+    {
+      "name": "disarm-tests",
+      "exit": 0,
+      "seconds": 0.0171712
+    },
+    {
+      "name": "runtime-config-tests",
+      "exit": 0,
+      "seconds": 0.0181868
+    },
+    {
+      "name": "mavftp-concurrency-tests",
+      "exit": 0,
+      "seconds": 0.1596492
+    },
+    {
+      "name": "artifact-v2-scale-10k",
+      "exit": 0,
+      "seconds": 9.8086165
+    },
+    {
+      "name": "mission-benchmark",
+      "exit": 0,
+      "seconds": 1.4573988
+    }
+  ],
+  "ue-test-results": [
+    {
+      "name": "UE-Full",
+      "exit": 0,
+      "seconds": 60.9238886
+    },
+    {
+      "name": "UE-Synthetic",
+      "exit": 0,
+      "seconds": 26.2672164
+    }
+  ],
+  "launcher-test-results": [
+    {
+      "name": "Launcher-Smoke",
+      "exit": 0,
+      "seconds": 10.9962497
+    }
+  ],
+  "equivalence": {
+    "base": "b3da56f",
+    "fieldPairs": [
+      [
+        "takeoffAltitudeMeters",
+        "takeoffAltitudeMeters"
+      ],
+      [
+        "hoverAltitudeMeters",
+        "hoverAltitudeMeters"
+      ],
+      [
+        "hoverDurationSeconds",
+        "hoverDurationSeconds"
+      ],
+      [
+        "customMode",
+        "customMode"
+      ],
+      [
+        "startHoverTest",
+        "start"
+      ],
+      [
+        "red",
+        "red"
+      ],
+      [
+        "green",
+        "green"
+      ],
+      [
+        "blue",
+        "blue"
+      ],
+      [
+        "timeControlMask",
+        "timeControlMask"
+      ],
+      [
+        "scheduledHour",
+        "scheduledHour"
+      ],
+      [
+        "scheduledMinute",
+        "scheduledMinute"
+      ],
+      [
+        "scheduledSecond",
+        "scheduledSecond"
+      ],
+      [
+        "advancedSpeedMetersPerSecond",
+        "advancedSpeedMetersPerSecond"
+      ]
+    ],
+    "expandedReceiverTokenEquivalent": true,
+    "phase0HashDifferences": [
+      "ConsoleGCS/DSPGCSProductionCommandReceiver.cpp",
+      "UnrealGCS/Source/DroneShowPlatform1/DroneShowPlatform1.Build.cs",
+      "UnrealGCS/Source/DroneShowPlatform1/Public/DSPGCSProductionCommandProviderSubsystem.h"
+    ],
+    "publicNetworkReferences": []
+  },
+  "api-resource-check": {
+    "reflectedClassByteIdentical": true,
+    "resourceCount": 69,
+    "changedResources": []
+  },
+  "ueReports": {
+    "Full": {
+      "devices": [
+        {
+          "deviceName": "LYC666BY",
+          "instance": "6624419D4F3DFDCAE677309DD77C89C3",
+          "instanceName": "LYC666BY-8868",
+          "platform": "WindowsEditor",
+          "oSVersion": "Windows 11 (25H2) [10.0.26200.6584] ",
+          "model": "Default",
+          "gPU": "Intel(R) UHD Graphics",
+          "cPUModel": "Intel(R) Core(TM) i7-14700HX",
+          "rAMInGB": 16,
+          "renderMode": "SM6",
+          "rHI": "",
+          "appInstanceLog": ""
+        }
+      ],
+      "reportCreatedOn": "2026.09.09-09.44.32",
+      "succeeded": 222,
+      "succeededWithWarnings": 20,
+      "failed": 0,
+      "notRun": 0,
+      "inProcess": 0,
+      "totalDuration": 26.321819305419922,
+      "comparisonExported": false,
+      "comparisonExportDirectory": "",
+      "tests": [
+        {
+          "testDisplayName": "SharedContract",
+          "fullTestPath": "DroneGCS.Data.DSPGCSFrozenAssignment.SharedContract",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007755599915981293,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "AtomicThousandDroneSnapshot",
+          "fullTestPath": "DroneGCS.Data.DSPGCSTelemetryChunkAssembly.AtomicThousandDroneSnapshot",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.048017099499702454,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "HealthTimeoutFleetRetentionAndRecovery",
+          "fullTestPath": "DroneGCS.Data.DSPGCSTelemetryLink.HealthTimeoutFleetRetentionAndRecovery",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008455801755189896,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ClientHardening",
+          "fullTestPath": "DroneGCS.Data.DSPGCSUploadJob.ClientHardening",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007790900766849518,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "LiveAggregate",
+          "fullTestPath": "DroneGCS.Data.DSPGCSUploadJob.LiveAggregate",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007951196283102036,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "MirrorReliability",
+          "fullTestPath": "DroneGCS.Data.DSPGCSUploadJob.MirrorReliability",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008442901074886322,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "LockingAndGPSValidity",
+          "fullTestPath": "DroneGCS.Data.FleetGeoOrigin.LockingAndGPSValidity",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04752019792795181,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "UploadLeasePromotionGate",
+          "fullTestPath": "DroneGCS.Data.RouteArtifact.UploadLeasePromotionGate",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007823199033737183,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ConfiguredPolicy",
+          "fullTestPath": "DroneGCS.Data.RouteGpsCapture.F1.ConfiguredPolicy",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008831199258565903,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ExplicitParticipantAuthority",
+          "fullTestPath": "DroneGCS.Data.RouteGpsCapture.F1.ExplicitParticipantAuthority",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04680679738521576,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "Invalidation",
+          "fullTestPath": "DroneGCS.Data.RouteGpsCapture.F1.Invalidation",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04774469882249832,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ProductionTelemetryPreservation",
+          "fullTestPath": "DroneGCS.Data.RouteGpsCapture.F1.ProductionTelemetryPreservation",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04847609996795654,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "Robustness",
+          "fullTestPath": "DroneGCS.Data.RouteGpsCapture.F1.Robustness",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04680349677801132,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "SelectionStableWindow",
+          "fullTestPath": "DroneGCS.Data.RouteGpsCapture.F1.SelectionStableWindow",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04627389833331108,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "TransactionIsolation",
+          "fullTestPath": "DroneGCS.Data.RouteGpsCapture.F1.TransactionIsolation",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.045906201004981995,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "LegacyFormat",
+          "fullTestPath": "DroneGCS.Export.Benchmark.LegacyFormat",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008319497108459473,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "01SeparatesNearbyDrones",
+          "fullTestPath": "DroneGCS.HoverLayers.01SeparatesNearbyDrones",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008154001086950302,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "02NoLegacyLayerCap",
+          "fullTestPath": "DroneGCS.HoverLayers.02NoLegacyLayerCap",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008163202553987503,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "03RevalidatesCurrentPositions",
+          "fullTestPath": "DroneGCS.HoverLayers.03RevalidatesCurrentPositions",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00823800265789032,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "FailureAndFinalizeGate",
+          "fullTestPath": "DroneGCS.RouteArtifact.2C3A.FailureAndFinalizeGate",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.1438598930835724,
+          "dateTime": "2026.09.09-09.44.03",
+          "entries": [],
+          "warnings": 10,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ReadyAndCurrentValidation",
+          "fullTestPath": "DroneGCS.RouteArtifact.2C3A.ReadyAndCurrentValidation",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.0722799003124237,
+          "dateTime": "2026.09.09-09.44.04",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "TenThousandDomainLifecycle",
+          "fullTestPath": "DroneGCS.RouteArtifact.2C3A.TenThousandDomainLifecycle",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008423801511526108,
+          "dateTime": "2026.09.09-09.44.04",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "WorkspaceLifecycle",
+          "fullTestPath": "DroneGCS.RouteArtifact.2C3A.WorkspaceLifecycle",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.10607859492301941,
+          "dateTime": "2026.09.09-09.44.04",
+          "entries": [],
+          "warnings": 1,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "CleanupAndContention",
+          "fullTestPath": "DroneGCS.RouteArtifact.2C3B.CleanupAndContention",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.047548599541187286,
+          "dateTime": "2026.09.09-09.44.04",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "CrashRecovery",
+          "fullTestPath": "DroneGCS.RouteArtifact.2C3B.CrashRecovery",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.21410980820655823,
+          "dateTime": "2026.09.09-09.44.04",
+          "entries": [],
+          "warnings": 1,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "CurrentAllowlist",
+          "fullTestPath": "DroneGCS.RouteArtifact.2C3B.CurrentAllowlist",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.19998960196971893,
+          "dateTime": "2026.09.09-09.44.04",
+          "entries": [],
+          "warnings": 6,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ReparseSafety",
+          "fullTestPath": "DroneGCS.RouteArtifact.2C3B.ReparseSafety",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.07090429961681366,
+          "dateTime": "2026.09.09-09.44.04",
+          "entries": [],
+          "warnings": 2,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "TenThousandAllowlist",
+          "fullTestPath": "DroneGCS.RouteArtifact.2C3B.TenThousandAllowlist",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.014064401388168335,
+          "dateTime": "2026.09.09-09.44.04",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "01Digest",
+          "fullTestPath": "DroneGCS.RouteArtifact.01Digest",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008085697889328003,
+          "dateTime": "2026.09.09-09.44.04",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "02BuildIdentity",
+          "fullTestPath": "DroneGCS.RouteArtifact.02BuildIdentity",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008142102509737015,
+          "dateTime": "2026.09.09-09.44.04",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "03PathSafety",
+          "fullTestPath": "DroneGCS.RouteArtifact.03PathSafety",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008591800928115845,
+          "dateTime": "2026.09.09-09.44.04",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "04TenThousandPaths",
+          "fullTestPath": "DroneGCS.RouteArtifact.04TenThousandPaths",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.010435100644826889,
+          "dateTime": "2026.09.09-09.44.04",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "05SourceIdentityLifecycle",
+          "fullTestPath": "DroneGCS.RouteArtifact.05SourceIdentityLifecycle",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.0481095016002655,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [],
+          "warnings": 1,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "01CanonicalManifest",
+          "fullTestPath": "DroneGCS.RouteArtifact2C2.01CanonicalManifest",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00833199918270111,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "02ArtifactSetDigest",
+          "fullTestPath": "DroneGCS.RouteArtifact2C2.02ArtifactSetDigest",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008191198110580444,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "03MappingRoutesBinding",
+          "fullTestPath": "DroneGCS.RouteArtifact2C2.03MappingRoutesBinding",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008316200226545334,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "04MalformedJson",
+          "fullTestPath": "DroneGCS.RouteArtifact2C2.04MalformedJson",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008474498987197876,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "05TenThousandManifest",
+          "fullTestPath": "DroneGCS.RouteArtifact2C2.05TenThousandManifest",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.1013479009270668,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [
+            {
+              "event": {
+                "type": "Info",
+                "message": "MANIFEST10K bytes=2276947 serializeMs=19.555 parseMs=31.682 validateMs=16.280",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.05"
+            }
+          ],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "06StreamingFileHash",
+          "fullTestPath": "DroneGCS.RouteArtifact2C2.06StreamingFileHash",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.05514959990978241,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "07FileIntegrity",
+          "fullTestPath": "DroneGCS.RouteArtifact2C2.07FileIntegrity",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.06403320282697678,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "DeletedCurrentRecovery",
+          "fullTestPath": "DroneGCS.RouteArtifactV2B.DeletedCurrentRecovery",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.07193580269813538,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [],
+          "warnings": 1,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "LegacyReplacement",
+          "fullTestPath": "DroneGCS.RouteArtifactV2B.LegacyReplacement",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.07605910301208496,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [],
+          "warnings": 1,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "OfflineProductionGeneration",
+          "fullTestPath": "DroneGCS.RouteArtifactV2B.OfflineProductionGeneration",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.21178969740867615,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [
+            {
+              "event": {
+                "type": "Info",
+                "message": "Default workspace recovery=0 summary=Workspace is stable.",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.05"
+            }
+          ],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "RuntimeReplacement",
+          "fullTestPath": "DroneGCS.RouteArtifactV2B.RuntimeReplacement",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.05070669949054718,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [
+            {
+              "event": {
+                "type": "Info",
+                "message": "SavedDir=C:/Users/13092/Documents/DroneGCS/UnrealGCS/Saved/ DefaultRoot=C:/Users/13092/Documents/DroneGCS/UnrealGCS/Saved/RouteArtifacts ResolveError=",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.05"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "Replacement attempt=0 finalized=1 error=",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.05"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "Replacement attempt=1 finalized=1 error=",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.05"
+            }
+          ],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "WorkspaceSourceSafety",
+          "fullTestPath": "DroneGCS.RouteArtifactV2B.WorkspaceSourceSafety",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04044320061802864,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [],
+          "warnings": 2,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "01DistanceValidityRequired",
+          "fullTestPath": "DroneGCS.RouteAssignment.AuthorityDefense.01DistanceValidityRequired",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008366599678993225,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [],
+          "warnings": 1,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "02NaNRejected",
+          "fullTestPath": "DroneGCS.RouteAssignment.AuthorityDefense.02NaNRejected",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008302200585603714,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [],
+          "warnings": 1,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "03NegativeRejected",
+          "fullTestPath": "DroneGCS.RouteAssignment.AuthorityDefense.03NegativeRejected",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008078500628471375,
+          "dateTime": "2026.09.09-09.44.05",
+          "entries": [],
+          "warnings": 1,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "04ExactBoundaryAccepted",
+          "fullTestPath": "DroneGCS.RouteAssignment.AuthorityDefense.04ExactBoundaryAccepted",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008326999843120575,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "05AboveBoundaryRejected",
+          "fullTestPath": "DroneGCS.RouteAssignment.AuthorityDefense.05AboveBoundaryRejected",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008245799690485,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 1,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "06Point35Rejected",
+          "fullTestPath": "DroneGCS.RouteAssignment.AuthorityDefense.06Point35Rejected",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00784970074892044,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 1,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "LifetimeContract",
+          "fullTestPath": "DroneGCS.RouteAssignment.AuthoritySession.LifetimeContract",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.07524490356445312,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 6,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "01SamePoint",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.01SamePoint",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00838099792599678,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "02ExactBoundaryIncluded",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.02ExactBoundaryIncluded",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008326500654220581,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "03JustBelowBoundaryIncluded",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.03JustBelowBoundaryIncluded",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00818990170955658,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "04JustAboveBoundaryExcluded",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.04JustAboveBoundaryExcluded",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008577302098274231,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "05MultipleCandidatesRetained",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.05MultipleCandidatesRetained",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00887100026011467,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "06CompetingDronesRetained",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.06CompetingDronesRetained",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.0081510990858078,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "07EligibleZeroCandidatesVisible",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.07EligibleZeroCandidatesVisible",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00809289887547493,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "08IneligibleProducesNoEdges",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.08IneligibleProducesNoEdges",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008792299777269363,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "09InputCountMismatchFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.09InputCountMismatchFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008235298097133636,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "10InputIdentityMismatchFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.10InputIdentityMismatchFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008214600384235382,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "11CanonicalOrdering",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.11CanonicalOrdering",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00815030187368393,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "12RepeatEquivalent",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.12RepeatEquivalent",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007829401642084122,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "13AltitudeAndUpIgnored",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.13AltitudeAndUpIgnored",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008242897689342499,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "14EmptyRoute",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.14EmptyRoute",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00824739784002304,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "15MalformedRouteFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.15MalformedRouteFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008295901119709015,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "16ConfigValidation",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.16ConfigValidation",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008875798434019089,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "17FleetCompatibleIdentity",
+          "fullTestPath": "DroneGCS.RouteAssignment.CandidateEdges.17FleetCompatibleIdentity",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00794370099902153,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "01ValidThreeBindings",
+          "fullTestPath": "DroneGCS.RouteAssignment.Explicit.01ValidThreeBindings",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008236799389123917,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "02PartialDegradedDomain",
+          "fullTestPath": "DroneGCS.RouteAssignment.Explicit.02PartialDegradedDomain",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008277200162410736,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "03InvalidInputs",
+          "fullTestPath": "DroneGCS.RouteAssignment.Explicit.03InvalidInputs",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008236698806285858,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "04DistanceContract",
+          "fullTestPath": "DroneGCS.RouteAssignment.Explicit.04DistanceContract",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008287400007247925,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [],
+          "warnings": 2,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "WireRetryStateValidation",
+          "fullTestPath": "DroneGCS.RouteAssignment.FrozenSync.WireRetryStateValidation",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 6.764364719390869,
+          "dateTime": "2026.09.09-09.44.06",
+          "entries": [
+            {
+              "event": {
+                "type": "Info",
+                "message": "R2_METRIC mappings=1000 canonicalBytes=19128 chunks=19 frames=21 encodedBytes=23270 buildMs=0.294 fakeSendMs=0.001",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.06"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "R2_METRIC mappings=10000 canonicalBytes=190128 chunks=188 frames=190 encodedBytes=226042 buildMs=3.054 fakeSendMs=0.022",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.06"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=HappyFull mappings=8 canonicalBytes=320 chunks=1 frames=3 endpointUdpBytes=1206 relayForwardedFrozenBytes=1510 maxDatagram=524 attempts=1 elapsedMs=34.650 accepted=1 rejected=0 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.06"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=HappyDegraded mappings=7 canonicalBytes=301 chunks=1 frames=3 endpointUdpBytes=1187 relayForwardedFrozenBytes=1491 maxDatagram=505 attempts=1 elapsedMs=13.660 accepted=1 rejected=0 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.06"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=AckLoss mappings=128 canonicalBytes=2600 chunks=3 frames=5 endpointUdpBytes=7788 relayForwardedFrozenBytes=8092 maxDatagram=1200 attempts=2 elapsedMs=1025.842 accepted=2 rejected=0 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.08"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=BeginLoss mappings=128 canonicalBytes=2600 chunks=3 frames=5 endpointUdpBytes=7788 relayForwardedFrozenBytes=7702 maxDatagram=1200 attempts=2 elapsedMs=1022.660 accepted=1 rejected=4 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.09"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=MiddleChunkLoss mappings=128 canonicalBytes=2600 chunks=3 frames=5 endpointUdpBytes=7788 relayForwardedFrozenBytes=7254 maxDatagram=1200 attempts=2 elapsedMs=289.732 accepted=1 rejected=1 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.09"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=CommitLoss mappings=128 canonicalBytes=2600 chunks=3 frames=5 endpointUdpBytes=7788 relayForwardedFrozenBytes=7800 maxDatagram=1200 attempts=2 elapsedMs=1018.805 accepted=1 rejected=0 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.10"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=DuplicateBegin mappings=128 canonicalBytes=2600 chunks=3 frames=5 endpointUdpBytes=3894 relayForwardedFrozenBytes=4588 maxDatagram=1200 attempts=1 elapsedMs=37.624 accepted=1 rejected=0 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.10"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=DuplicateChunk mappings=128 canonicalBytes=2600 chunks=3 frames=5 endpointUdpBytes=3894 relayForwardedFrozenBytes=5398 maxDatagram=1200 attempts=1 elapsedMs=26.542 accepted=1 rejected=0 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.10"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=DuplicateCommit mappings=128 canonicalBytes=2600 chunks=3 frames=5 endpointUdpBytes=3894 relayForwardedFrozenBytes=4490 maxDatagram=1200 attempts=1 elapsedMs=22.612 accepted=1 rejected=1 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.10"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=ReorderedChunks mappings=128 canonicalBytes=2600 chunks=3 frames=5 endpointUdpBytes=3894 relayForwardedFrozenBytes=4198 maxDatagram=1200 attempts=1 elapsedMs=9.211 accepted=1 rejected=0 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.11"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=CombinedFault mappings=128 canonicalBytes=2600 chunks=3 frames=5 endpointUdpBytes=7788 relayForwardedFrozenBytes=8904 maxDatagram=1200 attempts=2 elapsedMs=1022.896 accepted=2 rejected=0 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.12"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=HashCorruption mappings=128 canonicalBytes=2600 chunks=3 frames=5 endpointUdpBytes=7788 relayForwardedFrozenBytes=8454 maxDatagram=1200 attempts=2 elapsedMs=288.565 accepted=1 rejected=1 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.12"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=FleetSessionMismatch mappings=8 canonicalBytes=324 chunks=1 frames=3 endpointUdpBytes=1230 relayForwardedFrozenBytes=1590 maxDatagram=532 attempts=1 elapsedMs=31.930 accepted=0 rejected=3 storeMutations=0",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.12"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=OldDelayedAck mappings=128 canonicalBytes=2600 chunks=3 frames=5 endpointUdpBytes=7788 relayForwardedFrozenBytes=8700 maxDatagram=1200 attempts=1 elapsedMs=36.538 accepted=2 rejected=0 storeMutations=2",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.12"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=Atomicity mappings=128 canonicalBytes=2600 chunks=3 frames=5 endpointUdpBytes=7788 relayForwardedFrozenBytes=8454 maxDatagram=1200 attempts=1 elapsedMs=44.651 accepted=1 rejected=1 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.12"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=ConsoleRestart mappings=128 canonicalBytes=2600 chunks=3 frames=5 endpointUdpBytes=7788 relayForwardedFrozenBytes=8448 maxDatagram=1200 attempts=1 elapsedMs=112.819 accepted=0 rejected=5 storeMutations=0",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.13"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=Scale1000 mappings=1000 canonicalBytes=19168 chunks=20 frames=22 endpointUdpBytes=23930 relayForwardedFrozenBytes=24234 maxDatagram=1200 attempts=1 elapsedMs=20.058 accepted=1 rejected=0 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.13"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "E2E_METRIC scenario=Scale10000 mappings=10000 canonicalBytes=190168 chunks=191 frames=193 endpointUdpBytes=229814 relayForwardedFrozenBytes=230118 maxDatagram=1200 attempts=1 elapsedMs=33.338 accepted=1 rejected=0 storeMutations=1",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.13"
+            }
+          ],
+          "warnings": 16,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "01SameOrigin",
+          "fullTestPath": "DroneGCS.RouteAssignment.Geo.01SameOrigin",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00816599652171135,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "02LongitudeIncreasesEast",
+          "fullTestPath": "DroneGCS.RouteAssignment.Geo.02LongitudeIncreasesEast",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008255697786808014,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "03LatitudeIncreasesNorth",
+          "fullTestPath": "DroneGCS.RouteAssignment.Geo.03LatitudeIncreasesNorth",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008183501660823822,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "04EcefEquatorPrimeMeridian",
+          "fullTestPath": "DroneGCS.RouteAssignment.Geo.04EcefEquatorPrimeMeridian",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008234497159719467,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "05EcefNinetyLongitude",
+          "fullTestPath": "DroneGCS.RouteAssignment.Geo.05EcefNinetyLongitude",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007910501211881638,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "06ProductionOriginSamePosition",
+          "fullTestPath": "DroneGCS.RouteAssignment.Geo.06ProductionOriginSamePosition",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008179798722267151,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "07OfflineRetainedIneligible",
+          "fullTestPath": "DroneGCS.RouteAssignment.Geo.07OfflineRetainedIneligible",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008501600474119186,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "08InsufficientFixRetainedIneligible",
+          "fullTestPath": "DroneGCS.RouteAssignment.Geo.08InsufficientFixRetainedIneligible",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008170001208782196,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "09InvalidCoordinatesRetainedIneligible",
+          "fullTestPath": "DroneGCS.RouteAssignment.Geo.09InvalidCoordinatesRetainedIneligible",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008402500301599503,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "10CountAndOrderPreserved",
+          "fullTestPath": "DroneGCS.RouteAssignment.Geo.10CountAndOrderPreserved",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007979098707437515,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "11InvalidOriginRejectsBuild",
+          "fullTestPath": "DroneGCS.RouteAssignment.Geo.11InvalidOriginRejectsBuild",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008845500648021698,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "12AltitudeIsAuditOnly",
+          "fullTestPath": "DroneGCS.RouteAssignment.Geo.12AltitudeIsAuditOnly",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007853399962186813,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "01LiveSourceEndToEnd",
+          "fullTestPath": "DroneGCS.RouteAssignment.Integration.01LiveSourceEndToEnd",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.028947699815034866,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "02CaptureFailurePreservesWorking",
+          "fullTestPath": "DroneGCS.RouteAssignment.Integration.02CaptureFailurePreservesWorking",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04576239734888077,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "03FrozenRejectsBeforeCapture",
+          "fullTestPath": "DroneGCS.RouteAssignment.Integration.03FrozenRejectsBeforeCapture",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04569869861006737,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "04ExplicitAuthorityAndStaleSources",
+          "fullTestPath": "DroneGCS.RouteAssignment.Integration.04ExplicitAuthorityAndStaleSources",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.047054897993803024,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "01EqualCountsMatchedOnly",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.01EqualCountsMatchedOnly",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.009319499135017395,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "02MoreDronesProducesSpare",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.02MoreDronesProducesSpare",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008304700255393982,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "03FewerDronesProducesVacant",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.03FewerDronesProducesVacant",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007703498005867004,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "04DeficientGraphProducesUnresolved",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.04DeficientGraphProducesUnresolved",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007849600166082382,
+          "dateTime": "2026.09.09-09.44.13",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "05DegreeZeroIsNoCandidate",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.05DegreeZeroIsNoCandidate",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007672399282455444,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "06DegreePositiveIsConflict",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.06DegreePositiveIsConflict",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008392799645662308,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "07MultipleCandidatesNotAmbiguous",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.07MultipleCandidatesNotAmbiguous",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008276499807834625,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "08OfflineExcluded",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.08OfflineExcluded",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.0095256008207798,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "09InvalidGPSExcluded",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.09InvalidGPSExcluded",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.009398400783538818,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "10InsufficientFixExcluded",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.10InsufficientFixExcluded",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007512498646974564,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "11InvalidLatLonExcluded",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.11InvalidLatLonExcluded",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008189000189304352,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "12DerivedGeoInvalidExcluded",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.12DerivedGeoInvalidExcluded",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008139301091432571,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "13DronePartitionComplete",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.13DronePartitionComplete",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008382998406887054,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "14RoutePartitionComplete",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.14RoutePartitionComplete",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00819840282201767,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "15DroneBucketsDisjoint",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.15DroneBucketsDisjoint",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008250199258327484,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "16VacantForbidsSpare",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.16VacantForbidsSpare",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008158501237630844,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "17ZeroRoutesMakesEligibleSpare",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.17ZeroRoutesMakesEligibleSpare",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008332200348377228,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "18ZeroEligibleAllRoutesVacant",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.18ZeroEligibleAllRoutesVacant",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008323300629854202,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "19PairOverProductionThresholdFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.19PairOverProductionThresholdFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008390497416257858,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "20PairDistanceMismatchFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.20PairDistanceMismatchFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008258901536464691,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "21PairAbsentFromGraphFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.21PairAbsentFromGraphFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008331701159477234,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "22DuplicatePairDroneFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.22DuplicatePairDroneFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008584201335906982,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "23DuplicatePairRouteFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.23DuplicatePairRouteFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.0082520991563797,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "24LocalCountMismatchFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.24LocalCountMismatchFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008112099021673203,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "25LocalSourceIdentityMismatchFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.25LocalSourceIdentityMismatchFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008201699703931808,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "26GraphMissingEligibleDroneFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.26GraphMissingEligibleDroneFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008274801075458527,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "27GraphExtraEligibleDroneFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.27GraphExtraEligibleDroneFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008237197995185852,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "28RouteCountMismatchFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.28RouteCountMismatchFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008315399289131165,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "29InvalidSourceIdentityFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.29InvalidSourceIdentityFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00819069892168045,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "30CanonicalOutputOrdering",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.30CanonicalOutputOrdering",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008238300681114197,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "31RepeatInputEquivalent",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.31RepeatInputEquivalent",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008243802934885025,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "32EquivalentEdgeOrderEquivalentCandidate",
+          "fullTestPath": "DroneGCS.RouteAssignment.Materializer.32EquivalentEdgeOrderEquivalentCandidate",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008243300020694733,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "01OneDroneOneRoute",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.01OneDroneOneRoute",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008176896721124649,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "02OneDroneTwoRoutes",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.02OneDroneTwoRoutes",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008270598948001862,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "03TwoDronesOneRoute",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.03TwoDronesOneRoute",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008262000977993011,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "04GreedyTrap",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.04GreedyTrap",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008227001875638962,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "05ComplexAugmentingPath",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.05ComplexAugmentingPath",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008189603686332703,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "06ZeroCandidateDrone",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.06ZeroCandidateDrone",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008416600525379181,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "07EmptyDroneSide",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.07EmptyDroneSide",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008049800992012024,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "08EmptyRouteSide",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.08EmptyRouteSide",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008451700210571289,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "09DisconnectedGraph",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.09DisconnectedGraph",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008194699883460999,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "10AllToAll",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.10AllToAll",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008281499147415161,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "11EligibleGreaterThanRoutes",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.11EligibleGreaterThanRoutes",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008376803249120712,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "12EligibleLessThanRoutes",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.12EligibleLessThanRoutes",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007393300533294678,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "13DeficientGraph",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.13DeficientGraph",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008333999663591385,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "14WitnessDroneUnique",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.14WitnessDroneUnique",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008457601070404053,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "15WitnessRouteUnique",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.15WitnessRouteUnique",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008973602205514908,
+          "dateTime": "2026.09.09-09.44.14",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "16WitnessUsesInputEdges",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.16WitnessUsesInputEdges",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.0077630989253520966,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "17RepeatDeterministic",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.17RepeatDeterministic",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008451700210571289,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "18SourceOrderIndependent",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.18SourceOrderIndependent",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008318901062011719,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "19MultipleMaximumDeterministic",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.19MultipleMaximumDeterministic",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00897979736328125,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "20MalformedOffsetsFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.20MalformedOffsetsFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.0078963004052639,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "21DuplicateEdgeFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.21DuplicateEdgeFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008279900997877121,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "22MalformedRouteFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.22MalformedRouteFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00828550010919571,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "23DistanceIndependent",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.23DistanceIndependent",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00827229768037796,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "24MalformedDistanceFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.24MalformedDistanceFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007917597889900208,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "25MalformedEdgeIdentityFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.25MalformedEdgeIdentityFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007777601480484009,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "26MalformedCountFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.MaximumMatching.26MalformedCountFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008200500160455704,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "01OneDroneOneRoute",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.01OneDroneOneRoute",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008137300610542297,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "02OneDroneChoosesLowerCost",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.02OneDroneChoosesLowerCost",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.0081666000187397,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "03TwoDronesChoosesLowerCost",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.03TwoDronesChoosesLowerCost",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008067898452281952,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "04GreedyCostTrap",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.04GreedyCostTrap",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00832889974117279,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "05PreservesMaximumCardinality",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.05PreservesMaximumCardinality",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008183002471923828,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "06ResidualReassignment",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.06ResidualReassignment",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00821400061249733,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "07DisconnectedComponents",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.07DisconnectedComponents",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008250601589679718,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "08EqualCostDeterministic",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.08EqualCostDeterministic",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00835999846458435,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "09CandidateInputOrderIndependent",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.09CandidateInputOrderIndependent",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008260101079940796,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "10PairUniqueness",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.10PairUniqueness",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007543299347162247,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "11WitnessUsesCandidateEdges",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.11WitnessUsesCandidateEdges",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008172601461410522,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "12CanonicalTotalRecomputation",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.12CanonicalTotalRecomputation",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007885098457336426,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "13ExactBoundaryEdge",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.13ExactBoundaryEdge",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008243102580308914,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "14ZeroMaximumCardinality",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.14ZeroMaximumCardinality",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008227799087762833,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "15EligibleGreaterThanRoutes",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.15EligibleGreaterThanRoutes",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008396200835704803,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "16EligibleLessThanRoutes",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.16EligibleLessThanRoutes",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008274499326944351,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "17MalformedMaximumWitnessFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.17MalformedMaximumWitnessFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00818299874663353,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "18CardinalityMismatchFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.18CardinalityMismatchFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008295398205518723,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "19MalformedCandidateGraphFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.19MalformedCandidateGraphFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008356299251317978,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "20NonFiniteDistanceFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.20NonFiniteDistanceFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008189700543880463,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "21RepeatDeterministic",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.21RepeatDeterministic",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008233297616243362,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "22DistanceChangesOptimalWitness",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.22DistanceChangesOptimalWitness",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00829239934682846,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "23BruteForceOracleFixed",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.23BruteForceOracleFixed",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008173897862434387,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "24BruteForceOracleSynthetic",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.24BruteForceOracleSynthetic",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008434999734163284,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "25CloseDoubleCostsRemainDistinct",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.25CloseDoubleCostsRemainDistinct",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008009698241949081,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "26RoundoffScaleReducedCostClamps",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.26RoundoffScaleReducedCostClamps",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008293699473142624,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "27MaterialNegativeReducedCostFails",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.27MaterialNegativeReducedCostFails",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008293099701404572,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "28Sparse1000Baseline",
+          "fullTestPath": "DroneGCS.RouteAssignment.MinimumCost.28Sparse1000Baseline",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.1827138066291809,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [
+            {
+              "event": {
+                "type": "Info",
+                "message": "Sparse1000 SSAP elapsed 181.158 ms for 2000 edges.",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.15"
+            }
+          ],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "01FullOneToOne",
+          "fullTestPath": "DroneGCS.RouteAssignment.Pipeline.01FullOneToOne",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00838879868388176,
+          "dateTime": "2026.09.09-09.44.15",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "02FullWithSpare",
+          "fullTestPath": "DroneGCS.RouteAssignment.Pipeline.02FullWithSpare",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008162498474121094,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "03DegradedWithVacant",
+          "fullTestPath": "DroneGCS.RouteAssignment.Pipeline.03DegradedWithVacant",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00800279900431633,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "04ExcludedStillFull",
+          "fullTestPath": "DroneGCS.RouteAssignment.Pipeline.04ExcludedStillFull",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007970597594976425,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "05NoCandidateDraft",
+          "fullTestPath": "DroneGCS.RouteAssignment.Pipeline.05NoCandidateDraft",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008505299687385559,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "06DeficientConflictDraft",
+          "fullTestPath": "DroneGCS.RouteAssignment.Pipeline.06DeficientConflictDraft",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008202601224184036,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "07ZeroEligibleDraft",
+          "fullTestPath": "DroneGCS.RouteAssignment.Pipeline.07ZeroEligibleDraft",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00843299925327301,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "08ExactProductionBoundary",
+          "fullTestPath": "DroneGCS.RouteAssignment.Pipeline.08ExactProductionBoundary",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008327901363372803,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "08FixedFrameAnchorMatrix",
+          "fullTestPath": "DroneGCS.RouteAssignment.Pipeline.08FixedFrameAnchorMatrix",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008417002856731415,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "09InvalidSourceFailsWithStage",
+          "fullTestPath": "DroneGCS.RouteAssignment.Pipeline.09InvalidSourceFailsWithStage",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008119799196720123,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "10RepeatDeterministic",
+          "fullTestPath": "DroneGCS.RouteAssignment.Pipeline.10RepeatDeterministic",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00822019949555397,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "11CanonicalEquivalentCandidate",
+          "fullTestPath": "DroneGCS.RouteAssignment.Pipeline.11CanonicalEquivalentCandidate",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008353099226951599,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "12ProductionThresholdActuallyUsed",
+          "fullTestPath": "DroneGCS.RouteAssignment.Pipeline.12ProductionThresholdActuallyUsed",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00802379846572876,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "01CrossBuildGolden",
+          "fullTestPath": "DroneGCS.RouteMission.01CrossBuildGolden",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008335698395967484,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "DeterminismAndDegraded",
+          "fullTestPath": "DroneGCS.RouteWaypointBatch.2DC2A.DeterminismAndDegraded",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.33354121446609497,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "FailureCancelAndStaleGate",
+          "fullTestPath": "DroneGCS.RouteWaypointBatch.2DC2A.FailureCancelAndStaleGate",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.15164920687675476,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "SnapshotDiskAnd10K",
+          "fullTestPath": "DroneGCS.RouteWaypointBatch.2DC2A.SnapshotDiskAnd10K",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 13.447798728942871,
+          "dateTime": "2026.09.09-09.44.16",
+          "entries": [
+            {
+              "event": {
+                "type": "Info",
+                "message": "C2A_METRICS PhysicalCores=20 DefaultWorkers10K=8 TestWorkers=4 PeakActiveWorkers=4 PeakOpenRouteFiles=4 Routes=10000 Rows=20000 Bytes=1297240",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.25"
+            }
+          ],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "BoundedCancelShutdown",
+          "fullTestPath": "DroneGCS.RouteWaypointBatch.2DC2B.BoundedCancelShutdown",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.024919498711824417,
+          "dateTime": "2026.09.09-09.44.30",
+          "entries": [
+            {
+              "event": {
+                "type": "Info",
+                "message": "C2B_SHUTDOWN Seconds=0.003315 Workers=8 PeakOpenFiles=5 Completed=8 Cancelled=5",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.30"
+            }
+          ],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "StrictBoundsAndShutdown",
+          "fullTestPath": "DroneGCS.RouteWaypointBatch.2DC2B.StrictBoundsAndShutdown",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00808589905500412,
+          "dateTime": "2026.09.09-09.44.30",
+          "entries": [
+            {
+              "event": {
+                "type": "Info",
+                "message": "C2B_PREFLIGHT MaxRow=80 MaxRoute9100=746211 Artifact1000=750884536 Artifact10000=7508255536 OldRoute1000=1183011000 OldRoute10000=11830110000",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.30"
+            }
+          ],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "GeoAndContract",
+          "fullTestPath": "DroneGCS.RouteWaypointGenerator.2DC1.GeoAndContract",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00825660303235054,
+          "dateTime": "2026.09.09-09.44.30",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "GoldenFiles",
+          "fullTestPath": "DroneGCS.RouteWaypointGenerator.2DC1.GoldenFiles",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008233200758695602,
+          "dateTime": "2026.09.09-09.44.30",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "RgbSaturationCompatibility",
+          "fullTestPath": "DroneGCS.RouteWaypointGenerator.2DC1.RgbSaturationCompatibility",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008079100400209427,
+          "dateTime": "2026.09.09-09.44.30",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ValidationFailureCancellation",
+          "fullTestPath": "DroneGCS.RouteWaypointGenerator.2DC1.ValidationFailureCancellation",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008027598261833191,
+          "dateTime": "2026.09.09-09.44.30",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "WorkspaceStagingAdapter",
+          "fullTestPath": "DroneGCS.RouteWaypointGenerator.2DC1.WorkspaceStagingAdapter",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.013804897665977478,
+          "dateTime": "2026.09.09-09.44.30",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "MalformedCorpus",
+          "fullTestPath": "DroneGCS.RouteWaypointValidation.2EB.MalformedCorpus",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.24297170341014862,
+          "dateTime": "2026.09.09-09.44.30",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "SourceCorruption",
+          "fullTestPath": "DroneGCS.RouteWaypointValidation.2EB.SourceCorruption",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.03594280034303665,
+          "dateTime": "2026.09.09-09.44.30",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "StreamingSemanticAndSourceBound",
+          "fullTestPath": "DroneGCS.RouteWaypointValidation.2EB.StreamingSemanticAndSourceBound",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.03391169756650925,
+          "dateTime": "2026.09.09-09.44.30",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "AuthoredContract",
+          "fullTestPath": "DroneGCS.UI.FleetList.AuthoredContract",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04917360097169876,
+          "dateTime": "2026.09.09-09.44.30",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "Scale1000",
+          "fullTestPath": "DroneGCS.UI.FleetSelectAll.Scale1000",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04631249979138374,
+          "dateTime": "2026.09.09-09.44.30",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "Scale20000",
+          "fullTestPath": "DroneGCS.UI.FleetSelectAll.Scale20000",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.0678883045911789,
+          "dateTime": "2026.09.09-09.44.30",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "IndependentMapPlaybackLogsToggles",
+          "fullTestPath": "DroneGCS.UI.Navigation.IndependentMapPlaybackLogsToggles",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.08903869986534119,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "CanonicalDroneId",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.AutoStart.CanonicalDroneId",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00832429900765419,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ExactlyOnce",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.AutoStart.ExactlyOnce",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.007831398397684097,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "FailClosed",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.AutoStart.FailClosed",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.00834069773554802,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "PreflightRejectMatrix",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.AutoStart.PreflightRejectMatrix",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008179798722267151,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "SingleTarget",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.AutoStart.SingleTarget",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008161399513483047,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 2,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "StaleMatrix",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.AutoStart.StaleMatrix",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008190400898456573,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "CaptureBoundSource",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.NpzNumbering.CaptureBoundSource",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008337698876857758,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ConfirmedMappingPriority",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.NpzNumbering.ConfirmedMappingPriority",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008155100047588348,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "AnchorCaptureAuthority",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.ShowOrigin.AnchorCaptureAuthority",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.06613270193338394,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ArtifactIdentitySafety",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.ArtifactIdentitySafety",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008193999528884888,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "CommandDispatch",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.CommandDispatch",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.048400599509477615,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "CommandOriginAndGate",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.CommandOriginAndGate",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008548900485038757,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ConvertWithoutAssignmentWidgets",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.ConvertWithoutAssignmentWidgets",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04777419939637184,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "OwnershipAndTeardown",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.OwnershipAndTeardown",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04555020108819008,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 2,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "PreJobPresentation",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.PreJobPresentation",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04646500200033188,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ProgressAndFormatting",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.ProgressAndFormatting",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008201800286769867,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "RequiredWidgetLookupFailure",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.RequiredWidgetLookupFailure",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.06716810166835785,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "RouteListScale",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.RouteListScale",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.06626930087804794,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [
+            {
+              "event": {
+                "type": "Info",
+                "message": "UI3A_SCALE count=1000 build_ms=0.962 estimated_model_bytes=136000 visible_rows=0 visible_refresh_ms=0.001",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.31"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "UI3A_SCALE count=10000 build_ms=7.110 estimated_model_bytes=1360000 visible_rows=0 visible_refresh_ms=0.002",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.31"
+            },
+            {
+              "event": {
+                "type": "Info",
+                "message": "UI3A_SCALE count=20000 build_ms=14.469 estimated_model_bytes=2720000 visible_rows=0 visible_refresh_ms=0.004",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.31"
+            }
+          ],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "RouteListSnapshotLifecycle",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.RouteListSnapshotLifecycle",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.049078602343797684,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "RouteRowContract",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.RouteRowContract",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04507509991526604,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "UploadCommandGate",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.UploadCommandGate",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008080102503299713,
+          "dateTime": "2026.09.09-09.44.31",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ViewStatePersistence",
+          "fullTestPath": "DroneGCS.UI.RouteWorkflow.ViewStatePersistence",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.048226699233055115,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "DetailAndCommandStateSeparation",
+          "fullTestPath": "DroneGCS.UI.Selection.DetailAndCommandStateSeparation",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.05211389809846878,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 3,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "SnapshotDoesNotAutoSelectDetail",
+          "fullTestPath": "DroneGCS.UI.Selection.SnapshotDoesNotAutoSelectDetail",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04694340005517006,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "AuthoredWidgets",
+          "fullTestPath": "DroneGCS.UI.TelemetryFilter.AuthoredWidgets",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.06739380210638046,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "CountsAndSelection",
+          "fullTestPath": "DroneGCS.UI.TelemetryFilter.CountsAndSelection",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.0465599000453949,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "CurrentAndCombinedModes",
+          "fullTestPath": "DroneGCS.UI.TelemetryFilter.CurrentAndCombinedModes",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04656369984149933,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "IndependentToolbarToggle",
+          "fullTestPath": "DroneGCS.UI.TelemetryFilter.IndependentToolbarToggle",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04740370064973831,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "Model",
+          "fullTestPath": "DroneGCS.UI.TelemetryFilter.Model",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008058898150920868,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "PresetsPersistLocally",
+          "fullTestPath": "DroneGCS.UI.TelemetryFilter.PresetsPersistLocally",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.08984389901161194,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "ScheduledPreview10Hz",
+          "fullTestPath": "DroneGCS.UI.TimeControl.ScheduledPreview10Hz",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04614629969000816,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "GameModePawnContract",
+          "fullTestPath": "DroneGCS.UI.VisualCleanup.GameModePawnContract",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.008964400738477707,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "PossessionAndCameraViewTarget",
+          "fullTestPath": "DroneGCS.UI.VisualCleanup.PossessionAndCameraViewTarget",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.051482297480106354,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "UploadDashboardToggle",
+          "fullTestPath": "DroneGCS.UI.UploadDashboardToggle",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.09244120121002197,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        },
+        {
+          "testDisplayName": "CountOrderAndOfflineStability",
+          "fullTestPath": "DroneGCS.Visualization.FleetNiagaraBridge.CountOrderAndOfflineStability",
+          "state": "Success",
+          "deviceInstance": [
+            "6624419D4F3DFDCAE677309DD77C89C3"
+          ],
+          "duration": 0.04968060180544853,
+          "dateTime": "2026.09.09-09.44.32",
+          "entries": [],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        }
+      ]
+    },
+    "Synthetic": {
+      "devices": [
+        {
+          "deviceName": "LYC666BY",
+          "instance": "EA72803E404A30B73E3B2EABC09C98FA",
+          "instanceName": "LYC666BY-4452",
+          "platform": "WindowsEditor",
+          "oSVersion": "Windows 11 (25H2) [10.0.26200.6584] ",
+          "model": "Default",
+          "gPU": "Intel(R) UHD Graphics",
+          "cPUModel": "Intel(R) Core(TM) i7-14700HX",
+          "rAMInGB": 16,
+          "renderMode": "SM6",
+          "rHI": "",
+          "appInstanceLog": ""
+        }
+      ],
+      "reportCreatedOn": "2026.09.09-09.44.59",
+      "succeeded": 1,
+      "succeededWithWarnings": 0,
+      "failed": 0,
+      "notRun": 0,
+      "inProcess": 0,
+      "totalDuration": 10.553546905517578,
+      "comparisonExported": false,
+      "comparisonExportDirectory": "",
+      "tests": [
+        {
+          "testDisplayName": "Synthetic10Kx16",
+          "fullTestPath": "DroneGCSBenchmark.RouteWaypointBatch.2DC2B.Synthetic10Kx16",
+          "state": "Success",
+          "deviceInstance": [
+            "EA72803E404A30B73E3B2EABC09C98FA"
+          ],
+          "duration": 10.553546905517578,
+          "dateTime": "2026.09.09-09.44.48",
+          "entries": [
+            {
+              "event": {
+                "type": "Info",
+                "message": "C2B_10K Routes=10000 Frames=16 Files=10000 Rows=160000 Bytes=8752277 Elapsed=8.152792 RoutesPerSec=1226.574 RowsPerSec=19625.179 Workers=8 PeakWorkers=8 PeakOpenFiles=8 HandlesBefore=1661 HandlesPeak=1666 HandlesAfter=1663 WorkingSetDelta=618496 PrivateDelta=647168 PeakWorkingSet=2436968448 PeakPrivate=2329903104 PeakCPU=17.459 Cleanup=2.336403",
+                "context": "",
+                "artifact": "00000000000000000000000000000000"
+              },
+              "filename": "",
+              "lineNumber": -1,
+              "timestamp": "2026.09.09-09.44.59"
+            }
+          ],
+          "warnings": 0,
+          "errors": 0,
+          "artifacts": []
+        }
+      ]
+    }
+  },
+  "ueCommandLines": {
+    "Full": [
+      "LogInit: Command Line: /Engine/Maps/Entry -unattended -NullRHI -nosound -ini:Game:[DSPGCS.ProductionTelemetry]:Enabled=True -ini:Game:[DSPGCS.ProductionCommand]:Enabled=True,SafeTestMode=True -ExecCmds=\"Automation RunTests DroneGCS.\" -TestExit=\"Automation Test Queue Empty\" -ReportExportPath=C:\\Users\\13092\\Documents\\DroneGCS\\UnrealGCS\\Saved\\Automation\\ArchitecturePhase1-20260909-Full -abslog=C:\\Users\\13092\\Documents\\DroneGCS\\BuildLogs\\ArchitecturePhase1-20260909\\ue-Full-tests.log"
+    ],
+    "Synthetic": [
+      "LogInit: Command Line: /Engine/Maps/Entry -unattended -NullRHI -nosound -ini:Game:[DSPGCS.ProductionTelemetry]:Enabled=False -ini:Game:[DSPGCS.ProductionCommand]:Enabled=False,SafeTestMode=True -ExecCmds=\"Automation RunTests DroneGCSBenchmark.RouteWaypointBatch.2DC2B.Synthetic10Kx16\" -TestExit=\"Automation Test Queue Empty\" -ReportExportPath=C:\\Users\\13092\\Documents\\DroneGCS\\UnrealGCS\\Saved\\Automation\\ArchitecturePhase1-20260909-Synthetic -abslog=C:\\Users\\13092\\Documents\\DroneGCS\\BuildLogs\\ArchitecturePhase1-20260909\\ue-Synthetic-tests.log"
+    ]
+  },
+  "launcherPassedAssertions": 32
+}

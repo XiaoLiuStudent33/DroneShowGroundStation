@@ -174,3 +174,7 @@ Repository-side second-PC logs: NONE
 ## 2026-09-09 Phase 0实测基线
 
 完整入口清单、A–E分类、命令/耗时/逐项结果见 [Architecture/11_TEST_BASELINE.md](Architecture/11_TEST_BASELINE.md)。Console 6次运行通过；Launcher Smoke 32检查通过；UE全量复跑242/242和独立Synthetic1/1通过。首轮禁用Provider导致3项失败，即使exit=0也不能报PASS。全量执行需核查有效回环端口、无生产Console；不修改部署ini。真实NPZ fixture、手工联合验收和真机测试未运行，不能计入通过。新增verify_phase0.py仅比较字节，不是行为等价测试。
+
+## 2026-09-09 Phase 1实测回归
+
+Console Release/Debug、UE Editor Development成功；Console full/disarm/runtime-config/concurrency/artifact10K/mission-benchmark六次运行全部通过；UE Full242+Synthetic1=243/243、0失败/未运行；Launcher Smoke32检查通过。测试名/时长与完整UE报告见 [Architecture/PHASE1_EVIDENCE.json](Architecture/PHASE1_EVIDENCE.json)。Receiver helper展开后与正式基线去空白文本等价；反射类声明和69资源不变。测试资产/入口无新增或修改，未运行硬件测试。

@@ -8,10 +8,17 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "DSPGCSProtocol.h"
 #include "DSPGCSProductionCommandTypes.h"
 #include "Subsystems/GameInstanceSubsystem.h"
+#include <cstdint>
+#include <vector>
 #include "DSPGCSProductionCommandProviderSubsystem.generated.h"
+
+namespace dspgcs
+{
+	struct MessageEnvelope;
+	struct CommandResultBatchDTO;
+}
 
 class UDSPGCSProductionTelemetryProviderSubsystem;
 
