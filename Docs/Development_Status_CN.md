@@ -5,6 +5,14 @@ Authority: 当前实现状态与开发顺序
 Last Updated: 2026-09-09
 Baseline: `master` / `f115587` + 2026-09-09 本状态文档更新
 
+## 架构治理审计状态（2026-09-09）
+
+- 审计基线：`master` / `a95309d8b37ecb00c779d5c4264aacb86294d8ec`。
+- 已完成：一方代码/工程/配置/测试文本扫描、主要调用链与线程/生命周期审计、[十份架构文档](Architecture/00_REPO_OVERVIEW.md)、逐阶段重构方案。
+- 未开始：任何源码重构、Phase 0 构建与行为基线、新测试执行、资源改动、真机动作。等待用户确认方案后才进入 Phase 0。
+- 重要现状差异：默认 RouteSlot 为 NumericDroneID（零基），已确认 NPZ Mapping 可拥有上传目标集合；已有 runtime MAVFTP config binding；Hover 工作流有每活动 Session 线程。下文旧减一映射/仅选择集合描述不是当前源码最终依据，详见 [当前运行链](Architecture/01_CURRENT_ARCHITECTURE.md)。
+- 当前测试结论仍是此前记录；本轮静态审计不增加新的 PASS 或硬件证据。疑似结果丢失、回调重入、确认目标与无界缓存问题仅在 [风险文档](Architecture/08_BEHAVIOR_RISKS.md) 记录。
+
 ## 1. DONE / IMPLEMENTED
 
 基础 Production 能力：
@@ -204,3 +212,7 @@ UE Development/DebugGame Editor Build 均为 PASS；`DroneGCS.Data.DSPGCSUploadJ
 3. 本文件
 4. [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md)
 5. Audit 与 `History/` 仅作证据
+
+## 2026-09-09 架构治理Phase 0
+
+Phase 0已完成并记录局限，见 [Architecture/BASELINE.md](Architecture/BASELINE.md)。Console Release/Debug完整重建、UE Editor Development/DebugGame、Launcher Release成功；最终本地自动化通过，首轮配置失败与现存警告保留。只新增文档/证据/只读比较helper，未改生产行为；未进入Phase1。

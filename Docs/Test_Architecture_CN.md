@@ -6,6 +6,10 @@ Last Updated: 2026-09-09
 
 Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，当前调用链见 [Code_Architecture_CN.md](Code_Architecture_CN.md)，进度见 [Development_Status_CN.md](Development_Status_CN.md)。
 
+## 2026-09-09 架构治理证据说明
+
+本轮仅审计 `a95309d8` 的测试源码/工程和生产调用链，未重新构建或运行测试，不产生新的 PASS。未来行为基线与分阶段验证见 [Architecture/07_REFACTOR_ROADMAP.md](Architecture/07_REFACTOR_ROADMAP.md)，当前阶段必须等待用户确认后才开始 Phase 0。需重点特征化零基 DroneID/RouteSlot、confirmed NPZ 目标集合、runtime config binding、特殊命令完成语义以及销毁/回调重入；潜在问题先记录，不在结构治理中改变 expected 值掩盖行为变化。
+
 ## 1. 资产边界
 
 | 类型 | 入口 | 证据范围 |
@@ -166,3 +170,7 @@ Repository-side second-PC logs: NONE
 ```
 
 因此可以确认第一版安装交付链可用；不能仅凭该结论声称升级、卸载、全部灯光/飞行/航线上传或任意固件行为均已验收。
+
+## 2026-09-09 Phase 0实测基线
+
+完整入口清单、A–E分类、命令/耗时/逐项结果见 [Architecture/11_TEST_BASELINE.md](Architecture/11_TEST_BASELINE.md)。Console 6次运行通过；Launcher Smoke 32检查通过；UE全量复跑242/242和独立Synthetic1/1通过。首轮禁用Provider导致3项失败，即使exit=0也不能报PASS。全量执行需核查有效回环端口、无生产Console；不修改部署ini。真实NPZ fixture、手工联合验收和真机测试未运行，不能计入通过。新增verify_phase0.py仅比较字节，不是行为等价测试。

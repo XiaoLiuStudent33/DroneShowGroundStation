@@ -6,6 +6,14 @@ Baseline: `master` / `f115587` + 2026-09-09 本交接文档更新
 
 本文件是快速接手入口。长期边界以 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md) 为准，当前调用链以 [Code_Architecture_CN.md](Code_Architecture_CN.md) 和 Production 源码为准，进度以 [Development_Status_CN.md](Development_Status_CN.md) 为准。
 
+## 2026-09-09 架构治理审计补充（源码未改）
+
+以 `a95309d8b37ecb00c779d5c4264aacb86294d8ec` 完成一方源码、工程、配置与测试文本审计，交付 [Architecture/00_REPO_OVERVIEW.md](Architecture/00_REPO_OVERVIEW.md) 至 09 的十份文档。本轮仅编写文档，没有编译、重跑回归或启动真机链路；重构 Phase 0 尚未开始，须用户确认方案。
+
+当前源码与下文旧阶段描述存在差异，接手时优先阅读 [当前架构审计](Architecture/01_CURRENT_ARCHITECTURE.md)：默认编号映射为 `RouteSlot = NumericDroneID`（Drone000→0），已确认 NPZ Mapping 存在时使用其 Entries 目标/Slot，而非始终使用当前 UI 勾选；已有 DSP MAVFTP runtime cap 查询/应用及 binding；HoverTest 的 FlightControl 使用每活动 Session 工作线程。这些是已存在行为，本轮只记录，不恢复旧映射或改线程/通信。旧文档中的减一映射不可作为重构依据。
+
+主要治理方向是分离 UIBridge/RouteCoordinator 的应用状态与 Widget 展示、提供协议无关高层 API、保留现有 Session/Assignment/Upload/Socket Authority；细分步骤见 [路线图](Architecture/07_REFACTOR_ROADMAP.md)。所有发现的潜在 Bug 仅记录，未修复。
+
 ## 1. 阅读顺序
 
 1. [README_CN.md](README_CN.md)
@@ -128,3 +136,7 @@ Console Release x64 Solution Build 已于 2026-08-25 通过（0 errors、12 warn
 2026-09-09：新版机群列表由用户完成现场测试；Console 高级命令、DSP round-trip、HoverTest、#187 RGB、真实 GPS 插值和独立 Toolbar 均有对应源码回归。原 MissionUpload fake production chain 使用 `Drone001–Drone005` 的旧夹具编号，已改为当前 canonical `Drone000–Drone004`，完整 Console 回归恢复通过。真机 relay 输出和物理断电行为不属于软件自动化证明范围。
 
 详细测试边界见 [Test_Architecture_CN.md](Test_Architecture_CN.md)。
+
+## 2026-09-09 Phase 0完成（架构重构未开始）
+
+用户仅授权Phase 0；构建/行为基线见 [Architecture/BASELINE.md](Architecture/BASELINE.md)。5项构建通过；Console 6次运行与Launcher Smoke 32检查通过；UE最终242+Synthetic1=243项通过。首轮3项Provider禁用配置相关失败保留；测试不能只看exit=0。762源码/配置与69资源内容对比不变，无生产源码/资产/配置修改、无真机操作。真机、人工UI、实际安装包和真实NPZ fixture性能基准仍未验证。Phase1未开始，须另行授权。

@@ -6,6 +6,8 @@ Last Updated: 2026-09-03
 
 ## 1. START HERE
 
+2026-09-09 新增 [架构治理审计与方案（十份文档）](Architecture/00_REPO_OVERVIEW.md)，基线 `a95309d8`。当前事实差异、主要依赖、UI 可替换 API 与分阶段路线图均在该目录；只有审计文档已完成，重构 Phase 0 未开始。
+
 推荐阅读顺序：
 
 1. [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md) — 不能违反的长期边界。
@@ -112,3 +114,7 @@ Route Upload ListView 的稳定行身份与分页恢复显示合同见 `UI_Archi
 - History 文件不得作为当前实现 Authority。
 - 仓库 Markdown 使用相对链接，不写本机绝对路径和易漂移行号。
 - 功能完成后同步更新 Code Architecture、对应专项 Architecture、Development Status 与本索引。
+
+## 架构治理Phase 0基线
+
+[BASELINE索引](Architecture/BASELINE.md) · [构建](Architecture/10_BUILD_BASELINE.md) · [测试](Architecture/11_TEST_BASELINE.md) · [Command](Architecture/12_COMMAND_BASELINE.md) · [Telemetry](Architecture/13_TELEMETRY_BASELINE.md) · [Upload](Architecture/14_UPLOAD_BASELINE.md) · [多机](Architecture/15_MULTI_VEHICLE_BASELINE.md) · [UI](Architecture/16_UI_BEHAVIOR_BASELINE.md)。仅Phase0已执行，Phase1未开始。
