@@ -23,7 +23,20 @@ enum class EGCSProductionCommandType : uint8
 	TimeStart,
 	TimeStop,
 	ExecuteDanceStep,
-	EndDanceStep
+	EndDanceStep,
+	MissionPause,
+	MissionForward,
+	MissionBackward,
+	ChangeSpeed,
+	TriggerSmoke,
+	StopTelemetry,
+	ResumeTelemetry,
+	DisableLedOutput,
+	RestoreLedOutput,
+	Wake,
+	Standby,
+	Reboot,
+	Shutdown
 };
 
 /** Ground-station workflow mode; intentionally independent of APM flight mode. */
@@ -80,6 +93,10 @@ struct DRONESHOWPLATFORM1_API FGCSProductionCommandParameters
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
 	uint8 ScheduledSecond = 0;
+
+	/** Audited legacy speed range is 1-5 m/s; Console validates again. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drone GCS|Command")
+	float AdvancedSpeedMetersPerSecond = 0.0f;
 };
 
 USTRUCT(BlueprintType)

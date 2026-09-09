@@ -33,6 +33,32 @@ const char* DroneCommandTypeName(DroneCommandType type)
         return "EXECUTE_DANCE_STEP";
     case DroneCommandType::EndDanceStep:
         return "END_DANCE_STEP";
+    case DroneCommandType::MissionPause:
+        return "MISSION_PAUSE";
+    case DroneCommandType::MissionForward:
+        return "MISSION_FORWARD";
+    case DroneCommandType::MissionBackward:
+        return "MISSION_BACKWARD";
+    case DroneCommandType::ChangeSpeed:
+        return "CHANGE_SPEED";
+    case DroneCommandType::TriggerSmoke:
+        return "TRIGGER_SMOKE";
+    case DroneCommandType::StopTelemetry:
+        return "STOP_TELEMETRY";
+    case DroneCommandType::ResumeTelemetry:
+        return "RESUME_TELEMETRY";
+    case DroneCommandType::DisableLedOutput:
+        return "DISABLE_LED_OUTPUT";
+    case DroneCommandType::RestoreLedOutput:
+        return "RESTORE_LED_OUTPUT";
+    case DroneCommandType::Wake:
+        return "WAKE";
+    case DroneCommandType::Standby:
+        return "STANDBY";
+    case DroneCommandType::Reboot:
+        return "REBOOT";
+    case DroneCommandType::Shutdown:
+        return "SHUTDOWN";
     }
 
     return "UNKNOWN";

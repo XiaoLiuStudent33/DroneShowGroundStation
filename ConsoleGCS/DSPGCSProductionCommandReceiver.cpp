@@ -41,6 +41,19 @@ namespace
         case dspgcs::CommandType::TimeStop: result = DroneCommandType::TimeStop; return true;
         case dspgcs::CommandType::ExecuteDanceStep: result = DroneCommandType::ExecuteDanceStep; return true;
         case dspgcs::CommandType::EndDanceStep: result = DroneCommandType::EndDanceStep; return true;
+        case dspgcs::CommandType::MissionPause: result = DroneCommandType::MissionPause; return true;
+        case dspgcs::CommandType::MissionForward: result = DroneCommandType::MissionForward; return true;
+        case dspgcs::CommandType::MissionBackward: result = DroneCommandType::MissionBackward; return true;
+        case dspgcs::CommandType::ChangeSpeed: result = DroneCommandType::ChangeSpeed; return true;
+        case dspgcs::CommandType::TriggerSmoke: result = DroneCommandType::TriggerSmoke; return true;
+        case dspgcs::CommandType::StopTelemetry: result = DroneCommandType::StopTelemetry; return true;
+        case dspgcs::CommandType::ResumeTelemetry: result = DroneCommandType::ResumeTelemetry; return true;
+        case dspgcs::CommandType::DisableLedOutput: result = DroneCommandType::DisableLedOutput; return true;
+        case dspgcs::CommandType::RestoreLedOutput: result = DroneCommandType::RestoreLedOutput; return true;
+        case dspgcs::CommandType::Wake: result = DroneCommandType::Wake; return true;
+        case dspgcs::CommandType::Standby: result = DroneCommandType::Standby; return true;
+        case dspgcs::CommandType::Reboot: result = DroneCommandType::Reboot; return true;
+        case dspgcs::CommandType::Shutdown: result = DroneCommandType::Shutdown; return true;
         }
         return false;
     }
@@ -61,6 +74,19 @@ namespace
         case dspgcs::CommandType::TimeStop:
         case dspgcs::CommandType::ExecuteDanceStep:
         case dspgcs::CommandType::EndDanceStep:
+        case dspgcs::CommandType::MissionPause:
+        case dspgcs::CommandType::MissionForward:
+        case dspgcs::CommandType::MissionBackward:
+        case dspgcs::CommandType::ChangeSpeed:
+        case dspgcs::CommandType::TriggerSmoke:
+        case dspgcs::CommandType::StopTelemetry:
+        case dspgcs::CommandType::ResumeTelemetry:
+        case dspgcs::CommandType::DisableLedOutput:
+        case dspgcs::CommandType::RestoreLedOutput:
+        case dspgcs::CommandType::Wake:
+        case dspgcs::CommandType::Standby:
+        case dspgcs::CommandType::Reboot:
+        case dspgcs::CommandType::Shutdown:
             return true;
         default:
             return false;
@@ -215,6 +241,14 @@ DSPGCSProductionCommandReceiver::ValidateRealCommand(
         validation.errorCode = "TIME_CONTROL_TIME_INVALID";
         validation.errorMessage =
             "Scheduled local time must be within 00:00:00-23:59:59";
+        return validation;
+    }
+    if (request.commandType == dspgcs::CommandType::ChangeSpeed &&
+        (request.parameters.advancedSpeedMetersPerSecond < 1.0f ||
+         request.parameters.advancedSpeedMetersPerSecond > 5.0f))
+    {
+        validation.errorCode = "REAL_COMMAND_SPEED_LIMIT";
+        validation.errorMessage = "Speed must be within [1, 5] m/s";
         return validation;
     }
 
@@ -416,6 +450,8 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
                     parameters.scheduledHour = request.parameters.scheduledHour;
                     parameters.scheduledMinute = request.parameters.scheduledMinute;
                     parameters.scheduledSecond = request.parameters.scheduledSecond;
+                    parameters.advancedSpeedMetersPerSecond =
+                        request.parameters.advancedSpeedMetersPerSecond;
 
                     const std::uint64_t internalCommandId = commandManager.Submit(
                         internalType,
@@ -462,6 +498,8 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
                 parameters.scheduledHour = request.parameters.scheduledHour;
                 parameters.scheduledMinute = request.parameters.scheduledMinute;
                 parameters.scheduledSecond = request.parameters.scheduledSecond;
+                parameters.advancedSpeedMetersPerSecond =
+                    request.parameters.advancedSpeedMetersPerSecond;
 
                 const std::uint64_t internalCommandId = commandManager.Submit(
                     internalType,

@@ -123,6 +123,7 @@ private:
 	friend class FGCSMarqueeInputProcessor;
 	friend class UGCSFleetRowCheckBinding;
 	friend class FGCSIndependentToolbarTogglesTest;
+	friend class FGCSSelectionStateSeparationTest;
 	friend class FGCSScheduledShowPreviewTest;
 	friend class FGCSTelemetryFilterToggleTest;
 
@@ -130,9 +131,6 @@ private:
 	void HandleTelemetryFilterToggleClicked();
 	void BindTelemetryFilterToggle();
 	void ResetTelemetryFilter();
-
-	UFUNCTION()
-	void HandleMenuClicked();
 
 	UFUNCTION()
 	void HandleFleetPageClicked();
@@ -235,6 +233,48 @@ private:
 
 	UFUNCTION()
 	void HandleLandClicked();
+
+	UFUNCTION()
+	void HandleMissionPauseClicked();
+
+	UFUNCTION()
+	void HandleMissionForwardClicked();
+
+	UFUNCTION()
+	void HandleMissionBackwardClicked();
+
+	UFUNCTION()
+	void HandleAdvancedSpeedClicked();
+
+	UFUNCTION()
+	void HandleAdvancedLockClicked();
+
+	UFUNCTION()
+	void HandleTriggerSmokeClicked();
+
+	UFUNCTION()
+	void HandleStopTelemetryClicked();
+
+	UFUNCTION()
+	void HandleResumeTelemetryClicked();
+
+	UFUNCTION()
+	void HandleLightsOffClicked();
+
+	UFUNCTION()
+	void HandleRestoreLightsClicked();
+
+	UFUNCTION()
+	void HandleWakeClicked();
+
+	UFUNCTION()
+	void HandleStandbyClicked();
+
+	UFUNCTION()
+	void HandleRebootClicked();
+
+	UFUNCTION()
+	void HandleShutdownClicked();
 
 	UFUNCTION()
 	void HandleHoverClicked();
@@ -355,6 +395,17 @@ private:
 	void SetRightPanelText(const FName Name, const FString& Value) const;
 	void RefreshFromFleet();
 	void RefreshProductionCommandAvailability();
+	void RefreshMissionPlaybackControls(bool bCanSendProductionCommands);
+	void BindAdvancedControls();
+	void TickAdvancedControls();
+	bool ConfirmOrArmAdvancedCommand(
+		EGCSProductionCommandType CommandType,
+		FName LabelWidget,
+		const FString& OriginalLabel);
+	void ResetAdvancedConfirmation();
+	void SubmitAdvancedCommand(
+		EGCSProductionCommandType CommandType,
+		const FGCSProductionCommandParameters& Parameters = {});
 	EDSPGCSTelemetryLinkState GetProductionTelemetryLinkState() const;
 	void RefreshFleetListRows(
 		const TArray<FDroneData>& Drones,
@@ -417,6 +468,10 @@ private:
 		const FVector2D& StartPosition,
 		const FVector2D& EndPosition);
 	void BindExistingButtons();
+	void BindMissionPlaybackControls();
+	void SubmitMissionPlaybackCommand(EGCSProductionCommandType CommandType);
+	bool AreCurrentCommandTargetsMissionPaused() const;
+	void ClearMissionPausedTargets(const TArray<FString>& TargetDroneIDs);
 	void BindColorPaletteButtons();
 	void BindTimeControlControls();
 	void BindReferenceAndMapControls();
@@ -521,7 +576,6 @@ private:
 	TWeakObjectPtr<UWidget> SelectionRectangleWidget;
 	TWeakObjectPtr<UUserWidget> MapPageWidget;
 	TWeakObjectPtr<UUserWidget> LogsPageWidget;
-	bool bPanelsExpanded = true;
 	bool bFleetPanelRequestedVisible = false;
 	bool bDroneDetailRequestedVisible = false;
 	FString LastCommandResultText;
@@ -564,6 +618,20 @@ private:
 	int32 PendingTimeControlResultCount = 0;
 	int32 PendingTimeControlSucceededCount = 0;
 	TSet<FString> PendingTimeControlCompletedDroneIDs;
+	TSet<FString> MissionPausedDroneIDs;
+	FString PendingMissionPlaybackCommandID;
+	EGCSProductionCommandType PendingMissionPlaybackCommandType =
+		EGCSProductionCommandType::MissionPause;
+	int32 PendingMissionPlaybackTargetCount = 0;
+	int32 PendingMissionPlaybackResultCount = 0;
+	int32 PendingMissionPlaybackSucceededCount = 0;
+	TSet<FString> PendingMissionPlaybackCompletedDroneIDs;
+	bool bAdvancedConfirmationArmed = false;
+	EGCSProductionCommandType PendingAdvancedConfirmationType =
+		EGCSProductionCommandType::TriggerSmoke;
+	FName PendingAdvancedConfirmationLabel;
+	FString PendingAdvancedConfirmationOriginalLabel;
+	double PendingAdvancedConfirmationExpiresAtSeconds = 0.0;
 	FVector2D TopDownLastMousePosition = FVector2D::ZeroVector;
 	float TopDownFitOrthoWidth = 0.0f;
 	FVector TopDownLockedCameraLocation = FVector::ZeroVector;
@@ -633,6 +701,7 @@ private:
 	static constexpr float TimeControlUIRefreshIntervalSeconds = 0.1f;
 	static constexpr float UploadDashboardRefreshIntervalSeconds = 0.2f;
 	static constexpr float TelemetryTableRefreshIntervalSeconds = 1.0f;
+	static constexpr double AdvancedConfirmationWindowSeconds = 5.0;
 	float HoverAltitudeMeters = 5.0f;
 	static constexpr double HoverLayerMinimumSpacingMeters = 0.6;
 };

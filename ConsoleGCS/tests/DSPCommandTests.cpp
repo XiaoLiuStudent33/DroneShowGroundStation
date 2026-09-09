@@ -53,7 +53,8 @@ namespace
         const float hoverDuration = 0.0f,
         const float takeoffAltitude = 0.0f,
         const std::int32_t customMode = -1,
-        const bool start = true)
+        const bool start = true,
+        const float advancedSpeed = 0.0f)
     {
         dspgcs::CommandRequestDTO request;
         request.commandId = commandId;
@@ -64,6 +65,7 @@ namespace
         request.parameters.takeoffAltitudeMeters = takeoffAltitude;
         request.parameters.customMode = customMode;
         request.parameters.start = start;
+        request.parameters.advancedSpeedMetersPerSecond = advancedSpeed;
         request.source.sourceType = "UI";
         request.source.sourceId = "UnrealGCS-Test";
         request.source.stationId = "GCS-TEST";
@@ -246,6 +248,71 @@ int RunDSPCommandTests()
         !DSPGCSProductionCommandReceiver::ValidateRealCommand(invalidModeRequest).allowed,
         "unsupported Copter custom mode rejected by safety policy");
 
+    dspgcs::CommandRequestDTO validAdvancedSpeed;
+    validAdvancedSpeed.commandType = dspgcs::CommandType::ChangeSpeed;
+    validAdvancedSpeed.targetDroneIds = fiveTargets;
+    validAdvancedSpeed.parameters.advancedSpeedMetersPerSecond = 3.0f;
+    passed &= Check(
+        DSPGCSProductionCommandReceiver::ValidateRealCommand(validAdvancedSpeed).allowed,
+        "real advanced 3m/s speed command accepted by safety policy");
+
+    for (const float invalidSpeed : { 0.9f, 5.1f })
+    {
+        dspgcs::CommandRequestDTO invalidAdvancedSpeed = validAdvancedSpeed;
+        invalidAdvancedSpeed.parameters.advancedSpeedMetersPerSecond = invalidSpeed;
+        const DSPGCSRealCommandValidation validation =
+            DSPGCSProductionCommandReceiver::ValidateRealCommand(
+                invalidAdvancedSpeed);
+        passed &= Check(
+            !validation.allowed &&
+            validation.errorCode == "REAL_COMMAND_SPEED_LIMIT",
+            "advanced speed outside 1-5m/s rejected by safety policy");
+    }
+
+    for (const dspgcs::CommandType advancedType :
+        { dspgcs::CommandType::TriggerSmoke,
+          dspgcs::CommandType::StopTelemetry,
+          dspgcs::CommandType::ResumeTelemetry,
+          dspgcs::CommandType::DisableLedOutput,
+          dspgcs::CommandType::RestoreLedOutput,
+          dspgcs::CommandType::Wake,
+          dspgcs::CommandType::Standby,
+          dspgcs::CommandType::Reboot,
+          dspgcs::CommandType::Shutdown })
+    {
+        dspgcs::CommandRequestDTO advancedRequest;
+        advancedRequest.commandType = advancedType;
+        advancedRequest.targetDroneIds = fiveTargets;
+        passed &= Check(
+            DSPGCSProductionCommandReceiver::ValidateRealCommand(
+                advancedRequest).allowed,
+            "advanced command accepted by safety policy");
+    }
+
+    {
+        dspgcs::CommandRequestDTO original = validAdvancedSpeed;
+        original.commandId = "UE-TEST-ADVANCED-SPEED-CODEC";
+        original.timestampUtcMs = UtcNowMs();
+        dspgcs::MessageEnvelope envelope;
+        envelope.messageType = dspgcs::MessageType::CommandRequest;
+        envelope.sourceId = "UnrealGCS-Codec-Test";
+        envelope.sessionId = "UE-TEST";
+        envelope.timestampUtcMs = original.timestampUtcMs;
+        envelope.correlationId = original.commandId;
+
+        const std::vector<std::uint8_t> bytes =
+            dspgcs::EncodeCommand(envelope, original);
+        dspgcs::MessageEnvelope decodedEnvelope;
+        std::vector<std::uint8_t> payload;
+        dspgcs::CommandRequestDTO decoded;
+        passed &= Check(
+            dspgcs::DecodeEnvelope(bytes, decodedEnvelope, payload) &&
+            dspgcs::DecodeCommand(payload, decoded) &&
+            decoded.commandType == dspgcs::CommandType::ChangeSpeed &&
+            decoded.parameters.advancedSpeedMetersPerSecond == 3.0f,
+            "advanced speed survives DSP protocol round trip");
+    }
+
     dspgcs::CommandRequestDTO validTimeStart;
     validTimeStart.commandType = dspgcs::CommandType::TimeStart;
     validTimeStart.targetDroneIds = fiveTargets;
@@ -271,6 +338,20 @@ int RunDSPCommandTests()
     passed &= Check(
         DSPGCSProductionCommandReceiver::ValidateRealCommand(validEndDanceStep).allowed,
         "immediate dance end accepted by safety policy");
+
+    for (const dspgcs::CommandType missionControlType :
+        { dspgcs::CommandType::MissionPause,
+          dspgcs::CommandType::MissionForward,
+          dspgcs::CommandType::MissionBackward })
+    {
+        dspgcs::CommandRequestDTO missionControlRequest;
+        missionControlRequest.commandType = missionControlType;
+        missionControlRequest.targetDroneIds = fiveTargets;
+        passed &= Check(
+            DSPGCSProductionCommandReceiver::ValidateRealCommand(
+                missionControlRequest).allowed,
+            "legacy BGC2 mission-control command accepted by safety policy");
+    }
 
     dspgcs::CommandRequestDTO invalidTimeStart = validTimeStart;
     invalidTimeStart.parameters.scheduledSecond = 60;
@@ -356,6 +437,24 @@ int RunDSPCommandTests()
             fiveTargets,
             5.0f)),
         "multi HOVER_TEST frame sent");
+    passed &= Check(
+        ueTransport->Send(MakeCommandFrame(
+            "UE-TEST-MISSION-PAUSE-5",
+            dspgcs::CommandType::MissionPause,
+            fiveTargets)),
+        "multi MISSION_PAUSE frame sent");
+    passed &= Check(
+        ueTransport->Send(MakeCommandFrame(
+            "UE-TEST-MISSION-FORWARD-5",
+            dspgcs::CommandType::MissionForward,
+            fiveTargets)),
+        "multi MISSION_FORWARD frame sent");
+    passed &= Check(
+        ueTransport->Send(MakeCommandFrame(
+            "UE-TEST-MISSION-BACKWARD-5",
+            dspgcs::CommandType::MissionBackward,
+            fiveTargets)),
+        "multi MISSION_BACKWARD frame sent");
 
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -369,7 +468,7 @@ int RunDSPCommandTests()
             });
         {
             std::lock_guard<std::mutex> lock(resultMutex);
-            if (results.size() >= 9) break;
+            if (results.size() >= 12) break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -396,7 +495,10 @@ int RunDSPCommandTests()
         { "UE-TEST-TAKEOFF-5", fiveTargets },
         { "UE-TEST-RTL-8", eightTargets },
         { "UE-TEST-STOP-3", threeTargets, false },
-        { "UE-TEST-HOVER-5", fiveTargets }
+        { "UE-TEST-HOVER-5", fiveTargets },
+        { "UE-TEST-MISSION-PAUSE-5", fiveTargets },
+        { "UE-TEST-MISSION-FORWARD-5", fiveTargets },
+        { "UE-TEST-MISSION-BACKWARD-5", fiveTargets }
     };
     for (const ExpectedBatch& expected : expectedBatches)
     {
@@ -497,7 +599,7 @@ int RunDSPCommandTests()
             "manual LAND ended the selected Session hover state");
     }
     passed &= Check(
-        commandReceiver.GetReceivedCommandCount() == 10,
+        commandReceiver.GetReceivedCommandCount() == 13,
         "HoverTest generated no automatic LAND/RTL command");
 
     ueTransport->Stop();
@@ -510,7 +612,8 @@ int RunDSPCommandTests()
         << "targetSizes=N3,N5,N8 dynamicTaskExpansion=PASS\n"
         << "multiArm=5 multiDisarm=3 multiStabilize=5 multiAuto=3 multiGuided=8 multiTakeoff=5\n"
         << "multiLand=5 multiRTL=8 multiStop=3 multiHover=5\n"
-        << "commandBatches=10 resultsMatchTargetCount=PASS\n"
+        << "missionPause=5 missionForward=5 missionBackward=5 legacyBGC2Contract=PASS\n"
+        << "commandBatches=13 resultsMatchTargetCount=PASS\n"
         << "N5 Hovering=5 WaitingCommand=5 manualLand=5 "
            "automaticLand=0 automaticRTL=0\n"
         << "realMultiTarget=ALLOWED realTakeoff5m=ALLOWED_BY_POLICY "

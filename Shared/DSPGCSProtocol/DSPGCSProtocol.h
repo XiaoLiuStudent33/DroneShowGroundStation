@@ -17,9 +17,9 @@ namespace dspgcs
 {
     inline constexpr std::uint16_t ProtocolMajor = 1;
     inline constexpr std::uint16_t ProtocolMinor = 0;
-    // Schema 7 carries every MDHK_STATUS (#187) field needed by the expanded
-    // UE telemetry table without changing standard operational telemetry.
-    inline constexpr std::uint16_t SchemaVersion = 7;
+    // Schema 8 adds the audited advanced-console command set and its bounded
+    // speed parameter. Both endpoints must be upgraded together.
+    inline constexpr std::uint16_t SchemaVersion = 8;
     inline constexpr std::uint32_t FrameMagic = 0x44535047; // DSPG
     inline constexpr std::size_t MaxFrameBytes = 256 * 1024;
     inline constexpr std::size_t MaxStringBytes = 16 * 1024;
@@ -49,7 +49,20 @@ namespace dspgcs
         TimeStart = 9,
         TimeStop = 10,
         ExecuteDanceStep = 11,
-        EndDanceStep = 12
+        EndDanceStep = 12,
+        MissionPause = 13,
+        MissionForward = 14,
+        MissionBackward = 15,
+        ChangeSpeed = 16,
+        TriggerSmoke = 17,
+        StopTelemetry = 18,
+        ResumeTelemetry = 19,
+        DisableLedOutput = 20,
+        RestoreLedOutput = 21,
+        Wake = 22,
+        Standby = 23,
+        Reboot = 24,
+        Shutdown = 25
     };
     enum class AckState : std::uint8_t
     {
@@ -287,6 +300,7 @@ namespace dspgcs
         std::uint8_t scheduledHour = 0;
         std::uint8_t scheduledMinute = 0;
         std::uint8_t scheduledSecond = 0;
+        float advancedSpeedMetersPerSecond = 0.0f;
     };
     struct CommandSourceDTO
     {
@@ -507,6 +521,7 @@ namespace dspgcs
             w.I32(c.parameters.customMode); w.String(c.parameters.modeName); w.Bool(c.parameters.start);
             w.U8(c.parameters.red); w.U8(c.parameters.green); w.U8(c.parameters.blue);
             w.U8(c.parameters.timeControlMask); w.U8(c.parameters.scheduledHour); w.U8(c.parameters.scheduledMinute); w.U8(c.parameters.scheduledSecond);
+            w.Float(c.parameters.advancedSpeedMetersPerSecond);
             w.String(c.source.sourceType); w.String(c.source.sourceId); w.String(c.source.operatorId); w.String(c.source.stationId);
             w.I64(c.timestampUtcMs); w.U64(c.expectedFleetRevision); w.Bool(c.safeTestMode);
         }
@@ -520,6 +535,7 @@ namespace dspgcs
                 r.I32(c.parameters.customMode) && r.String(c.parameters.modeName) && r.Bool(c.parameters.start) &&
                 r.U8(c.parameters.red) && r.U8(c.parameters.green) && r.U8(c.parameters.blue) &&
                 r.U8(c.parameters.timeControlMask) && r.U8(c.parameters.scheduledHour) && r.U8(c.parameters.scheduledMinute) && r.U8(c.parameters.scheduledSecond) &&
+                r.Float(c.parameters.advancedSpeedMetersPerSecond) &&
                 r.String(c.source.sourceType) && r.String(c.source.sourceId) && r.String(c.source.operatorId) && r.String(c.source.stationId) &&
                 r.I64(c.timestampUtcMs) && r.U64(c.expectedFleetRevision) && r.Bool(c.safeTestMode) && r.Done();
         }

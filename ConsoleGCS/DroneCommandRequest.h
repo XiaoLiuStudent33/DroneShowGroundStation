@@ -25,7 +25,20 @@ enum class DroneCommandType
     TimeStart,
     TimeStop,
     ExecuteDanceStep,
-    EndDanceStep
+    EndDanceStep,
+    MissionPause,
+    MissionForward,
+    MissionBackward,
+    ChangeSpeed,
+    TriggerSmoke,
+    StopTelemetry,
+    ResumeTelemetry,
+    DisableLedOutput,
+    RestoreLedOutput,
+    Wake,
+    Standby,
+    Reboot,
+    Shutdown
 };
 
 // ArduPilot Copter custom_mode values used by the current GCS mode controls.
@@ -70,6 +83,7 @@ struct DroneCommandParameters
     std::uint8_t scheduledHour = 0;
     std::uint8_t scheduledMinute = 0;
     std::uint8_t scheduledSecond = 0;
+    float advancedSpeedMetersPerSecond = 0.0f;
 };
 
 // ConsoleGCS command-domain model. It is deliberately independent of UE and

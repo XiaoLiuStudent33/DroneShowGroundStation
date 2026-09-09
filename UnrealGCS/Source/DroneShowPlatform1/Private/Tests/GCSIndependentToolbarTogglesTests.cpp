@@ -3,6 +3,8 @@
 #include "Misc/AutomationTest.h"
 
 #include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/Button.h"
 #include "DroneData.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -35,6 +37,9 @@ bool FGCSIndependentToolbarTogglesTest::RunTest(const FString&)
 	const TSubclassOf<UUserWidget> DroneDetailClass = LoadClass<UUserWidget>(
 		nullptr,
 		TEXT("/Game/UI/WBP_GCS_DroneDetail.WBP_GCS_DroneDetail_C"));
+	const TSubclassOf<UUserWidget> LeftToolbarClass = LoadClass<UUserWidget>(
+		nullptr,
+		TEXT("/Game/UI/WBP_GCS_LeftToolbar.WBP_GCS_LeftToolbar_C"));
 
 	Bridge->MapPageWidget = MapClass ? CreateWidget<UUserWidget>(GameInstance, MapClass) : nullptr;
 	Bridge->PlaybackWidget = PlaybackClass ? CreateWidget<UUserWidget>(GameInstance, PlaybackClass) : nullptr;
@@ -45,11 +50,15 @@ bool FGCSIndependentToolbarTogglesTest::RunTest(const FString&)
 	Bridge->DroneDetailWidget = DroneDetailClass
 		? CreateWidget<UUserWidget>(GameInstance, DroneDetailClass)
 		: nullptr;
+	Bridge->LeftToolbarWidget = LeftToolbarClass
+		? CreateWidget<UUserWidget>(GameInstance, LeftToolbarClass)
+		: nullptr;
 	if (!TestNotNull(TEXT("Map page loads"), Bridge->MapPageWidget.Get())
 		|| !TestNotNull(TEXT("Playback widget loads"), Bridge->PlaybackWidget.Get())
 		|| !TestNotNull(TEXT("Logs page loads"), Bridge->LogsPageWidget.Get())
 		|| !TestNotNull(TEXT("Fleet panel loads"), Bridge->FleetPanelWidget.Get())
-		|| !TestNotNull(TEXT("Drone detail loads"), Bridge->DroneDetailWidget.Get()))
+		|| !TestNotNull(TEXT("Drone detail loads"), Bridge->DroneDetailWidget.Get())
+		|| !TestNotNull(TEXT("Left toolbar loads"), Bridge->LeftToolbarWidget.Get()))
 	{
 		GameInstance->Shutdown();
 		return false;
@@ -58,10 +67,23 @@ bool FGCSIndependentToolbarTogglesTest::RunTest(const FString&)
 	Bridge->MapPageWidget->SetVisibility(ESlateVisibility::Collapsed);
 	Bridge->PlaybackWidget->SetVisibility(ESlateVisibility::Collapsed);
 	Bridge->LogsPageWidget->SetVisibility(ESlateVisibility::Collapsed);
-	Bridge->bPanelsExpanded = true;
 	Bridge->bFleetPanelRequestedVisible = false;
 	Bridge->bDroneDetailRequestedVisible = false;
 	Bridge->ApplyNavigationVisibility();
+	Bridge->BindNavigationButtons();
+	UButton* MenuButton = Cast<UButton>(
+		Bridge->LeftToolbarWidget->WidgetTree->FindWidget(TEXT("BTN_Menu")));
+	UButton* FleetButton = Cast<UButton>(
+		Bridge->LeftToolbarWidget->WidgetTree->FindWidget(TEXT("BTN_Fleet")));
+	UButton* ControlButton = Cast<UButton>(
+		Bridge->LeftToolbarWidget->WidgetTree->FindWidget(TEXT("BTN_Control")));
+	if (!TestNotNull(TEXT("Menu button exists"), MenuButton)
+		|| !TestNotNull(TEXT("Fleet button exists"), FleetButton)
+		|| !TestNotNull(TEXT("Control button exists"), ControlButton))
+	{
+		GameInstance->Shutdown();
+		return false;
+	}
 
 	UFleetManagerSubsystem* Fleet =
 		GameInstance->GetSubsystem<UFleetManagerSubsystem>();
@@ -76,7 +98,7 @@ bool FGCSIndependentToolbarTogglesTest::RunTest(const FString&)
 		Bridge->DroneDetailWidget->GetVisibility(),
 		ESlateVisibility::Collapsed);
 
-	Bridge->HandleControlPageClicked();
+	ControlButton->OnClicked.Broadcast();
 	TestEqual(
 		TEXT("Control button opens the drone detail panel"),
 		Bridge->DroneDetailWidget->GetVisibility(),
@@ -87,28 +109,38 @@ bool FGCSIndependentToolbarTogglesTest::RunTest(const FString&)
 		Bridge->DroneDetailWidget->GetVisibility(),
 		ESlateVisibility::Visible);
 
-	Bridge->HandleFleetPageClicked();
+	FleetButton->OnClicked.Broadcast();
 	TestEqual(
 		TEXT("Fleet button independently opens the fleet panel"),
 		Bridge->FleetPanelWidget->GetVisibility(),
 		ESlateVisibility::Visible);
-	Bridge->HandleMenuClicked();
+	MenuButton->OnClicked.Broadcast();
 	TestEqual(
-		TEXT("Menu collapses the fleet panel"),
-		Bridge->FleetPanelWidget->GetVisibility(),
-		ESlateVisibility::Collapsed);
-	TestEqual(
-		TEXT("Menu collapses the control panel"),
-		Bridge->DroneDetailWidget->GetVisibility(),
-		ESlateVisibility::Collapsed);
-	Bridge->HandleMenuClicked();
-	TestEqual(
-		TEXT("Menu restores the fleet panel"),
+		TEXT("Menu button leaves the fleet panel open"),
 		Bridge->FleetPanelWidget->GetVisibility(),
 		ESlateVisibility::Visible);
 	TestEqual(
-		TEXT("Menu restores the control panel"),
+		TEXT("Menu button leaves the control panel open"),
 		Bridge->DroneDetailWidget->GetVisibility(),
+		ESlateVisibility::Visible);
+	FleetButton->OnClicked.Broadcast();
+	TestEqual(
+		TEXT("Fleet button closes only the fleet panel"),
+		Bridge->FleetPanelWidget->GetVisibility(),
+		ESlateVisibility::Collapsed);
+	TestEqual(
+		TEXT("Fleet button leaves the control panel open"),
+		Bridge->DroneDetailWidget->GetVisibility(),
+		ESlateVisibility::Visible);
+	FleetButton->OnClicked.Broadcast();
+	ControlButton->OnClicked.Broadcast();
+	TestEqual(
+		TEXT("Control button closes only the drone detail panel"),
+		Bridge->DroneDetailWidget->GetVisibility(),
+		ESlateVisibility::Collapsed);
+	TestEqual(
+		TEXT("Control button leaves the fleet panel open"),
+		Bridge->FleetPanelWidget->GetVisibility(),
 		ESlateVisibility::Visible);
 
 	Bridge->HandleMapPageClicked();

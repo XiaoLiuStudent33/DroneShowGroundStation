@@ -42,6 +42,19 @@ namespace
         case dspgcs::CommandType::TimeStop: return DroneCommandType::TimeStop;
         case dspgcs::CommandType::ExecuteDanceStep: return DroneCommandType::ExecuteDanceStep;
         case dspgcs::CommandType::EndDanceStep: return DroneCommandType::EndDanceStep;
+        case dspgcs::CommandType::MissionPause: return DroneCommandType::MissionPause;
+        case dspgcs::CommandType::MissionForward: return DroneCommandType::MissionForward;
+        case dspgcs::CommandType::MissionBackward: return DroneCommandType::MissionBackward;
+        case dspgcs::CommandType::ChangeSpeed: return DroneCommandType::ChangeSpeed;
+        case dspgcs::CommandType::TriggerSmoke: return DroneCommandType::TriggerSmoke;
+        case dspgcs::CommandType::StopTelemetry: return DroneCommandType::StopTelemetry;
+        case dspgcs::CommandType::ResumeTelemetry: return DroneCommandType::ResumeTelemetry;
+        case dspgcs::CommandType::DisableLedOutput: return DroneCommandType::DisableLedOutput;
+        case dspgcs::CommandType::RestoreLedOutput: return DroneCommandType::RestoreLedOutput;
+        case dspgcs::CommandType::Wake: return DroneCommandType::Wake;
+        case dspgcs::CommandType::Standby: return DroneCommandType::Standby;
+        case dspgcs::CommandType::Reboot: return DroneCommandType::Reboot;
+        case dspgcs::CommandType::Shutdown: return DroneCommandType::Shutdown;
         }
         return DroneCommandType::Arm;
     }

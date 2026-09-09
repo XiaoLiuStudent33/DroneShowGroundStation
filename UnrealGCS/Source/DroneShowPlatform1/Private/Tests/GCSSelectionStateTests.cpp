@@ -5,6 +5,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
+#include "Components/Button.h"
 #include "Components/ListView.h"
 #include "DSPGCSProductionCommandProviderSubsystem.h"
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
@@ -115,6 +116,26 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 	ProductionTelemetry->MarkValidTelemetryReceivedAt(FPlatformTime::Seconds());
 	TestTrue(TEXT("Production command provider enabled"), Commands->IsEnabled());
 	TestTrue(TEXT("Production telemetry link connected"), ProductionTelemetry->IsTelemetryLinkConnected());
+
+	FGCSProductionCommandParameters HoverGateParameters;
+	HoverGateParameters.HoverAltitudeMeters = 5.0f;
+	TestTrue(
+		TEXT("Direct HOVER remains blocked by the MANUAL safety gate"),
+		Commands->SubmitCommand(
+			EGCSProductionCommandType::HoverTest,
+			ProviderTargets,
+			HoverGateParameters).IsEmpty());
+	Bridge->SetCommandDroneSelected(TEXT("Drone001"), true);
+	Bridge->HandleHoverClicked();
+	TestEqual(
+		TEXT("Operator HOVER enters autonomous workflow mode before submission"),
+		Commands->GetControlMode(),
+		EGCSGroundStationControlMode::Autonomous);
+	TestTrue(
+		TEXT("Operator HOVER reports that the workflow was submitted"),
+		Bridge->HoverTestStatus.Contains(TEXT("悬停起飞任务已提交")));
+	Commands->SetControlMode(EGCSGroundStationControlMode::Manual);
+
 	const auto SubmitAndRequireID = [this, Commands, &ProviderTargets](
 		const TCHAR* Label,
 		const EGCSProductionCommandType Type,
@@ -276,6 +297,63 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 		TEXT("Binding the ListView preserves command selection"),
 		Bridge->GetSelectedCommandDroneIDs().Num(),
 		2);
+
+	UButton* MissionPauseButton = Bridge->FindRightPanelButton(TEXT("BTN_Pause"));
+	UButton* MissionForwardButton = Bridge->FindRightPanelButton(TEXT("BTN_MoveForward"));
+	UButton* MissionBackwardButton = Bridge->FindRightPanelButton(TEXT("BTN_MoveBackward"));
+	if (!TestNotNull(TEXT("Mission pause button found"), MissionPauseButton)
+		|| !TestNotNull(TEXT("Mission forward button found"), MissionForwardButton)
+		|| !TestNotNull(TEXT("Mission backward button found"), MissionBackwardButton))
+	{
+		GameInstance->Shutdown();
+		return false;
+	}
+	TestTrue(TEXT("Mission pause starts enabled"), MissionPauseButton->GetIsEnabled());
+	TestFalse(TEXT("Mission forward starts disabled"), MissionForwardButton->GetIsEnabled());
+	TestFalse(TEXT("Mission backward starts disabled"), MissionBackwardButton->GetIsEnabled());
+
+	MissionPauseButton->OnClicked.Broadcast();
+	TestFalse(
+		TEXT("Pause click creates a pending production command"),
+		Bridge->PendingMissionPlaybackCommandID.IsEmpty());
+	TestEqual(
+		TEXT("Pause click records the selected target count"),
+		Bridge->PendingMissionPlaybackTargetCount,
+		2);
+	TestEqual(
+		TEXT("Pause click records mission-pause command type"),
+		Bridge->PendingMissionPlaybackCommandType,
+		EGCSProductionCommandType::MissionPause);
+	TestFalse(
+		TEXT("Mission forward stays disabled while pause results are pending"),
+		MissionForwardButton->GetIsEnabled());
+
+	const FString PauseCommandID = Bridge->PendingMissionPlaybackCommandID;
+	for (const FString& DroneID : Bridge->GetSelectedCommandDroneIDs())
+	{
+		FGCSProductionCommandResult PauseResult;
+		PauseResult.CommandID = PauseCommandID;
+		PauseResult.DroneID = DroneID;
+		PauseResult.CommandType = EGCSProductionCommandType::MissionPause;
+		PauseResult.AckState = TEXT("ACCEPTED");
+		PauseResult.bFinal = true;
+		Bridge->HandleProductionCommandResult(PauseResult);
+	}
+	TestTrue(
+		TEXT("Mission forward unlocks after every selected drone acknowledges pause"),
+		MissionForwardButton->GetIsEnabled());
+	TestTrue(
+		TEXT("Mission backward unlocks after every selected drone acknowledges pause"),
+		MissionBackwardButton->GetIsEnabled());
+
+	MissionForwardButton->OnClicked.Broadcast();
+	TestEqual(
+		TEXT("Forward button submits the mission-forward command"),
+		Bridge->PendingMissionPlaybackCommandType,
+		EGCSProductionCommandType::MissionForward);
+	TestFalse(
+		TEXT("Direction buttons relock after forward is submitted"),
+		MissionBackwardButton->GetIsEnabled());
 
 	GameInstance->Shutdown();
 	return true;

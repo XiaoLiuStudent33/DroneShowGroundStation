@@ -1203,7 +1203,9 @@ namespace
                 static_cast<std::streamsize>(routeBytes.size()));
             dspgcs::UploadRouteStateDTO route;
             route.routeSlotIndex = static_cast<std::int32_t>(index);
-            const std::string numeric = std::to_string(index + 1);
+            // Production discovery assigns stable logical IDs from Drone000.
+            // Keep the integration fixture aligned with that canonical contract.
+            const std::string numeric = std::to_string(index);
             route.droneId = "Drone" + std::string(3 - numeric.size(), '0') +
                 numeric;
             route.totalBytes = 3 * mission::MissionItemRecordBytesV1;

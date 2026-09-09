@@ -79,6 +79,18 @@ public:
         std::uint8_t system,
         std::uint8_t component);
 
+    std::uint64_t QueueMissionPause(
+        std::uint8_t system,
+        std::uint8_t component);
+
+    std::uint64_t QueueMissionForward(
+        std::uint8_t system,
+        std::uint8_t component);
+
+    std::uint64_t QueueMissionBackward(
+        std::uint8_t system,
+        std::uint8_t component);
+
     std::uint64_t QueueLoiter(
         std::uint8_t system,
         std::uint8_t component);
@@ -108,6 +120,40 @@ public:
         std::uint8_t component,
         std::uint8_t controlMask);
 
+    std::uint64_t QueueChangeSpeed(
+        std::uint8_t system,
+        std::uint8_t component,
+        float metersPerSecond);
+
+    /** Relay 0 is pulsed for one second and is always reset to zero. */
+    std::uint64_t QueueTriggerSmoke(
+        std::uint8_t system,
+        std::uint8_t component);
+
+    std::uint64_t QueueStopTelemetry(
+        std::uint8_t system,
+        std::uint8_t component);
+
+    std::uint64_t QueueResumeTelemetry(
+        std::uint8_t system,
+        std::uint8_t component);
+
+    std::uint64_t QueueSetLedOutputDisabled(
+        std::uint8_t system,
+        std::uint8_t component,
+        bool disabled);
+
+    std::uint64_t QueuePowerControl(
+        std::uint8_t system,
+        std::uint8_t component,
+        std::uint8_t autopilotAction,
+        bool safetyPriority);
+
+    /** Legacy MDHK hardware power-off contract: relay 1 latched high. */
+    std::uint64_t QueueShutdown(
+        std::uint8_t system,
+        std::uint8_t component);
+
     void Tick(
         std::chrono::steady_clock::time_point now);
 
@@ -116,6 +162,9 @@ public:
 
     void HandleHeartbeat(
         const mavlink_message_t& message);
+
+    /** Completes ResumeTelemetry only after a fresh MDHK_STATUS #187 arrives. */
+    void HandleTelemetryMessage(std::uint32_t messageId);
 
     std::vector<CommandDispatchResult> ConsumeResults();
 
@@ -128,11 +177,20 @@ private:
         Takeoff,
         Land,
         RTL,
+        MissionPause,
+        MissionForward,
+        MissionBackward,
         Loiter,
         SetLedColor,
         TimeControl,
         ExecuteDanceStep,
-        EndDanceStep
+        EndDanceStep,
+        ChangeSpeed,
+        TriggerSmoke,
+        TelemetryInterval,
+        SetLedOutputDisabled,
+        PowerControl,
+        ShutdownRelay
     };
 
     struct Request
@@ -152,10 +210,19 @@ private:
         std::uint8_t scheduledHour = 0;
         std::uint8_t scheduledMinute = 0;
         std::uint8_t scheduledSecond = 0;
+        float advancedValue = 0.0f;
+        std::vector<std::uint32_t> messageIds;
+        std::size_t messageIndex = 0;
+        std::int32_t messageIntervalMicroseconds = 0;
+        std::uint8_t relayStep = 0;
+        bool waitForTelemetryConfirmation = false;
+        bool waitingForTelemetryConfirmation = false;
         int attempts = 0;
+        int totalAttempts = 0;
         bool sent = false;
         bool waitForModeConfirmation = false;
         std::chrono::steady_clock::time_point sentAt{};
+        std::chrono::steady_clock::time_point notBefore{};
     };
 
     std::uint64_t Queue(
@@ -174,7 +241,14 @@ private:
         std::uint8_t timeControlMask = 1,
         std::uint8_t scheduledHour = 0,
         std::uint8_t scheduledMinute = 0,
-        std::uint8_t scheduledSecond = 0);
+        std::uint8_t scheduledSecond = 0,
+        float advancedValue = 0.0f);
+
+    std::uint64_t QueueTelemetryIntervals(
+        std::uint8_t system,
+        std::uint8_t component,
+        std::int32_t intervalMicroseconds,
+        bool verifyMdhkStatus);
 
     bool Send(const Request& request);
 
@@ -197,6 +271,7 @@ private:
     static constexpr std::size_t MaxQueueSize = 32;
     static constexpr int MaxRetries = 1;
     static constexpr std::chrono::milliseconds AckTimeout{ 3000 };
+    static constexpr std::chrono::milliseconds SmokePulseDuration{ 1000 };
 };
 
 const char* CommandOutcomeName(CommandOutcome outcome);

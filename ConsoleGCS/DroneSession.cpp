@@ -392,6 +392,127 @@ DroneSessionCommandSubmission DroneSession::SubmitCommand(
         submission.accepted = true;
         return submission;
 
+    case DroneCommandType::MissionPause:
+        ConsoleUI::AddLog(
+            requestPrefix +
+            "MISSION_PAUSE legacy MDHK command=17 param1=1 awaiting ACK");
+        submission.dispatchRequestIds.push_back(dispatcher.QueueMissionPause(
+            commandTarget.systemID,
+            commandTarget.componentID));
+        submission.accepted = true;
+        return submission;
+
+    case DroneCommandType::MissionForward:
+        ConsoleUI::AddLog(
+            requestPrefix +
+            "MISSION_FORWARD legacy MDHK command=20 param1=0 awaiting ACK");
+        submission.dispatchRequestIds.push_back(dispatcher.QueueMissionForward(
+            commandTarget.systemID,
+            commandTarget.componentID));
+        submission.accepted = true;
+        return submission;
+
+    case DroneCommandType::MissionBackward:
+        ConsoleUI::AddLog(
+            requestPrefix +
+            "MISSION_BACKWARD legacy MDHK command=20 param1=1 awaiting ACK");
+        submission.dispatchRequestIds.push_back(dispatcher.QueueMissionBackward(
+            commandTarget.systemID,
+            commandTarget.componentID));
+        submission.accepted = true;
+        return submission;
+
+    case DroneCommandType::ChangeSpeed:
+        if (request.parameters.advancedSpeedMetersPerSecond < 1.0f ||
+            request.parameters.advancedSpeedMetersPerSecond > 5.0f)
+        {
+            submission.error = "speed must be within [1, 5] m/s";
+            return submission;
+        }
+        ConsoleUI::AddLog(requestPrefix + "CHANGE_SPEED MAV_CMD_USER_2 speed=" +
+            std::to_string(request.parameters.advancedSpeedMetersPerSecond));
+        submission.dispatchRequestIds.push_back(dispatcher.QueueChangeSpeed(
+            commandTarget.systemID, commandTarget.componentID,
+            request.parameters.advancedSpeedMetersPerSecond));
+        submission.accepted = true;
+        return submission;
+
+    case DroneCommandType::TriggerSmoke:
+        ConsoleUI::AddLog(requestPrefix +
+            "TRIGGER_SMOKE relay=0 pulse=1000ms (automatic reset)");
+        submission.dispatchRequestIds.push_back(dispatcher.QueueTriggerSmoke(
+            commandTarget.systemID, commandTarget.componentID));
+        submission.accepted = true;
+        return submission;
+
+    case DroneCommandType::StopTelemetry:
+        ConsoleUI::AddLog(requestPrefix +
+            "STOP_TELEMETRY SET_MESSAGE_INTERVAL=-1 ids=1,24,33,30,187; heartbeat/ACK preserved");
+        submission.dispatchRequestIds.push_back(dispatcher.QueueStopTelemetry(
+            commandTarget.systemID, commandTarget.componentID));
+        submission.accepted = true;
+        return submission;
+
+    case DroneCommandType::ResumeTelemetry:
+        ConsoleUI::AddLog(requestPrefix +
+            "RESUME_TELEMETRY SET_MESSAGE_INTERVAL=1000000us ids=1,24,33,30,187; verify fresh #187");
+        submission.dispatchRequestIds.push_back(dispatcher.QueueResumeTelemetry(
+            commandTarget.systemID, commandTarget.componentID));
+        submission.accepted = true;
+        return submission;
+
+    case DroneCommandType::DisableLedOutput:
+    case DroneCommandType::RestoreLedOutput:
+    {
+        const bool disabled = request.commandType == DroneCommandType::DisableLedOutput;
+        ConsoleUI::AddLog(requestPrefix +
+            (disabled ? "DISABLE_LED_OUTPUT" : "RESTORE_LED_OUTPUT") +
+            " MAV_CMD_USER_3");
+        submission.dispatchRequestIds.push_back(dispatcher.QueueSetLedOutputDisabled(
+            commandTarget.systemID, commandTarget.componentID, disabled));
+        submission.accepted = true;
+        return submission;
+    }
+
+    case DroneCommandType::Wake:
+        ConsoleUI::AddLog(requestPrefix +
+            "WAKE PREFLIGHT_REBOOT_SHUTDOWN autopilot_action=4");
+        submission.dispatchRequestIds.push_back(dispatcher.QueuePowerControl(
+            commandTarget.systemID, commandTarget.componentID, 4, false));
+        submission.accepted = true;
+        return submission;
+
+    case DroneCommandType::Standby:
+    case DroneCommandType::Reboot:
+    case DroneCommandType::Shutdown:
+    {
+        if (commandTarget.armed)
+        {
+            submission.error = "power command blocked while vehicle is armed";
+            ConsoleUI::AddLog(requestPrefix + submission.error);
+            return submission;
+        }
+        if (request.commandType == DroneCommandType::Shutdown)
+        {
+            ConsoleUI::AddLog(requestPrefix +
+                "SHUTDOWN legacy relay=1 latch (vehicle confirmed disarmed)");
+            submission.dispatchRequestIds.push_back(dispatcher.QueueShutdown(
+                commandTarget.systemID, commandTarget.componentID));
+        }
+        else
+        {
+            const std::uint8_t action = request.commandType == DroneCommandType::Standby
+                ? 2 : 1;
+            ConsoleUI::AddLog(requestPrefix +
+                (request.commandType == DroneCommandType::Standby ? "STANDBY" : "REBOOT") +
+                " PREFLIGHT_REBOOT_SHUTDOWN (vehicle confirmed disarmed)");
+            submission.dispatchRequestIds.push_back(dispatcher.QueuePowerControl(
+                commandTarget.systemID, commandTarget.componentID, action, true));
+        }
+        submission.accepted = true;
+        return submission;
+    }
+
     case DroneCommandType::SetLedColor:
         ConsoleUI::AddLog(
             requestPrefix + "SetLedColor RemoteEndpoint=" +
@@ -645,6 +766,7 @@ bool DroneSession::ApplyDiscoveredTelemetry(
     case MAVLINK_MSG_ID_MDHK_STATUS:
         parser.Parse(message, workingData);
         dataManager.Update(workingData);
+        dispatcher.HandleTelemetryMessage(message.msgid);
         return true;
     default:
         return false;

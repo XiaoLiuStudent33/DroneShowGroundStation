@@ -632,6 +632,7 @@ public:
 			Bridge->TickTimeControlUI(DeltaTime);
 			Bridge->TickUploadDashboardUI(DeltaTime);
 			Bridge->TickTelemetryTableUI(DeltaTime);
+			Bridge->TickAdvancedControls();
 		}
 	}
 
@@ -693,7 +694,6 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	}
 	CreateNavigationPages();
 	BindNavigationButtons();
-	bPanelsExpanded = true;
 	bFleetPanelRequestedVisible = false;
 	bDroneDetailRequestedVisible = false;
 	ApplyNavigationVisibility();
@@ -753,6 +753,8 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	}
 
 	BindExistingButtons();
+	BindMissionPlaybackControls();
+	BindAdvancedControls();
 	BindColorPaletteButtons();
 	BindTimeControlControls();
 	BindReferenceAndMapControls();
@@ -810,6 +812,13 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 
 void UGCSUIBridgeSubsystem::Deinitialize()
 {
+	ResetAdvancedConfirmation();
+	MissionPausedDroneIDs.Reset();
+	PendingMissionPlaybackCommandID.Reset();
+	PendingMissionPlaybackCompletedDroneIDs.Reset();
+	PendingMissionPlaybackTargetCount = 0;
+	PendingMissionPlaybackResultCount = 0;
+	PendingMissionPlaybackSucceededCount = 0;
 	UnregisterMarqueeInputProcessor();
 	UnbindFleetList();
 	EndTopDownLocateLock();
@@ -1758,12 +1767,6 @@ EGCSDroneDisplayStatus UGCSUIBridgeSubsystem::ResolveDroneDisplayStatus(
 		: EGCSDroneDisplayStatus::Offline;
 }
 
-void UGCSUIBridgeSubsystem::HandleMenuClicked()
-{
-	bPanelsExpanded = !bPanelsExpanded;
-	ApplyNavigationVisibility();
-}
-
 void UGCSUIBridgeSubsystem::HandleFleetPageClicked()
 {
 	bFleetPanelRequestedVisible = !bFleetPanelRequestedVisible;
@@ -1855,22 +1858,318 @@ void UGCSUIBridgeSubsystem::HandleTakeoffClicked()
 
 void UGCSUIBridgeSubsystem::HandleRTLClicked()
 {
-	SubmitSelectedProductionCommand(EGCSProductionCommandType::RTL);
+	const TArray<FString> Targets = GetCommandTargetDroneIDs();
+	if (!SubmitProductionCommandForTargets(
+			EGCSProductionCommandType::RTL,
+			Targets).IsEmpty())
+	{
+		ClearMissionPausedTargets(Targets);
+		RefreshProductionCommandAvailability();
+	}
 }
 
 void UGCSUIBridgeSubsystem::HandleLandClicked()
 {
-	SubmitSelectedProductionCommand(EGCSProductionCommandType::Land);
+	const TArray<FString> Targets = GetCommandTargetDroneIDs();
+	if (!SubmitProductionCommandForTargets(
+			EGCSProductionCommandType::Land,
+			Targets).IsEmpty())
+	{
+		ClearMissionPausedTargets(Targets);
+		RefreshProductionCommandAvailability();
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleMissionPauseClicked()
+{
+	SubmitMissionPlaybackCommand(EGCSProductionCommandType::MissionPause);
+}
+
+void UGCSUIBridgeSubsystem::HandleMissionForwardClicked()
+{
+	SubmitMissionPlaybackCommand(EGCSProductionCommandType::MissionForward);
+}
+
+void UGCSUIBridgeSubsystem::HandleMissionBackwardClicked()
+{
+	SubmitMissionPlaybackCommand(EGCSProductionCommandType::MissionBackward);
+}
+
+void UGCSUIBridgeSubsystem::SubmitAdvancedCommand(
+	const EGCSProductionCommandType CommandType,
+	const FGCSProductionCommandParameters& Parameters)
+{
+	const FString CommandID = SubmitSelectedProductionCommand(CommandType, Parameters);
+	if (CommandID.IsEmpty())
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[AdvancedUI] command rejected before transport; select at least one online drone"));
+	}
+}
+
+bool UGCSUIBridgeSubsystem::ConfirmOrArmAdvancedCommand(
+	const EGCSProductionCommandType CommandType,
+	const FName LabelWidget,
+	const FString& OriginalLabel)
+{
+	const double Now = FPlatformTime::Seconds();
+	if (bAdvancedConfirmationArmed &&
+		PendingAdvancedConfirmationType == CommandType &&
+		Now <= PendingAdvancedConfirmationExpiresAtSeconds)
+	{
+		ResetAdvancedConfirmation();
+		return true;
+	}
+
+	ResetAdvancedConfirmation();
+	bAdvancedConfirmationArmed = true;
+	PendingAdvancedConfirmationType = CommandType;
+	PendingAdvancedConfirmationLabel = LabelWidget;
+	PendingAdvancedConfirmationOriginalLabel = OriginalLabel;
+	PendingAdvancedConfirmationExpiresAtSeconds =
+		Now + AdvancedConfirmationWindowSeconds;
+	SetRightPanelText(LabelWidget, TEXT("再次点击确认"));
+	UE_LOG(LogTemp, Warning,
+		TEXT("[AdvancedUI] dangerous command armed for %.0f seconds"),
+		AdvancedConfirmationWindowSeconds);
+	return false;
+}
+
+void UGCSUIBridgeSubsystem::ResetAdvancedConfirmation()
+{
+	if (bAdvancedConfirmationArmed && !PendingAdvancedConfirmationLabel.IsNone())
+	{
+		SetRightPanelText(
+			PendingAdvancedConfirmationLabel,
+			PendingAdvancedConfirmationOriginalLabel);
+	}
+	bAdvancedConfirmationArmed = false;
+	PendingAdvancedConfirmationLabel = NAME_None;
+	PendingAdvancedConfirmationOriginalLabel.Reset();
+	PendingAdvancedConfirmationExpiresAtSeconds = 0.0;
+}
+
+void UGCSUIBridgeSubsystem::TickAdvancedControls()
+{
+	if (bAdvancedConfirmationArmed &&
+		FPlatformTime::Seconds() > PendingAdvancedConfirmationExpiresAtSeconds)
+	{
+		ResetAdvancedConfirmation();
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleAdvancedSpeedClicked()
+{
+	USpinBox* SpeedInput = FindRightPanelSpinBox(TEXT("SPIN_AdvancedSpeed"));
+	if (!SpeedInput)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[AdvancedUI] SPIN_AdvancedSpeed missing"));
+		return;
+	}
+	FGCSProductionCommandParameters Parameters;
+	Parameters.AdvancedSpeedMetersPerSecond =
+		FMath::Clamp(static_cast<float>(SpeedInput->GetValue()), 1.0f, 5.0f);
+	SubmitAdvancedCommand(EGCSProductionCommandType::ChangeSpeed, Parameters);
+}
+
+void UGCSUIBridgeSubsystem::HandleAdvancedLockClicked()
+{
+	if (ConfirmOrArmAdvancedCommand(
+		EGCSProductionCommandType::Disarm, TEXT("TXT_LockLabel"), TEXT("加锁")))
+	{
+		SubmitAdvancedCommand(EGCSProductionCommandType::Disarm);
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleTriggerSmokeClicked()
+{
+	if (ConfirmOrArmAdvancedCommand(
+		EGCSProductionCommandType::TriggerSmoke,
+		TEXT("TXT_TriggerSmokeLabel"), TEXT("触发拉烟")))
+	{
+		SubmitAdvancedCommand(EGCSProductionCommandType::TriggerSmoke);
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleStopTelemetryClicked()
+{
+	SubmitAdvancedCommand(EGCSProductionCommandType::StopTelemetry);
+}
+
+void UGCSUIBridgeSubsystem::HandleResumeTelemetryClicked()
+{
+	SubmitAdvancedCommand(EGCSProductionCommandType::ResumeTelemetry);
+}
+
+void UGCSUIBridgeSubsystem::HandleLightsOffClicked()
+{
+	SubmitAdvancedCommand(EGCSProductionCommandType::DisableLedOutput);
+}
+
+void UGCSUIBridgeSubsystem::HandleRestoreLightsClicked()
+{
+	SubmitAdvancedCommand(EGCSProductionCommandType::RestoreLedOutput);
+}
+
+void UGCSUIBridgeSubsystem::HandleWakeClicked()
+{
+	SubmitAdvancedCommand(EGCSProductionCommandType::Wake);
+}
+
+void UGCSUIBridgeSubsystem::HandleStandbyClicked()
+{
+	if (ConfirmOrArmAdvancedCommand(
+		EGCSProductionCommandType::Standby,
+		TEXT("TXT_StandbyLabel"), TEXT("待机")))
+	{
+		SubmitAdvancedCommand(EGCSProductionCommandType::Standby);
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleRebootClicked()
+{
+	if (ConfirmOrArmAdvancedCommand(
+		EGCSProductionCommandType::Reboot,
+		TEXT("TXT_RebootLabel"), TEXT("重启")))
+	{
+		SubmitAdvancedCommand(EGCSProductionCommandType::Reboot);
+	}
+}
+
+void UGCSUIBridgeSubsystem::HandleShutdownClicked()
+{
+	if (ConfirmOrArmAdvancedCommand(
+		EGCSProductionCommandType::Shutdown,
+		TEXT("TXT_ShutdownLabel"), TEXT("关机")))
+	{
+		SubmitAdvancedCommand(EGCSProductionCommandType::Shutdown);
+	}
+}
+
+void UGCSUIBridgeSubsystem::SubmitMissionPlaybackCommand(
+	const EGCSProductionCommandType CommandType)
+{
+	const bool bPause = CommandType == EGCSProductionCommandType::MissionPause;
+	const bool bForward = CommandType == EGCSProductionCommandType::MissionForward;
+	const bool bBackward = CommandType == EGCSProductionCommandType::MissionBackward;
+	if (!bPause && !bForward && !bBackward)
+	{
+		return;
+	}
+	if (!PendingMissionPlaybackCommandID.IsEmpty())
+	{
+		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("上一条任务控制命令仍在等待结果"));
+		return;
+	}
+
+	const TArray<FString> Targets = GetCommandTargetDroneIDs();
+	if (Targets.IsEmpty())
+	{
+		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("请先勾选需要控制的无人机"));
+		return;
+	}
+	if (!bPause && !AreCurrentCommandTargetsMissionPaused())
+	{
+		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("请先暂停当前选中的全部无人机"));
+		RefreshProductionCommandAvailability();
+		return;
+	}
+
+	const FString CommandID = SubmitProductionCommandForTargets(
+		CommandType,
+		Targets);
+	if (CommandID.IsEmpty())
+	{
+		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("任务控制命令发送失败"));
+		return;
+	}
+
+	PendingMissionPlaybackCommandID = CommandID;
+	PendingMissionPlaybackCommandType = CommandType;
+	PendingMissionPlaybackTargetCount = Targets.Num();
+	PendingMissionPlaybackResultCount = 0;
+	PendingMissionPlaybackSucceededCount = 0;
+	PendingMissionPlaybackCompletedDroneIDs.Reset();
+	SetRightPanelText(
+		TEXT("TXT_TimeControlStatus"),
+		FString::Printf(
+			TEXT("%s命令发送中（%d架）"),
+			bPause ? TEXT("暂停") : (bForward ? TEXT("前进") : TEXT("倒退")),
+			Targets.Num()));
+	RefreshProductionCommandAvailability();
+}
+
+bool UGCSUIBridgeSubsystem::AreCurrentCommandTargetsMissionPaused() const
+{
+	const TArray<FString> Targets = GetCommandTargetDroneIDs();
+	if (Targets.IsEmpty())
+	{
+		return false;
+	}
+	for (const FString& DroneID : Targets)
+	{
+		if (!MissionPausedDroneIDs.Contains(DroneID))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+void UGCSUIBridgeSubsystem::ClearMissionPausedTargets(
+	const TArray<FString>& TargetDroneIDs)
+{
+	for (const FString& DroneID : TargetDroneIDs)
+	{
+		MissionPausedDroneIDs.Remove(DroneID);
+	}
 }
 
 void UGCSUIBridgeSubsystem::HandleHoverClicked()
 {
+	UDSPGCSProductionCommandProviderSubsystem* Commands = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>()
+		: nullptr;
+	if (!Commands)
+	{
+		HoverTestStatus = TEXT("悬停起飞发送失败：命令服务不可用。");
+		RefreshHoverTestControls();
+		return;
+	}
+
+	// HoverTest is an operator-started autonomous workflow. Enter only the
+	// ground-station workflow mode here; do not call HandleAutonomousModeClicked,
+	// because that handler also sends vehicle mode AUTO (custom_mode=3). The
+	// Console hover workflow owns the required GUIDED -> ARM -> TAKEOFF sequence.
+	const EGCSGroundStationControlMode PreviousControlMode =
+		Commands->GetControlMode();
+	Commands->SetControlMode(EGCSGroundStationControlMode::Autonomous);
+
 	FGCSProductionCommandParameters Parameters;
 	Parameters.HoverAltitudeMeters = HoverAltitudeMeters;
 	Parameters.HoverDurationSeconds = 0.0f;
-	SubmitSelectedProductionCommand(
+	const TArray<FString> Targets = GetCommandTargetDroneIDs();
+	const FString CommandID = SubmitSelectedProductionCommand(
 		EGCSProductionCommandType::HoverTest,
 		Parameters);
+	if (CommandID.IsEmpty())
+	{
+		Commands->SetControlMode(PreviousControlMode);
+		HoverTestStatus = TEXT("悬停起飞发送失败：未建立任务，请检查目标选择和通信连接。");
+	}
+	else
+	{
+		HoverTestStatus = FString::Printf(
+			TEXT("悬停起飞任务已提交（%d架），等待GUIDED、解锁和起飞确认。"),
+			Targets.Num());
+		UE_LOG(
+			LogTemp,
+			Display,
+			TEXT("[UI] Hover workflow entered AUTONOMOUS CommandID=%s Targets=%d"),
+			*CommandID,
+			Targets.Num());
+	}
+	RefreshHoverTestControls();
 }
 
 void UGCSUIBridgeSubsystem::HandleHoverAltitudeMinusClicked()
@@ -2174,7 +2473,7 @@ void UGCSUIBridgeSubsystem::HandleStopClicked()
 {
 	// Existing STOP/EStop remains a controlled LAND request. Phase 5.2B still
 	// routes it through DSP-GCS/CommandManager and receives a simulated result.
-	SubmitSelectedProductionCommand(EGCSProductionCommandType::Land);
+	HandleLandClicked();
 }
 
 void UGCSUIBridgeSubsystem::HandleProductionCommandResult(
@@ -2201,6 +2500,70 @@ void UGCSUIBridgeSubsystem::HandleProductionCommandResult(
 		*Diagnostic,
 		*Result.CommandID);
 	SetText(TEXT("Attitude"), LastCommandResultText);
+
+	if (!PendingMissionPlaybackCommandID.IsEmpty()
+		&& Result.CommandID == PendingMissionPlaybackCommandID
+		&& Result.bFinal
+		&& !PendingMissionPlaybackCompletedDroneIDs.Contains(Result.DroneID))
+	{
+		PendingMissionPlaybackCompletedDroneIDs.Add(Result.DroneID);
+		++PendingMissionPlaybackResultCount;
+		const bool bSucceeded = IsSuccessfulResult(Result);
+		if (bSucceeded)
+		{
+			++PendingMissionPlaybackSucceededCount;
+			if (PendingMissionPlaybackCommandType ==
+				EGCSProductionCommandType::MissionPause)
+			{
+				MissionPausedDroneIDs.Add(Result.DroneID);
+			}
+			else
+			{
+				// Forward/backward resumes playback in the chosen direction. A new
+				// direction change therefore requires another acknowledged pause.
+				MissionPausedDroneIDs.Remove(Result.DroneID);
+			}
+		}
+		else if (PendingMissionPlaybackCommandType ==
+			EGCSProductionCommandType::MissionPause)
+		{
+			MissionPausedDroneIDs.Remove(Result.DroneID);
+		}
+
+		if (PendingMissionPlaybackResultCount >= PendingMissionPlaybackTargetCount)
+		{
+			const bool bWasPause = PendingMissionPlaybackCommandType ==
+				EGCSProductionCommandType::MissionPause;
+			const bool bWasForward = PendingMissionPlaybackCommandType ==
+				EGCSProductionCommandType::MissionForward;
+			const FString ActionName = bWasPause
+				? TEXT("暂停")
+				: (bWasForward ? TEXT("前进") : TEXT("倒退"));
+			const bool bAllSucceeded = PendingMissionPlaybackSucceededCount ==
+				PendingMissionPlaybackTargetCount;
+			const FString StatusMessage = bWasPause && bAllSucceeded
+				? FString::Printf(
+					TEXT("暂停成功 %d/%d，可选择前进或倒退"),
+					PendingMissionPlaybackSucceededCount,
+					PendingMissionPlaybackTargetCount)
+				: FString::Printf(
+					TEXT("%s完成 %d/%d%s"),
+					*ActionName,
+					PendingMissionPlaybackSucceededCount,
+					PendingMissionPlaybackTargetCount,
+					bWasPause
+						? TEXT("；全部暂停成功后才可前进/倒退")
+						: TEXT("；再次操作需先暂停"));
+			SetRightPanelText(TEXT("TXT_TimeControlStatus"), StatusMessage);
+
+			PendingMissionPlaybackCommandID.Reset();
+			PendingMissionPlaybackTargetCount = 0;
+			PendingMissionPlaybackResultCount = 0;
+			PendingMissionPlaybackSucceededCount = 0;
+			PendingMissionPlaybackCompletedDroneIDs.Reset();
+		}
+		RefreshProductionCommandAvailability();
+	}
 
 	if (!PendingTimeControlCommandID.IsEmpty()
 		&& Result.CommandID == PendingTimeControlCommandID
@@ -4486,7 +4849,18 @@ void UGCSUIBridgeSubsystem::RefreshProductionCommandAvailability()
 		  FName(TEXT("BTN_TimeStart")),
 		  FName(TEXT("BTN_TimeStop")),
 		  FName(TEXT("BTN_ExecuteDanceStep")),
-		  FName(TEXT("BTN_EndDanceStep")) })
+		  FName(TEXT("BTN_EndDanceStep")),
+		  FName(TEXT("BTN_SwitchSpeed")),
+		  FName(TEXT("BTN_Lock")),
+		  FName(TEXT("BTN_TriggerSmoke")),
+		  FName(TEXT("BTN_StopData")),
+		  FName(TEXT("BTN_ResumeData")),
+		  FName(TEXT("BTN_LightsOff")),
+		  FName(TEXT("BTN_RestoreLights")),
+		  FName(TEXT("BTN_Wake")),
+		  FName(TEXT("BTN_Standby")),
+		  FName(TEXT("BTN_Reboot")),
+		  FName(TEXT("BTN_Shutdown")) })
 	{
 		UButton* Button = FindButton(ButtonName);
 		if (!Button)
@@ -4497,6 +4871,37 @@ void UGCSUIBridgeSubsystem::RefreshProductionCommandAvailability()
 		{
 			Button->SetIsEnabled(bCanSendProductionCommands);
 		}
+	}
+	RefreshMissionPlaybackControls(bCanSendProductionCommands);
+}
+
+void UGCSUIBridgeSubsystem::RefreshMissionPlaybackControls(
+	const bool bCanSendProductionCommands)
+{
+	const bool bMissionCommandPending = !PendingMissionPlaybackCommandID.IsEmpty();
+	const bool bCanChooseDirection = bCanSendProductionCommands
+		&& !bMissionCommandPending
+		&& AreCurrentCommandTargetsMissionPaused();
+
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_ReturnHome")))
+	{
+		Button->SetIsEnabled(bCanSendProductionCommands);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_LandInPlace")))
+	{
+		Button->SetIsEnabled(bCanSendProductionCommands);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_Pause")))
+	{
+		Button->SetIsEnabled(bCanSendProductionCommands && !bMissionCommandPending);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_MoveForward")))
+	{
+		Button->SetIsEnabled(bCanChooseDirection);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_MoveBackward")))
+	{
+		Button->SetIsEnabled(bCanChooseDirection);
 	}
 }
 
@@ -4970,6 +5375,65 @@ void UGCSUIBridgeSubsystem::BindExistingButtons()
 		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleAutonomousModeClicked);
 		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleAutonomousModeClicked);
 	}
+}
+
+void UGCSUIBridgeSubsystem::BindMissionPlaybackControls()
+{
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_ReturnHome")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleRTLClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleRTLClicked);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_LandInPlace")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleLandClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleLandClicked);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_Pause")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleMissionPauseClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleMissionPauseClicked);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_MoveForward")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleMissionForwardClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleMissionForwardClicked);
+	}
+	if (UButton* Button = FindRightPanelButton(TEXT("BTN_MoveBackward")))
+	{
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleMissionBackwardClicked);
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleMissionBackwardClicked);
+	}
+	RefreshProductionCommandAvailability();
+}
+
+void UGCSUIBridgeSubsystem::BindAdvancedControls()
+{
+#define BIND_ADVANCED_BUTTON(Name, Handler) \
+	if (UButton* Button = FindRightPanelButton(TEXT(Name))) \
+	{ \
+		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::Handler); \
+		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::Handler); \
+	} \
+	else \
+	{ \
+		UE_LOG(LogTemp, Error, TEXT("[AdvancedUI] missing button %s"), TEXT(Name)); \
+	}
+
+	BIND_ADVANCED_BUTTON("BTN_SwitchSpeed", HandleAdvancedSpeedClicked)
+	BIND_ADVANCED_BUTTON("BTN_Lock", HandleAdvancedLockClicked)
+	BIND_ADVANCED_BUTTON("BTN_TriggerSmoke", HandleTriggerSmokeClicked)
+	BIND_ADVANCED_BUTTON("BTN_StopData", HandleStopTelemetryClicked)
+	BIND_ADVANCED_BUTTON("BTN_ResumeData", HandleResumeTelemetryClicked)
+	BIND_ADVANCED_BUTTON("BTN_LightsOff", HandleLightsOffClicked)
+	BIND_ADVANCED_BUTTON("BTN_RestoreLights", HandleRestoreLightsClicked)
+	BIND_ADVANCED_BUTTON("BTN_Wake", HandleWakeClicked)
+	BIND_ADVANCED_BUTTON("BTN_Standby", HandleStandbyClicked)
+	BIND_ADVANCED_BUTTON("BTN_Reboot", HandleRebootClicked)
+	BIND_ADVANCED_BUTTON("BTN_Shutdown", HandleShutdownClicked)
+
+#undef BIND_ADVANCED_BUTTON
+	RefreshProductionCommandAvailability();
 }
 
 void UGCSUIBridgeSubsystem::BindColorPaletteButtons()
@@ -6235,12 +6699,6 @@ void UGCSUIBridgeSubsystem::BindFleetPanelButtons()
 
 void UGCSUIBridgeSubsystem::BindNavigationButtons()
 {
-	if (UButton* Button = FindToolbarButton(TEXT("BTN_Menu")))
-	{
-		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleMenuClicked);
-		Button->OnClicked.AddDynamic(this, &UGCSUIBridgeSubsystem::HandleMenuClicked);
-	}
-
 	if (UButton* Button = FindToolbarButton(TEXT("BTN_Fleet")))
 	{
 		Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleFleetPageClicked);
@@ -6643,21 +7101,19 @@ void UGCSUIBridgeSubsystem::ResetNavigationPages()
 
 void UGCSUIBridgeSubsystem::ApplyNavigationVisibility()
 {
-	const bool bShowFleet =
-		bPanelsExpanded && bFleetPanelRequestedVisible;
-	const bool bShowDroneDetail =
-		bPanelsExpanded && bDroneDetailRequestedVisible;
-
-	FGCSUIWidgetPresenter::SetWidgetVisible(FleetPanelWidget, bShowFleet);
-	FGCSUIWidgetPresenter::SetWidgetVisible(DroneDetailWidget, bShowDroneDetail);
+	FGCSUIWidgetPresenter::SetWidgetVisible(
+		FleetPanelWidget,
+		bFleetPanelRequestedVisible);
+	FGCSUIWidgetPresenter::SetWidgetVisible(
+		DroneDetailWidget,
+		bDroneDetailRequestedVisible);
 
 	UE_LOG(
 		LogTemp,
 		Log,
-		TEXT("GCS primary panels: expanded=%s fleet=%s control=%s"),
-		bPanelsExpanded ? TEXT("true") : TEXT("false"),
-		bShowFleet ? TEXT("visible") : TEXT("collapsed"),
-		bShowDroneDetail ? TEXT("visible") : TEXT("collapsed"));
+		TEXT("GCS primary panels: fleet=%s control=%s"),
+		bFleetPanelRequestedVisible ? TEXT("visible") : TEXT("collapsed"),
+		bDroneDetailRequestedVisible ? TEXT("visible") : TEXT("collapsed"));
 }
 
 UUserWidget* UGCSUIBridgeSubsystem::CreateNavigationPage(

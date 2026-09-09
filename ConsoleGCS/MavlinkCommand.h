@@ -102,6 +102,27 @@ public:
 
     );
 
+    /**
+     * Legacy BGC2/MDHK mission-control contract.
+     * MAV_CMD_NAV_LOITER_UNLIM param1=1 is interpreted by the target firmware
+     * as "pause mission" even though param1 is unused by standard MAVLink.
+     */
+    static bool LegacyMissionPause(
+        UdpClient& udp,
+        uint8_t system,
+        uint8_t component);
+
+    /**
+     * Legacy BGC2/MDHK mission-control contract.
+     * MAV_CMD_NAV_RETURN_TO_LAUNCH param1 selects playback direction:
+     * 0=forward, 1=backward. This is not standard MAVLink RTL semantics.
+     */
+    static bool LegacyMissionPlayback(
+        UdpClient& udp,
+        uint8_t system,
+        uint8_t component,
+        bool backward);
+
     static bool Loiter(
         UdpClient& udp,
         uint8_t system,
@@ -145,4 +166,36 @@ public:
         uint8_t mode
 
     );
+
+    static bool ChangeSpeed(
+        UdpClient& udp,
+        uint8_t system,
+        uint8_t component,
+        float metersPerSecond);
+
+    static bool SetRelay(
+        UdpClient& udp,
+        uint8_t system,
+        uint8_t component,
+        uint8_t relay,
+        bool enabled);
+
+    static bool SetMessageInterval(
+        UdpClient& udp,
+        uint8_t system,
+        uint8_t component,
+        uint32_t messageId,
+        int32_t intervalMicroseconds);
+
+    static bool SetLedOutputDisabled(
+        UdpClient& udp,
+        uint8_t system,
+        uint8_t component,
+        bool disabled);
+
+    static bool PowerControl(
+        UdpClient& udp,
+        uint8_t system,
+        uint8_t component,
+        uint8_t autopilotAction);
 };

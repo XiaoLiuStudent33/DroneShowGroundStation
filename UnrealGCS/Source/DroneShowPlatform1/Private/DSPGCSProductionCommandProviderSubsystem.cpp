@@ -29,6 +29,19 @@ namespace
 		case EGCSProductionCommandType::TimeStop: return dspgcs::CommandType::TimeStop;
 		case EGCSProductionCommandType::ExecuteDanceStep: return dspgcs::CommandType::ExecuteDanceStep;
 		case EGCSProductionCommandType::EndDanceStep: return dspgcs::CommandType::EndDanceStep;
+		case EGCSProductionCommandType::MissionPause: return dspgcs::CommandType::MissionPause;
+		case EGCSProductionCommandType::MissionForward: return dspgcs::CommandType::MissionForward;
+		case EGCSProductionCommandType::MissionBackward: return dspgcs::CommandType::MissionBackward;
+		case EGCSProductionCommandType::ChangeSpeed: return dspgcs::CommandType::ChangeSpeed;
+		case EGCSProductionCommandType::TriggerSmoke: return dspgcs::CommandType::TriggerSmoke;
+		case EGCSProductionCommandType::StopTelemetry: return dspgcs::CommandType::StopTelemetry;
+		case EGCSProductionCommandType::ResumeTelemetry: return dspgcs::CommandType::ResumeTelemetry;
+		case EGCSProductionCommandType::DisableLedOutput: return dspgcs::CommandType::DisableLedOutput;
+		case EGCSProductionCommandType::RestoreLedOutput: return dspgcs::CommandType::RestoreLedOutput;
+		case EGCSProductionCommandType::Wake: return dspgcs::CommandType::Wake;
+		case EGCSProductionCommandType::Standby: return dspgcs::CommandType::Standby;
+		case EGCSProductionCommandType::Reboot: return dspgcs::CommandType::Reboot;
+		case EGCSProductionCommandType::Shutdown: return dspgcs::CommandType::Shutdown;
 		}
 		return dspgcs::CommandType::Arm;
 	}
@@ -188,6 +201,7 @@ FString UDSPGCSProductionCommandProviderSubsystem::SubmitCommand(
 	Request.parameters.scheduledHour = Parameters.ScheduledHour;
 	Request.parameters.scheduledMinute = Parameters.ScheduledMinute;
 	Request.parameters.scheduledSecond = Parameters.ScheduledSecond;
+	Request.parameters.advancedSpeedMetersPerSecond = Parameters.AdvancedSpeedMetersPerSecond;
 	Request.source.sourceType = "UI";
 	Request.source.sourceId = "UnrealGCS";
 	Request.source.stationId = "GCS-PRIMARY";

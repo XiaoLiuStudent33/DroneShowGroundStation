@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -246,6 +247,188 @@ int RunCommandPacketTests()
         results.front().modeConfirmationRequired &&
         results.front().expectedCustomMode == 6,
         "RTL completes only after HEARTBEAT confirms custom_mode 6");
+
+    const auto VerifyLegacyMissionCommand =
+        [&](const char* label,
+            const std::uint16_t expectedCommand,
+            const float expectedParam1,
+            const auto& enqueue,
+            const int tickOffset)
+        {
+            enqueue();
+            dispatcher.Tick(now + std::chrono::milliseconds(tickOffset));
+            const std::string prefix = std::string(label) + " ";
+            passed &= Check(
+                endpoint.ConsumeMessage(received),
+                prefix + "packet is emitted");
+            passed &= Check(
+                received.msgid == MAVLINK_MSG_ID_COMMAND_LONG,
+                prefix + "uses COMMAND_LONG");
+            mavlink_msg_command_long_decode(&received, &command);
+            passed &= Check(
+                command.command == expectedCommand,
+                prefix + "command id matches the legacy BGC2 contract");
+            passed &= Check(
+                std::fabs(command.param1 - expectedParam1) < 0.001f,
+                prefix + "param1 matches the legacy BGC2 contract");
+
+            mavlink_msg_command_ack_pack(
+                1,
+                1,
+                &ack,
+                expectedCommand,
+                MAV_RESULT_ACCEPTED,
+                100,
+                0,
+                255,
+                MAV_COMP_ID_MISSIONPLANNER);
+            dispatcher.HandleAck(ack);
+            results = dispatcher.ConsumeResults();
+            passed &= Check(
+                results.size() == 1 &&
+                results.front().outcome == CommandOutcome::Accepted,
+                prefix + "completes on matching ACK");
+        };
+
+    VerifyLegacyMissionCommand(
+        "MISSION_PAUSE",
+        MAV_CMD_NAV_LOITER_UNLIM,
+        1.0f,
+        [&dispatcher]() { dispatcher.QueueMissionPause(1, 1); },
+        11);
+    VerifyLegacyMissionCommand(
+        "MISSION_FORWARD",
+        MAV_CMD_NAV_RETURN_TO_LAUNCH,
+        0.0f,
+        [&dispatcher]() { dispatcher.QueueMissionForward(1, 1); },
+        12);
+    VerifyLegacyMissionCommand(
+        "MISSION_BACKWARD",
+        MAV_CMD_NAV_RETURN_TO_LAUNCH,
+        1.0f,
+        [&dispatcher]() { dispatcher.QueueMissionBackward(1, 1); },
+        13);
+
+    const auto AckCommand = [&](const std::uint16_t commandId)
+    {
+        mavlink_msg_command_ack_pack(
+            1, 1, &ack, commandId, MAV_RESULT_ACCEPTED,
+            100, 0, 255, MAV_COMP_ID_MISSIONPLANNER);
+        dispatcher.HandleAck(ack);
+    };
+
+    dispatcher.QueueChangeSpeed(1, 1, 3.5f);
+    dispatcher.Tick(now + std::chrono::milliseconds(20));
+    passed &= Check(endpoint.ConsumeMessage(received),
+        "advanced speed packet is emitted");
+    mavlink_msg_command_long_decode(&received, &command);
+    passed &= Check(command.command == MAV_CMD_USER_2 &&
+        std::fabs(command.param1 - 3.5f) < 0.001f,
+        "advanced speed uses audited USER_2 contract");
+    AckCommand(MAV_CMD_USER_2);
+    passed &= Check(dispatcher.ConsumeResults().size() == 1,
+        "advanced speed completes on ACK");
+
+    const std::uint32_t intervalMessageIds[] = { 1, 24, 33, 30, 187 };
+    dispatcher.QueueStopTelemetry(1, 1);
+    for (std::size_t index = 0; index < std::size(intervalMessageIds); ++index)
+    {
+        dispatcher.Tick(now + std::chrono::milliseconds(30 + index));
+        passed &= Check(endpoint.ConsumeMessage(received),
+            "stop telemetry emits every interval command");
+        mavlink_msg_command_long_decode(&received, &command);
+        passed &= Check(command.command == MAV_CMD_SET_MESSAGE_INTERVAL &&
+            std::fabs(command.param1 - static_cast<float>(intervalMessageIds[index])) < 0.001f &&
+            std::fabs(command.param2 + 1.0f) < 0.001f,
+            "stop telemetry disables only the audited message id");
+        AckCommand(MAV_CMD_SET_MESSAGE_INTERVAL);
+    }
+    results = dispatcher.ConsumeResults();
+    passed &= Check(results.size() == 1 &&
+        results.front().outcome == CommandOutcome::Accepted,
+        "stop telemetry completes after all five ACKs");
+
+    dispatcher.QueueResumeTelemetry(1, 1);
+    for (std::size_t index = 0; index < std::size(intervalMessageIds); ++index)
+    {
+        dispatcher.Tick(now + std::chrono::milliseconds(40 + index));
+        passed &= Check(endpoint.ConsumeMessage(received),
+            "resume telemetry emits every interval command");
+        mavlink_msg_command_long_decode(&received, &command);
+        passed &= Check(command.command == MAV_CMD_SET_MESSAGE_INTERVAL &&
+            std::fabs(command.param1 - static_cast<float>(intervalMessageIds[index])) < 0.001f &&
+            std::fabs(command.param2 - 1000000.0f) < 0.001f,
+            "resume telemetry restores every audited message to 1 Hz");
+        AckCommand(MAV_CMD_SET_MESSAGE_INTERVAL);
+    }
+    passed &= Check(dispatcher.ConsumeResults().empty(),
+        "resume telemetry waits for a fresh MDHK_STATUS sample");
+    dispatcher.HandleTelemetryMessage(187);
+    results = dispatcher.ConsumeResults();
+    passed &= Check(results.size() == 1 &&
+        results.front().outcome == CommandOutcome::Accepted,
+        "fresh MDHK_STATUS confirms telemetry recovery");
+
+    dispatcher.QueueTriggerSmoke(1, 1);
+    dispatcher.Tick(now + std::chrono::milliseconds(50));
+    passed &= Check(endpoint.ConsumeMessage(received),
+        "smoke relay-on packet is emitted");
+    mavlink_msg_command_long_decode(&received, &command);
+    passed &= Check(command.command == MAV_CMD_DO_SET_RELAY &&
+        std::fabs(command.param1) < 0.001f &&
+        std::fabs(command.param2 - 1.0f) < 0.001f,
+        "smoke relay 0 is enabled");
+    passed &= Check(dispatcher.ConsumeResults().empty(),
+        "smoke remains pending until relay reset");
+    dispatcher.Tick(now + std::chrono::milliseconds(950));
+    passed &= Check(!endpoint.ConsumeMessage(received),
+        "smoke relay reset waits for one second even without ON ACK");
+    dispatcher.Tick(now + std::chrono::milliseconds(1150));
+    passed &= Check(endpoint.ConsumeMessage(received),
+        "smoke relay reset packet is emitted after pulse");
+    mavlink_msg_command_long_decode(&received, &command);
+    passed &= Check(command.command == MAV_CMD_DO_SET_RELAY &&
+        std::fabs(command.param1) < 0.001f &&
+        std::fabs(command.param2) < 0.001f,
+        "smoke relay 0 is automatically reset");
+    AckCommand(MAV_CMD_DO_SET_RELAY);
+    passed &= Check(dispatcher.ConsumeResults().size() == 1,
+        "smoke completes only after reset ACK");
+
+    const auto VerifyAdvancedCommand =
+        [&](const char* name,
+            const std::uint16_t expectedCommand,
+            const float expectedParam1,
+            const float expectedParam2,
+            const std::function<void()>& queueCommand,
+            const int tickOffsetMilliseconds)
+        {
+            queueCommand();
+            dispatcher.Tick(now + std::chrono::milliseconds(tickOffsetMilliseconds));
+            passed &= Check(endpoint.ConsumeMessage(received),
+                (std::string(name) + " packet is emitted").c_str());
+            mavlink_msg_command_long_decode(&received, &command);
+            passed &= Check(command.command == expectedCommand &&
+                std::fabs(command.param1 - expectedParam1) < 0.001f &&
+                std::fabs(command.param2 - expectedParam2) < 0.001f,
+                (std::string(name) + " matches audited MAVLink contract").c_str());
+            AckCommand(expectedCommand);
+            passed &= Check(dispatcher.ConsumeResults().size() == 1,
+                (std::string(name) + " completes on ACK").c_str());
+        };
+
+    VerifyAdvancedCommand("disable LED output", MAV_CMD_USER_3, 1.0f, 0.0f,
+        [&dispatcher]() { dispatcher.QueueSetLedOutputDisabled(1, 1, true); }, 1200);
+    VerifyAdvancedCommand("restore LED output", MAV_CMD_USER_3, 0.0f, 0.0f,
+        [&dispatcher]() { dispatcher.QueueSetLedOutputDisabled(1, 1, false); }, 1210);
+    VerifyAdvancedCommand("wake", MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN, 4.0f, 0.0f,
+        [&dispatcher]() { dispatcher.QueuePowerControl(1, 1, 4, false); }, 1220);
+    VerifyAdvancedCommand("standby", MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN, 2.0f, 0.0f,
+        [&dispatcher]() { dispatcher.QueuePowerControl(1, 1, 2, true); }, 1230);
+    VerifyAdvancedCommand("reboot", MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN, 1.0f, 0.0f,
+        [&dispatcher]() { dispatcher.QueuePowerControl(1, 1, 1, true); }, 1240);
+    VerifyAdvancedCommand("shutdown", MAV_CMD_DO_SET_RELAY, 1.0f, 1.0f,
+        [&dispatcher]() { dispatcher.QueueShutdown(1, 1); }, 1250);
 
     dispatcher.QueueTakeoff(1, 1, 1.0f);
     dispatcher.QueueLand(1, 1);

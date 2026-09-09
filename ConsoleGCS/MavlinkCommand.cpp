@@ -501,6 +501,33 @@ bool MavlinkCommand::RTL(
 
 }
 
+bool MavlinkCommand::LegacyMissionPause(
+    UdpClient& udp,
+    uint8_t system,
+    uint8_t component)
+{
+    return SendCommandLong(
+        udp,
+        system,
+        component,
+        MAV_CMD_NAV_LOITER_UNLIM,
+        1.0f);
+}
+
+bool MavlinkCommand::LegacyMissionPlayback(
+    UdpClient& udp,
+    uint8_t system,
+    uint8_t component,
+    const bool backward)
+{
+    return SendCommandLong(
+        udp,
+        system,
+        component,
+        MAV_CMD_NAV_RETURN_TO_LAUNCH,
+        backward ? 1.0f : 0.0f);
+}
+
 bool MavlinkCommand::Loiter(
     UdpClient& udp,
     uint8_t system,
@@ -513,4 +540,61 @@ bool MavlinkCommand::Loiter(
         udp,
         system,
         5);
+}
+
+bool MavlinkCommand::ChangeSpeed(
+    UdpClient& udp,
+    const uint8_t system,
+    const uint8_t component,
+    const float metersPerSecond)
+{
+    return SendCommandLong(
+        udp, system, component, MAV_CMD_USER_2, metersPerSecond);
+}
+
+bool MavlinkCommand::SetRelay(
+    UdpClient& udp,
+    const uint8_t system,
+    const uint8_t component,
+    const uint8_t relay,
+    const bool enabled)
+{
+    return SendCommandLong(
+        udp, system, component, MAV_CMD_DO_SET_RELAY,
+        static_cast<float>(relay), enabled ? 1.0f : 0.0f);
+}
+
+bool MavlinkCommand::SetMessageInterval(
+    UdpClient& udp,
+    const uint8_t system,
+    const uint8_t component,
+    const uint32_t messageId,
+    const int32_t intervalMicroseconds)
+{
+    return SendCommandLong(
+        udp, system, component, MAV_CMD_SET_MESSAGE_INTERVAL,
+        static_cast<float>(messageId),
+        static_cast<float>(intervalMicroseconds));
+}
+
+bool MavlinkCommand::SetLedOutputDisabled(
+    UdpClient& udp,
+    const uint8_t system,
+    const uint8_t component,
+    const bool disabled)
+{
+    return SendCommandLong(
+        udp, system, component, MAV_CMD_USER_3,
+        disabled ? 1.0f : 0.0f);
+}
+
+bool MavlinkCommand::PowerControl(
+    UdpClient& udp,
+    const uint8_t system,
+    const uint8_t component,
+    const uint8_t autopilotAction)
+{
+    return SendCommandLong(
+        udp, system, component, MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
+        static_cast<float>(autopilotAction));
 }

@@ -51,7 +51,7 @@ namespace
 		return (Value - UnixEpoch).GetTicks() / ETimespan::TicksPerMillisecond;
 	}
 
-	int64 UtcNowMilliseconds()
+	int64 FrozenAssignmentUtcNowMilliseconds()
 	{
 		return ToUnixMilliseconds(FDateTime::UtcNow());
 	}
@@ -351,7 +351,7 @@ bool UDSPGCSFrozenAssignmentSyncSubsystem::CancelActiveSync(FString& OutError)
 			dspgcs::FrozenAssignmentMessageTypes::Abort,
 			ActiveTransaction,
 			++OutgoingSequence,
-			UtcNowMilliseconds(),
+			FrozenAssignmentUtcNowMilliseconds(),
 			0);
 		const std::vector<std::uint8_t> Frame = dspgcs::MakeFrame(Envelope, Payload);
 		if (Frame.size() <= dspgcs::DefaultFrozenAssignmentDatagramBudgetBytes)
@@ -468,7 +468,7 @@ bool UDSPGCSFrozenAssignmentSyncSubsystem::BuildWireTransaction(
 	}
 	OutTransaction.CanonicalPayloadBytes = CanonicalPayload.size();
 
-	const std::int64_t TimestampUtcMs = UtcNowMilliseconds();
+	const std::int64_t TimestampUtcMs = FrozenAssignmentUtcNowMilliseconds();
 	const dspgcs::MessageEnvelope PlanEnvelope = MakeEnvelope(
 		dspgcs::FrozenAssignmentMessageTypes::Chunk,
 		OutTransaction,

@@ -45,7 +45,7 @@ namespace
 	constexpr float EnterMeshProjectedDiameterPixels = 14.0f;
 	constexpr float ExitMeshProjectedDiameterPixels = 10.0f;
 
-	int64 UtcNowMilliseconds()
+	int64 VisualizationUtcNowMilliseconds()
 	{
 		const FDateTime Now = FDateTime::UtcNow();
 		return Now.ToUnixTimestamp() * 1000 + Now.GetMillisecond();
@@ -118,7 +118,7 @@ void ADroneFleetVisualizationActor::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	FlushDeferredNiagaraArrayRebind();
-	UpdateLiveInterpolatedPositions(UtcNowMilliseconds(), true);
+	UpdateLiveInterpolatedPositions(VisualizationUtcNowMilliseconds(), true);
 	UpdateAdaptiveFlightMarkerSize(DeltaSeconds);
 }
 
@@ -850,7 +850,7 @@ void ADroneFleetVisualizationActor::RefreshFromFleet()
 		bDroneColorsDirty = true;
 	}
 
-	UpdateLiveInterpolatedPositions(UtcNowMilliseconds(), false);
+	UpdateLiveInterpolatedPositions(VisualizationUtcNowMilliseconds(), false);
 	FBox FleetVisualBounds(ForceInit);
 	for (int32 Index = 0; Index < OrderedDrones.Num() && Index < DronePositions.Num(); ++Index)
 	{

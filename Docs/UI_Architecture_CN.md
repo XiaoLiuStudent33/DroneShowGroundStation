@@ -76,7 +76,7 @@ Main Widget每次新Bind时一次性设置：
 - DroneDetail = Collapsed
 - RightPanel = Collapsed
 
-`BTN_Fleet`只Toggle FleetPanel，`BTN_Control`只Toggle DroneDetail。允许两者同时开或同时关，不是互斥Tab。
+`BTN_Fleet`只Toggle FleetPanel，`BTN_Control`只Toggle DroneDetail。允许两者同时开或同时关，不是互斥Tab。`BTN_Menu`不得改变这两个主面板的可见性。
 
 Map/Settings/Logs是独立viewport page。点击当前已显示页面会关闭它并回到主场景；切换到另一个page时只显示目标page。
 

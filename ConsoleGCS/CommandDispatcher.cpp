@@ -114,6 +114,45 @@ std::uint64_t CommandDispatcher::QueueRTL(
         true);
 }
 
+std::uint64_t CommandDispatcher::QueueMissionPause(
+    std::uint8_t system,
+    std::uint8_t component)
+{
+    return Queue(
+        Action::MissionPause,
+        system,
+        component,
+        MAV_CMD_NAV_LOITER_UNLIM,
+        0.0f,
+        false);
+}
+
+std::uint64_t CommandDispatcher::QueueMissionForward(
+    std::uint8_t system,
+    std::uint8_t component)
+{
+    return Queue(
+        Action::MissionForward,
+        system,
+        component,
+        MAV_CMD_NAV_RETURN_TO_LAUNCH,
+        0.0f,
+        false);
+}
+
+std::uint64_t CommandDispatcher::QueueMissionBackward(
+    std::uint8_t system,
+    std::uint8_t component)
+{
+    return Queue(
+        Action::MissionBackward,
+        system,
+        component,
+        MAV_CMD_NAV_RETURN_TO_LAUNCH,
+        0.0f,
+        false);
+}
+
 std::uint64_t CommandDispatcher::QueueLoiter(
     std::uint8_t system,
     std::uint8_t component)
@@ -209,6 +248,111 @@ std::uint64_t CommandDispatcher::QueueEndDanceStep(
         controlMask);
 }
 
+std::uint64_t CommandDispatcher::QueueChangeSpeed(
+    const std::uint8_t system,
+    const std::uint8_t component,
+    const float metersPerSecond)
+{
+    return Queue(Action::ChangeSpeed, system, component, MAV_CMD_USER_2,
+        0.0f, false, 0, 0, 0, 0, false, 0, 1, 0, 0, 0,
+        metersPerSecond);
+}
+
+std::uint64_t CommandDispatcher::QueueTriggerSmoke(
+    const std::uint8_t system,
+    const std::uint8_t component)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    Request request;
+    request.id = nextRequestId++;
+    request.action = Action::TriggerSmoke;
+    request.system = system;
+    request.component = component;
+    request.expectedAckCommand = MAV_CMD_DO_SET_RELAY;
+    if (system == 0 || component == 0 || queued.size() >= MaxQueueSize)
+    {
+        CompleteLocked(request, CommandOutcome::QueueFull);
+    }
+    else
+    {
+        queued.push_back(request);
+    }
+    return request.id;
+}
+
+std::uint64_t CommandDispatcher::QueueStopTelemetry(
+    const std::uint8_t system,
+    const std::uint8_t component)
+{
+    return QueueTelemetryIntervals(system, component, -1, false);
+}
+
+std::uint64_t CommandDispatcher::QueueResumeTelemetry(
+    const std::uint8_t system,
+    const std::uint8_t component)
+{
+    return QueueTelemetryIntervals(system, component, 1000000, true);
+}
+
+std::uint64_t CommandDispatcher::QueueSetLedOutputDisabled(
+    const std::uint8_t system,
+    const std::uint8_t component,
+    const bool disabled)
+{
+    return Queue(Action::SetLedOutputDisabled, system, component, MAV_CMD_USER_3,
+        0.0f, false, 0, 0, 0, 0, false, 0, 1, 0, 0, 0,
+        disabled ? 1.0f : 0.0f);
+}
+
+std::uint64_t CommandDispatcher::QueuePowerControl(
+    const std::uint8_t system,
+    const std::uint8_t component,
+    const std::uint8_t autopilotAction,
+    const bool safetyPriority)
+{
+    return Queue(Action::PowerControl, system, component,
+        MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN, 0.0f, safetyPriority,
+        0, 0, 0, 0, false, 0, 1, 0, 0, 0,
+        static_cast<float>(autopilotAction));
+}
+
+std::uint64_t CommandDispatcher::QueueShutdown(
+    const std::uint8_t system,
+    const std::uint8_t component)
+{
+    return Queue(Action::ShutdownRelay, system, component,
+        MAV_CMD_DO_SET_RELAY, 0.0f, true);
+}
+
+std::uint64_t CommandDispatcher::QueueTelemetryIntervals(
+    const std::uint8_t system,
+    const std::uint8_t component,
+    const std::int32_t intervalMicroseconds,
+    const bool verifyMdhkStatus)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    Request request;
+    request.id = nextRequestId++;
+    request.action = Action::TelemetryInterval;
+    request.system = system;
+    request.component = component;
+    request.expectedAckCommand = MAV_CMD_SET_MESSAGE_INTERVAL;
+    // Preserve heartbeat (#0) and COMMAND_ACK (#77). #187 is last so a
+    // post-ACK sample proves the custom telemetry stream really resumed.
+    request.messageIds = { 1, 24, 33, 30, 187 };
+    request.messageIntervalMicroseconds = intervalMicroseconds;
+    request.waitForTelemetryConfirmation = verifyMdhkStatus;
+    if (system == 0 || component == 0 || queued.size() >= MaxQueueSize)
+    {
+        CompleteLocked(request, CommandOutcome::QueueFull);
+    }
+    else
+    {
+        queued.push_back(request);
+    }
+    return request.id;
+}
+
 std::uint64_t CommandDispatcher::Queue(
     Action action,
     std::uint8_t system,
@@ -225,7 +369,8 @@ std::uint64_t CommandDispatcher::Queue(
     std::uint8_t timeControlMask,
     std::uint8_t scheduledHour,
     std::uint8_t scheduledMinute,
-    std::uint8_t scheduledSecond)
+    std::uint8_t scheduledSecond,
+    float advancedValue)
 {
     std::lock_guard<std::mutex> lock(mutex);
 
@@ -246,6 +391,7 @@ std::uint64_t CommandDispatcher::Queue(
     request.scheduledHour = scheduledHour;
     request.scheduledMinute = scheduledMinute;
     request.scheduledSecond = scheduledSecond;
+    request.advancedValue = advancedValue;
 
     if (system == 0 ||
         component == 0 ||
@@ -276,7 +422,16 @@ void CommandDispatcher::Tick(
     std::lock_guard<std::mutex> lock(mutex);
 
     if (pending &&
+        pending->waitingForTelemetryConfirmation &&
+        now - pending->sentAt >= AckTimeout)
+    {
+        CompleteLocked(*pending, CommandOutcome::Timeout);
+        pending.reset();
+    }
+
+    if (pending &&
         pending->sent &&
+        !pending->waitingForTelemetryConfirmation &&
         now - pending->sentAt >= AckTimeout)
     {
         if (pending->attempts > MaxRetries)
@@ -298,7 +453,8 @@ void CommandDispatcher::Tick(
         queued.pop_front();
     }
 
-    if (!pending || pending->sent)
+    if (!pending || pending->sent ||
+        (pending->notBefore.time_since_epoch().count() != 0 && now < pending->notBefore))
     {
         return;
     }
@@ -306,15 +462,37 @@ void CommandDispatcher::Tick(
     pending->sent = true;
     pending->sentAt = now;
     ++pending->attempts;
+    ++pending->totalAttempts;
 
     const bool sendSucceeded = Send(*pending);
 
     if (!sendSucceeded)
     {
+        if (pending->action == Action::TriggerSmoke &&
+            pending->relayStep == 1 && pending->attempts <= MaxRetries)
+        {
+            pending->sent = false;
+            pending->notBefore = now + SmokePulseDuration;
+            return;
+        }
         CompleteLocked(
             *pending,
             CommandOutcome::SendFailed);
         pending.reset();
+        return;
+    }
+
+    // A relay pulse must not depend on receiving the ON command ACK. UDP may
+    // deliver the command while its ACK is lost; waiting for that ACK before
+    // scheduling relay=0 could leave the smoke output latched indefinitely.
+    // Once the ON datagram is sent, always advance to the OFF step and retry
+    // that safety-critical reset until it is acknowledged or times out.
+    if (pending->action == Action::TriggerSmoke && pending->relayStep == 0)
+    {
+        pending->relayStep = 1;
+        pending->attempts = 0;
+        pending->sent = false;
+        pending->notBefore = now + SmokePulseDuration;
         return;
     }
 
@@ -373,6 +551,7 @@ void CommandDispatcher::HandleAck(
     // #77 ACK 必须属于本 Session 当前等待的目标 sysid，并携带期望的
     // MAV_CMD。这里的 SYSID 仅用于协议应答关联，不能替代 Endpoint Fleet 身份。
     if (!pending ||
+        !pending->sent ||
         pending->waitForModeConfirmation ||
         pending->system != message.sysid ||
         pending->expectedAckCommand != ack.command)
@@ -387,15 +566,46 @@ void CommandDispatcher::HandleAck(
         return;
     }
 
-    const CommandOutcome outcome =
-        ack.result == MAV_RESULT_ACCEPTED
-        ? CommandOutcome::Accepted
-        : CommandOutcome::Rejected;
+    if (ack.result == MAV_RESULT_ACCEPTED &&
+        pending->action == Action::TelemetryInterval)
+    {
+        if (pending->messageIndex + 1 < pending->messageIds.size())
+        {
+            ++pending->messageIndex;
+            pending->attempts = 0;
+            pending->sent = false;
+            return;
+        }
+        if (pending->waitForTelemetryConfirmation)
+        {
+            pending->waitingForTelemetryConfirmation = true;
+            pending->sentAt = std::chrono::steady_clock::now();
+            return;
+        }
+    }
+
+    const CommandOutcome outcome = ack.result == MAV_RESULT_ACCEPTED
+        ? CommandOutcome::Accepted : CommandOutcome::Rejected;
 
     CompleteLocked(
         *pending,
         outcome,
         ack.result);
+    pending.reset();
+}
+
+void CommandDispatcher::HandleTelemetryMessage(const std::uint32_t messageId)
+{
+    if (messageId != 187)
+    {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!pending || !pending->waitingForTelemetryConfirmation)
+    {
+        return;
+    }
+    CompleteLocked(*pending, CommandOutcome::Accepted);
     pending.reset();
 }
 
@@ -458,6 +668,26 @@ bool CommandDispatcher::Send(
             request.system,
             request.customMode);
 
+    case Action::MissionPause:
+        return MavlinkCommand::LegacyMissionPause(
+            udp,
+            request.system,
+            request.component);
+
+    case Action::MissionForward:
+        return MavlinkCommand::LegacyMissionPlayback(
+            udp,
+            request.system,
+            request.component,
+            false);
+
+    case Action::MissionBackward:
+        return MavlinkCommand::LegacyMissionPlayback(
+            udp,
+            request.system,
+            request.component,
+            true);
+
     case Action::Loiter:
         return MavlinkCommand::Loiter(
             udp,
@@ -492,6 +722,37 @@ bool CommandDispatcher::Send(
             request.system,
             request.component,
             request.timeControlMask);
+
+    case Action::ChangeSpeed:
+        return MavlinkCommand::ChangeSpeed(
+            udp, request.system, request.component, request.advancedValue);
+
+    case Action::TriggerSmoke:
+        return MavlinkCommand::SetRelay(
+            udp, request.system, request.component, 0, request.relayStep == 0);
+
+    case Action::TelemetryInterval:
+        if (request.messageIndex >= request.messageIds.size())
+        {
+            return false;
+        }
+        return MavlinkCommand::SetMessageInterval(
+            udp, request.system, request.component,
+            request.messageIds[request.messageIndex],
+            request.messageIntervalMicroseconds);
+
+    case Action::SetLedOutputDisabled:
+        return MavlinkCommand::SetLedOutputDisabled(
+            udp, request.system, request.component, request.advancedValue != 0.0f);
+
+    case Action::PowerControl:
+        return MavlinkCommand::PowerControl(
+            udp, request.system, request.component,
+            static_cast<std::uint8_t>(request.advancedValue));
+
+    case Action::ShutdownRelay:
+        return MavlinkCommand::SetRelay(
+            udp, request.system, request.component, 1, true);
     }
 
     return false;
@@ -507,7 +768,9 @@ void CommandDispatcher::CompleteLocked(
     result.command = request.expectedAckCommand;
     result.outcome = outcome;
     result.ackResult = ackResult;
-    result.attempts = request.attempts;
+    result.attempts = request.totalAttempts > 0
+        ? request.totalAttempts
+        : request.attempts;
     result.modeConfirmationRequired = request.waitForModeConfirmation;
     result.expectedCustomMode = request.customMode;
 
