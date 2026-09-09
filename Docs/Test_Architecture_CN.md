@@ -2,7 +2,7 @@
 
 Status: CURRENT SUPPORTING
 Authority: 测试资产、运行入口与证据等级
-Last Updated: 2026-09-08
+Last Updated: 2026-09-09
 
 Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，当前调用链见 [Code_Architecture_CN.md](Code_Architecture_CN.md)，进度见 [Development_Status_CN.md](Development_Status_CN.md)。
 
@@ -37,7 +37,8 @@ Production 边界见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，�
 - 五种场景：室内无 GPS 接受/拒绝/超时、GPS 地面接受、相对高度 5m 时交由飞控拒绝。另检查离线、receive-only、关闭真实命令不会发普通控制包。
 - 检查每个上锁及重试报文为 `MAV_CMD_COMPONENT_ARM_DISARM`、正确 SYSID/COMPID、param1=0、param2=0；错误 Endpoint/MAV_CMD 的 ACK 不完成请求，发送不立即成功，ACK 不伪造已上锁遥测。
 - 修复前专项在三个无 GPS 场景及相对高度非零场景失败，修复后 Debug/Release x64 专项通过。软件测试不证明飞控落地判断、现场停桨或所有飞行模式下的安全拒绝行为。
-- 2026-09-04：Debug/Release Console 生产构建通过。Release 全回归中命令、DSP 命令相关测试通过，MissionUpload manager integration 的模拟上传链断言失败（`fake production chain did not complete authoritative Job state`）；独立 `--mission-upload-tests` 与恢复旧上锁判断的对照运行均复现同一失败。本次未扩大范围修复上传测试；最终已恢复修复源码、重建 Release 测试并再次通过两配置上锁专项。完整回归不是全绿。
+- 2026-09-04：Debug/Release Console 生产构建及两配置上锁专项通过。当时 Release 全回归在 MissionUpload manager integration 的 fake production chain 失败；该失败与上锁修复无关。
+- 2026-09-09：确认失败夹具仍生成旧编号 `Drone001–Drone005`，与当前 canonical `Drone000–Drone004` 不一致。测试夹具编号修正后，MissionUpload 专项及完整 Console 回归恢复 PASS；Production Mission/MAVFTP 逻辑未因该测试修复而改变。
 
 构建后从 `ConsoleGCS` 目录运行完整回归：
 
@@ -94,6 +95,15 @@ Automation RunTests DroneGCS.
 Quick Test 从 `UnrealGCS/Saved/RouteArtifacts/Current/manifest.json` 引导，再由 `ConsoleArtifactConsumerV2` 执行完整 Artifact 校验。生产与显式 Hardware Harness 共享已冻结的 MAVFTP 五项参数合同；Harness 仍只能由显式安全入口启动。
 
 ## 5. 当前自动化证据
+
+### 2026-09-07～09-09 UI / Telemetry / Command 回归
+
+- Fleet authored contract 使用真实 `WBP_GCS_FleetPanel_V2`、`WBP_GCS_FleetRow` 和 `BP_FleetRowData`，覆盖虚拟化 ListView、稳定行对象、独立复选框/详情点击区及旧 Row contract 退出。
+- 独立 Toolbar 回归覆盖 `BTN_Menu` 不控制 Fleet/Detail，以及 `BTN_Fleet`、`BTN_Control` 分别独立切换两个面板。
+- Selection 回归覆盖详情选择不自动打开详情面板、Command Selection 独立、暂停后才允许前进/倒退、HoverTest 经 Production Provider 提交。
+- Scheduled Show Preview 回归证明授时到点不会自动启动 NPZ；执行舞步与底部 Playback 状态分离。
+- Console Command/DSP Command 回归覆盖高级命令编码、目标扩展、ACK/超时、拉烟 relay 0 一秒脉冲复位、关机 relay 1 latch、恢复遥测 1 Hz 并等待新鲜 #187。
+- Visualization/Console Pipeline 回归覆盖 #187 RGB 标准灯光投影和真实 GPS 样本插值。自动化不证明真实飞控执行器、继电器或断电板物理动作。
 
 2026-08-25 在当前 checkout 完成 Release x64 Solution Build（0 errors、12 warnings、ExitCode 0），随后运行：
 

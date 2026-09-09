@@ -1,8 +1,8 @@
 # DroneGCS 项目交接速览
 
 Status: CURRENT SUPPORTING
-Last Updated: 2026-09-03
-Baseline: `master` / `03825841f81e516731d12df632867be67f72ad57` + 2026-09-03 联合打包工作树
+Last Updated: 2026-09-09
+Baseline: `master` / `f115587` + 2026-09-09 本交接文档更新
 
 本文件是快速接手入口。长期边界以 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md) 为准，当前调用链以 [Code_Architecture_CN.md](Code_Architecture_CN.md) 和 Production 源码为准，进度以 [Development_Status_CN.md](Development_Status_CN.md) 为准。
 
@@ -35,6 +35,11 @@ ArduPilot / APM
 - UE 不直接向飞控发送 MAVLink。
 - 正式用户入口是安装后的 `DroneGCSLauncher.exe`，不是 UE 根目录的纯前端 Game EXE。
 - 安装版程序位于 Program Files，可变配置、日志、UE Saved 和 Artifact Workspace 位于 `%LOCALAPPDATA%/DroneGCS`。
+
+开发期对照资料（只作协议审计，不属于 Production Authority）：
+
+- 旧版 BGC2 源码：`D:\Download\重要资源存储\bgc2\bgc2`
+- 更新后的 BGC2 打包项目：`D:\Blender\bin`
 
 ## E.0.2 操作合同
 
@@ -73,7 +78,29 @@ Joint Shipping Package = DONE
 Visible Full-Control Backend Lifecycle = DONE
 NSIS V1.0.0 Installer = DONE
 Second-PC Install/Launch = USER-CONFIRMED PASS
+FleetPanel V2 / Row Virtualization = USER-CONFIRMED PASS
+Operator Command Expansion = IMPLEMENTED
+Real Telemetry Digital Twin = IMPLEMENTED
 ```
+
+### 4.1 2026-09-07～09-09 当前 UI 与控制状态
+
+- `WBP_GCS_FleetPanel_V2`、`WBP_GCS_FleetRow`、`BP_FleetRowData` 是当前机群列表；旧 `WBP_GCS_FleetPanel` 及旧 Row C++ 已删除。ListView 行使用稳定数据对象原位刷新，复选框与从 ID 列开始的详情点击区互不覆盖。
+- 详情选择与命令选择仍是两套 Authority。点击一行只更新当前详情对象，不自动打开 `CHILD_DroneDetail`；复选框只改变 `SelectedCommandDroneIDs`。
+- `BTN_Menu` 不再改变 Fleet/Detail；`BTN_Fleet` 独立切换 `CHILD_FleetPanel`，`BTN_Control` 独立切换 `CHILD_DroneDetail`，两面板可同时开关。
+- 授时倒计时到零和“执行舞步”只发送真实飞控命令，不再自动启动底部 NPZ 播放；NPZ 仅由 Playback 控件显式播放。
+- HoverTest 起飞工作流会先请求 GUIDED，再执行解锁/起飞，不再被 MANUAL 门禁错误拒绝。
+- 已接入返航、原地降落、暂停、前进、倒退和高级控制；前进/倒退仅在任务暂停后可用。恢复数据将消息 `1/24/33/30/187` 恢复为 1 Hz，并以新鲜 #187 样本确认恢复。
+- 拉烟沿用旧协议的 relay 0，但改为 1 秒脉冲后自动复位；关机沿用旧协议的 relay 1 置 1。待机/重启/关机有 armed gate，关机还保留二次确认。
+- #187 RGB 已映射到标准灯光状态；真实 GPS 为每机保留前后样本并在共享 Visualization Actor tick 中插值。没有有效真实 GPS 时仍遵守既有预览/初始位置边界，不把 NPZ 播放伪装成真机遥测。
+- 遥测筛选页面已支持条件和预设；筛选结果不会隐式改变命令选择，操作员必须明确勾选目标。
+
+### 4.2 当前已知边界
+
+- 2026-09-09 真机观察：8 架中的 6 架可由旧 relay-1 合同正常关机；`Drone001`、`Drone007` 对 `MAV_CMD_DO_SET_RELAY` 返回 `ACCEPTED` 但硬件未断电。批量目标与 ACK 链正常，当前按两机继电器配置/断电硬件差异处理，暂不修改 UE/Console。
+- “命令 ACCEPTED”只证明飞控接受相应 MAVLink 命令，不证明执行器、继电器或整机物理状态已经达到目标。
+- 备用机/补点飞行仍为 DEFERRED；实时遥测中断策略不得提前承担备用机调度语义。
+- 旧 1.0.0 安装包未包含 9 月 7～9 日的上述工作树更新，若要外部部署需重新走联合 Shipping/Installer 验证。
 
 生产参数为 `segment_items=4000`、request/terminate timeout `750/2500 ms`、retry `3`、write window `16`。`segmentCapacity` 以包含 Reserved Home 的 Wire Mission Items 计数。
 
@@ -81,7 +108,7 @@ Second-PC Install/Launch = USER-CONFIRMED PASS
 
 Console 可观测性由 `ConsoleUI` 的单一 Renderer 线程负责。Producer 只入队 1024 条上限的结构化记录或发布 Fleet 快照；真实 Windows Console 使用动态尺寸 Dashboard，重定向、Pipe、文件、Tee 和 CI 使用无 cursor 控制的 Linear 输出。溢出通过 `DroppedLogCount` 可观测，terminal/error 优先于普通日志。E.1 使用动态 N Target 准入和公平 Write permit pool；`write_window=16` 仍为每 Client 上限，独立 `global_write_outstanding_cap` 合法范围 `1..800`、启动默认 `800`。
 
-当前暂停在 Release 1 安装交付完成点。下一步不是重做 UE/Console 功能，而是分别验收非飞行闭环、受监督飞行与航线上传、升级覆盖、卸载清理和代码签名。异机“安装/启动通过”不能替代这些分项证据。
+当前软件基线为 `f115587`。下一步应从具体的新需求或受监督真机复验继续，不重做已经通过的新机群列表和按钮接线；仍需分别验收非飞行闭环、受监督飞行与航线上传、升级覆盖、卸载清理和代码签名。异机“安装/启动通过”不能替代这些分项证据。
 
 ## 5. 保护规则
 
@@ -97,5 +124,7 @@ Console 可观测性由 `ConsoleUI` 的单一 Renderer 线程负责。Producer �
 Console Release x64 Solution Build 已于 2026-08-25 通过（0 errors、12 warnings、ExitCode 0）；六组专项测试和 Full ConsoleGCSTests 全部通过。UE Development/DebugGame Build 均通过，E.0 AutoStart 6/6 与合并相关回归 164/164 PASS。硬件 1000～6000 PASS 与 7000 NAK 2 均为用户确认且没有仓库日志。
 
 2026-09-03：联合启动隔离 Smoke 32 项、V3 Shipping/manifest 严格校验、Launcher `--check` 与 NSIS 3.12 无警告构建 PASS；生成 V1.0.0 安装程序。用户确认安装程序转移到另一台电脑后安装与启动通过，证据等级为 `USER-CONFIRMED`，没有异机日志进入仓库。
+
+2026-09-09：新版机群列表由用户完成现场测试；Console 高级命令、DSP round-trip、HoverTest、#187 RGB、真实 GPS 插值和独立 Toolbar 均有对应源码回归。原 MissionUpload fake production chain 使用 `Drone001–Drone005` 的旧夹具编号，已改为当前 canonical `Drone000–Drone004`，完整 Console 回归恢复通过。真机 relay 输出和物理断电行为不属于软件自动化证明范围。
 
 详细测试边界见 [Test_Architecture_CN.md](Test_Architecture_CN.md)。

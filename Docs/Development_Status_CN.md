@@ -2,8 +2,8 @@
 
 Status: CURRENT
 Authority: 当前实现状态与开发顺序
-Last Updated: 2026-09-04
-Baseline: `master` / `03825841f81e516731d12df632867be67f72ad57` + 2026-09-03 联合打包工作树
+Last Updated: 2026-09-09
+Baseline: `master` / `f115587` + 2026-09-09 本状态文档更新
 
 ## 1. DONE / IMPLEMENTED
 
@@ -66,13 +66,34 @@ UE Route Workflow
 
 ## 2. CURRENT / NEXT
 
+### 新版机群 UI、实时遥测与操作命令（2026-09-07～09-09）
+
+- 新 `WBP_GCS_FleetPanel_V2` + `WBP_GCS_FleetRow` + `BP_FleetRowData` 已成为唯一机群列表，旧 `WBP_GCS_FleetPanel` 与旧 Row C++ 已删除。用户已确认新列表现场测试通过。
+- 行复选框只负责 Command Selection；从 ID 列开始的独立详情按钮只更新 Detail Selection。选择无人机不再自动显示 `WBP_GCS_DroneDetail`。
+- `BTN_Menu` 已解除 Fleet/Detail 可见性职责；`BTN_Fleet` 与 `BTN_Control` 分别独立控制 `CHILD_FleetPanel` 与 `CHILD_DroneDetail`。
+- #187 MDHK RGB 已进入标准灯光状态；Visualization 以每机两个真实 GPS 样本做插值，场景颜色刷新使用真实遥测状态。NPZ 预览和真实数字孪生仍是明确分离的来源。
+- 授时倒计时到零、执行舞步均不会自动播放 NPZ。底部 Playback 是 NPZ 播放的唯一显式入口。
+- HoverTest 已调整为自主工作流：先请求 GUIDED，再继续解锁/起飞；不再由 MANUAL 门禁直接拒绝。
+- 已接入返航、原地降落、暂停、前进、倒退、速度、加锁、拉烟、停止/恢复遥测、空中关灯/恢复灯光、唤醒、待机、重启、关机。前进/倒退只有暂停后可用；恢复遥测为消息 `1/24/33/30/187` 的 1 Hz，并等待新鲜 #187 确认。
+- 拉烟是 relay 0 的一秒 ON/OFF 脉冲；关机继续兼容旧 BGC2 的 relay 1 latch。待机/重启/关机禁止 armed 状态执行；关机保留二次确认。
+- 遥测筛选支持条件和预设，但筛选集合不自动写入 `SelectedCommandDroneIDs`。
+
+当前下一步：按新的明确需求继续开发或进行受监督真机复验。不要重新实现已经通过的新机群列表，也不要把 `Drone001`/`Drone007` 的物理关机问题扩大为 UE 批量命令故障。
+
+### 2026-09-09 真机硬件边界
+
+- 同一批量关机操作中，8 架里的 6 架正常离线；`Drone001`、`Drone007` 仍在线。
+- 两机均对 `MAV_CMD_DO_SET_RELAY` 返回 `MAV_RESULT_ACCEPTED`，证明当前 UE -> DSP-GCS -> Console -> MAVLink target/ACK 链已完成；ACK 不证明继电器输出或断电板物理动作。
+- 用户已确认按硬件/继电器配置差异暂时跳过。本阶段不修改关机协议或软件实现。
+- 备用机/补点飞行仍是 DEFERRED；后续设计时再定义 Link Lost、替补选择、航线重分配与状态接管合同。
+
 ### 室内普通上锁误拦截修复（2026-09-04 工作树）
 
 - 现场截图：ARM 收到 `MAV_RESULT_ACCEPTED`，随后 DISARM 被 Console 以 `landing not confirmed` 拒绝，未发送给飞控。旧判断把来自 GPS 3D Fix 的 AMSL `altitudeValid` 与相对高度 `relativeAltitude` 混用，不能代表是否着陆。
 - `DroneSession` 不再用 GPS 定位或相对起飞点高度推断着陆以拦截普通上锁；普通 DISARM 始终使用 MAV_CMD 400、param1=0、param2=0，由目标飞控执行自身安全判断。保留 receive-only、真实命令开关、在线检查、Endpoint 路由及 ACK/拒绝/超时处理；不新增强制上锁，不改飞控参数，不改变 GPS 遥测语义。
 - 普通上锁的实际允许条件取决于飞控固件、模式和配置，不能宣称所有空中上锁都会被固件拒绝；这不是新的紧急停机功能。ACK 接受也不等于已验证停桨，仍须核对 HEARTBEAT armed 状态及现场电机状态。
 - 新增 `ConsoleGCSTests.exe --disarm-tests` 内存捕获专项，覆盖无 GPS、GPS 地面、相对高度非零、ACK 接受/拒绝/缺失、错误 Endpoint/命令 ACK、普通重试与禁用边界。真机地面复测尚待操作员完成，旧 1.0.0 安装包未更新。
-- 验证：Console Debug/Release x64 构建及两配置上锁专项 PASS；Release 全回归的 command、DSP command 等通过，但 MissionUpload 模拟链报 `fake production chain did not complete authoritative Job state`。独立重跑以及临时恢复旧上锁判断的对照均同样失败；已恢复本次修复源码并重建/通过 Release 上锁专项。本轮未修复此上传测试问题，不将全回归标为 PASS。
+- 验证：Console Debug/Release x64 构建及两配置上锁专项 PASS。此前 MissionUpload fake production chain 仍使用已淘汰的 `Drone001–Drone005` 测试编号，和当前 canonical `Drone000–Drone004` 不一致；2026-09-09 已修正夹具编号，完整 Console 回归恢复 PASS。该修复只更新测试夹具，不改变 Production Route Upload 合同。
 
 ### Route Upload 列表稳定性修复（2026-09-03 工作树）
 
@@ -119,12 +140,14 @@ Route/MAVFTP 已冻结：
 ## 3. NOT STARTED
 
 - E.2 多机硬件规模验证与调度冻结。
+- 新版 UI/命令改动对应的下一版 Shipping payload 与安装程序重建、异机复验。
 
 ## 4. DEFERRED
 
 - 10000-drone chunked/sharded Route Store。
 - Backup Drone Replacement、故障补点、冲突预测、120-degree rejoin rule。
 - E.3 Console 重启后的 DroneID 发现顺序/稳定身份风险。
+- `Drone001`、`Drone007` relay-1 已 ACK 但未物理断电的硬件/参数排查。
 
 ## 5. FIRMWARE UNKNOWN
 
