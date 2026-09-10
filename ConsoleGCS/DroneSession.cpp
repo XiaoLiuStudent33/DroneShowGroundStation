@@ -166,13 +166,21 @@ void DroneSession::Stop()
 }
 
 void DroneSession::Tick(
-    std::chrono::steady_clock::time_point now)
+    std::chrono::steady_clock::time_point now, SessionTickTimings* timings)
 {
     if (!started)
     {
         return;
     }
 
+    auto stageStarted = timings ? std::chrono::steady_clock::now() : now;
+    const auto record = [&](double SessionTickTimings::* member)
+    {
+        if (!timings) return;
+        const auto finished = std::chrono::steady_clock::now();
+        timings->*member += std::chrono::duration<double, std::milli>(finished - stageStarted).count();
+        stageStarted = finished;
+    };
     if (!config.receiveOnly &&
         config.realCommandEnabled &&
         now - lastGcsHeartbeat >= std::chrono::seconds(1))
@@ -181,11 +189,13 @@ void DroneSession::Tick(
         lastGcsHeartbeat = now;
     }
 
+    record(&SessionTickTimings::heartbeatSendMs);
     RefreshHeartbeatStatus(now);
-
+    record(&SessionTickTimings::statusMs);
     if (mavFtpClient) mavFtpClient->Tick(now);
-
+    record(&SessionTickTimings::ftpMs);
     ProcessDispatchResults(now);
+    record(&SessionTickTimings::dispatchMs);
 
     const FlightData currentData = dataManager.GetFlightData();
 
@@ -201,6 +211,7 @@ void DroneSession::Tick(
             "Vehicle Connected SYSID=" +
             std::to_string(currentData.systemID));
     }
+    record(&SessionTickTimings::streamMs);
 }
 
 void DroneSession::RefreshHeartbeatStatus(
@@ -1111,6 +1122,11 @@ void DroneSession::ProcessDispatchResults(
     for (const CommandDispatchResult& result : results)
     {
         completedCommandResults.push_back(result);
+        // Success is already summarized by the DSP command batch. Preserve the
+        // result above, but do not emit 20K duplicate success lines. Failures
+        // retain per-vehicle diagnostics and get priority in the log queue.
+        if (result.outcome == CommandOutcome::Accepted || result.outcome == CommandOutcome::Sent)
+            continue;
         std::string ackDiagnostic;
         if (result.modeConfirmationRequired)
         {
@@ -1130,7 +1146,7 @@ void DroneSession::ProcessDispatchResults(
                 "(" + std::to_string(
                     static_cast<unsigned int>(result.ackResult)) + ")";
         }
-        ConsoleUI::AddLog(
+        ConsoleUI::AddErrorLog(
             SessionPrefix(config.droneId) +
             "CMD request=" + std::to_string(result.requestId) +
             " command=" + std::to_string(result.command) +

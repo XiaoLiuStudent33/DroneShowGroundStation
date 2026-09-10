@@ -219,6 +219,7 @@ bool DSPGCSProductionTelemetryProvider::PublishSnapshot(
     const std::string snapshotId =
         "TELEMETRY-" + std::to_string(fleetRevision);
     std::vector<dspgcs::TelemetryDTO> items;
+    items.reserve(droneManager.GetDroneCount());
 
     for (const DroneSession* session : droneManager.GetAllDrones())
     {
@@ -262,11 +263,9 @@ bool DSPGCSProductionTelemetryProvider::PublishSnapshot(
     std::size_t currentFrameBytes = fixedFrameBytes;
     for (dspgcs::TelemetryDTO& item : items)
     {
-        dspgcs::TelemetryBatchDTO oneItemBatch = MakeBatch();
-        oneItemBatch.items.push_back(item);
-        const std::size_t itemBytes =
-            dspgcs::EncodeTelemetry(sizingEnvelope, oneItemBatch).size() -
-            fixedFrameBytes;
+        dspgcs::detail::Writer itemSizer;
+        dspgcs::detail::Telemetry(itemSizer, item);
+        const std::size_t itemBytes = itemSizer.Take().size();
 
         if (!chunks.back().empty() &&
             (chunks.back().size() >= maxTelemetryChunkItems_ ||

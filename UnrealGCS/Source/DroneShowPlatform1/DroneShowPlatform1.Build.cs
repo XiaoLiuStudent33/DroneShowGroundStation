@@ -99,7 +99,7 @@ public class DroneShowPlatform1 : ModuleRules
 			"Sockets",
 			"Networking",
 			"CesiumRuntime",
-			"EngineSettings"
+			"EngineSettings", "ImageWrapper"
 		});
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{

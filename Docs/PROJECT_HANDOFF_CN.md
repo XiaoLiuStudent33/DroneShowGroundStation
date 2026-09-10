@@ -169,3 +169,78 @@ Console Release/Debug、UE Editor Development、Console 六次回归成功；Lau
 以已确认且未提交的阶段 C 工作树验收（HEAD e063c78）。八类核心能力均可使用 UIBridge/Fleet/RoutePreview 和稳定类型，无底层实现类型 BLOCKER。局部 UI 生命周期/Enabled/Visibility/文本调用点检查未发现业务必须依赖旧 Widget 的阻塞路径；保留的控件读取用于展示与显式输入适配。增强现有 NoWidgetAndRebind 测试的 Vehicle/Session/Connection/Command/Telemetry 查询及重绑保持断言，不新增用例、不修改生产代码。三项生命周期测试通过，确认/冻结目标保持、AutoStart/Upload 单次、旧 Delegate 解绑；这些测试记录中 Command submit 日志为 0。
 
 Console Release/Debug、UE Editor Development、Console 六组回归成功；Launcher32/32；UE Full247 + Synthetic1 = 248/248，0失败/未运行。证据：BuildLogs/UIReplacementFinal-20260910/final-results.json 及对应 UE Automation 报告。结论：READY WITH NON-BLOCKING TECH DEBT。Command result loss/callback re-entry 无新增可复现证据，继续非阻塞技术债；软件证据不替代真机或人工视觉验收。停止架构重构，不开始新 UI，未 commit/push。
+
+
+## 2026-09-10 Console 20K 性能专项
+
+完成日志/Fleet 共享快照、饱和收包调度和解码临时输出优化；增加 DRONEGCS_PERF=1 可选窗口诊断。生产接收参数为 16MiB / 16384 包，心跳仍 3000ms；身份、命令及上传协议不变。180 秒无 UE 消费者的 20000 模拟 Endpoint 双向遥测采样，稳定阶段最小在线 20000，OFFLINE 日志 0（启动日志存在原有有界队列丢弃，非无损事件审计）；不代表 UE 操作、Upload 并发或真机验证通过。Release/Debug 构建和完整 Console 回归通过。详见 [20K 专项](Architecture/20K_CONSOLE_PERFORMANCE_CN.md)。备用机继续暂停；用户两处地图 uasset 修改保留。
+
+
+### 现场复测反馈：稳定性验收未通过
+
+用户使用优化后正式 Release 与 16MiB/16384 配置，仍偶发数百至上千架 Offline，数秒后恢复。之前 180/60 秒样本通过不等于现场持续稳定；当前不能声明 20K 无掉线已完成。本次确认运行路径及配置已生效，尚无该次间歇故障的持久化 PERF 记录。新增 Tools/Diagnostics/Start-Console20KDiagnostics.cmd（调用同目录 PowerShell 脚本），仅为现有配置开启 DRONEGCS_PERF 和后台日志落盘，要求保留 UE/模拟器负载，采集故障对应的分段耗时和接收窗口。未修改 3000ms 超时、协议或业务参数。
+
+
+2026-09-10 20K 第二轮：同线程 Session 分片穿插收包、Session 分段 PERF、UE 批量命令按字节/256目标分批与统一结果标识已实现。Console Release/Debug 与完整回归 PASS；UE Editor Development PASS，UE 常规248 + Synthetic1 全通过；Launcher32/32。首次新增 UE 测试 Outer 错误修正后全量重跑。现场持续负载复测仍待端口释放，不能声明 20K 无掉线已验收。详见 Architecture/20K_CONSOLE_PERFORMANCE_CN.md；保持用户 Content 修改，未 commit/push。
+
+后续：端口释放后180秒20K采样通过（预热后161窗口均20000在线，max_rx_gap=382.791ms）；命令批次间亦穿插收包。仍需UE实际操作场景复测，不保证UDP结果无损或物理命令已完成。详见同专项简报。
+
+2026-09-10 第三轮：真实快照发布纳入同线程分段调度，完成后按配置间隔再调度；Console日志200ms限频、4KiB单条限长、32MiB轮转保留3份历史、逐机成功日志复用批次汇总，失败提高优先级。Release/Debug构建与完整Console回归PASS、Launcher32/32。180秒20K预热后保持全在线，最大成功快照发布间隔499.492ms。首版外部观察脚本字节序错误已记录并修正，后续wire采样见Architecture/20K_CONSOLE_PERFORMANCE_CN.md。UE源码/Content本轮未变，仍需UE实际批量操作复测；未commit/push。
+
+最终隔离DSP wire检查通过：90秒289组完整快照，285组20K快照，最大完整快照间隔610.493ms、0次超过2s、0解码错误。最终Console两种配置回归通过。
+
+### 2026-09-10 环绕相机代码完成，等待场景验收
+
+- GCSInvisiblePawn 复用现有地理基准，默认锁定观察中心；无基准时使用地图中心。Home 显式重新读取基准并适配地图。MMB 旋转、滚轮缩放，禁用默认 WASD；解锁后 Shift+MMB 平移，重新锁定恢复中心。
+- 蓝图入口：Get Player Pawn -> Cast GCSInvisiblePawn -> ResetOrbitView / SetOrbitOriginLocked / IsOrbitOriginLocked / GetOrbitCenter。SetOrbitBasis 仅接收 UE 世界坐标观察基准，不修改业务原点。
+- 既有正交俯视模式保持原操作，退出返回环绕相机；其 MMB 平移不受透视模式锁定限制。
+- UE Editor Development PASS；UI Automation 39/39 PASS（4 项带警告），新增断言覆盖锁中心、倾斜基准、缩放、平移/复锁和外部相机不被抢占。
+- 用户负责可视化资源，本轮未修改 Content。场景手动鼠标/构图验收尚待用户完成。详见 Visualization_Architecture_CN.md。
+
+### 2026-09-10 观察视角控件接入完成
+
+- 用户保存的 RightPanel `BTN_ResetOrbitView` / `CHK_OrbitOriginLocked` 已由 UIBridge 绑定到 Pawn。复位退出正交俯视并复锁；勾选切换锁定，Home 复位通过现有 UI poll 同步勾选。正交俯视期间禁用透视锁定复选框。
+- UI 使用弱引用，解绑/重新绑定不修改相机状态；无 Pawn 时禁用控件。无需蓝图事件连线，未写入用户 Content。
+- Editor Development PASS；UI Automation 40/40 PASS（36 成功，4 带警告）。报告 BuildLogs/OrbitControlsUI-v3/index.json。真实 Widget 加载校验命名与类型，覆盖绑定/解绑、复位、勾选、Home 投影、重复绑定、缺失 Pawn、正交模式；场景实际点击仍由用户验收。
+
+### 2026-09-10 锁定模式平移修正
+
+用户明确要求旋转/缩放/平移同时可用，已取消锁定禁止平移的旧行为：锁定时 Shift+MMB 修改相机平面取景偏移并保留旋转基准；解锁吸收偏移保持镜头连续，复锁及 Home 复位恢复中心。既有控件名称与绑定不变。Editor Development PASS，UI 40/40 PASS（4 warning），报告 BuildLogs/OrbitPanUI/index.json。测试强化锁定平移确实移动相机且不改基准、解锁不跳变。未改 Content、后端或业务坐标。
+
+### 2026-09-10 地图显示对齐与完整环绕修复
+
+- 取消 5°～89° 俯仰限制；解析相机 Up 处理越极点连续性，拖动回定位光标解决窗口边缘限制。需用户验收实际鼠标操作。
+- 有 2D 地图时，真机/NPZ overlay/full playback 共用地图显示平面与 15 UU 球半径显示偏移，保留真实高度差；无地图保持原路径。地图资源/变换、原始 GPS/NPZ 和上传均不修改。
+- 数据问题独立保留：用户 NPZ 首帧 99 架负 Z，最低 -25.863325m，末帧全 Z=0（BuildLogs/map-orbit-npz-audit.json）。负高度不强行贴地，添加一次性诊断；可取消地图勾选检查，不能声称所有遮挡都已消失。Live 地面参考仍为既有冻结 Fleet origin，不能把空中原点解释为实测地面。
+- Editor Development PASS；最终 UE Automation 250/250 PASS（228 success + 22 warnings），BuildLogs/MapOrbitFinal/index.json。包含完整旋转、越极点、平移回归、倾斜/下移地图、10m高度差、NPZ地面帧、负高度保留、Preview/Overlay一致性与 source/transform不变。
+- 未修改用户 Content，未操作真机，未 commit/push。详见 Visualization_Architecture_CN.md。
+
+### 2026-09-10 负高度仅在地图渲染中贴地（后续用户确认）
+
+此项取代上一节“负高度继续显示在地图下方”的显示策略。用户明确要求不修改小球数据，仅调整渲染：实时无人机相对显示基准的高度及 NPZ 预览 ENU Z，在平面地图显示转换中使用 max(0, height)。正高度不增加整体偏移，负高度显示在地图表面；球心保留现有 15 UU 半径偏移使球底贴地。地图倾斜或移动时沿地图法线计算，不强制改变地图世界 Z。
+
+原始遥测、NPZ 数组、绝对 Cesium 坐标转换、界面高度读数和航线上传不修改。负高度诊断仍记录原始数值，文字说明仅显示贴地。覆盖实时显示、叠加预览和完整播放。用户无需修改控件或下移地图。
+
+验证：Development Editor 编译通过；DroneGCS.Visualization 自动化通过，报告 BuildLogs/DisplayGround/index.json。GroundAndPreviewAlignment 覆盖负高度贴地、正高度保持 10 m、原始遥测及 ENU 不变、绝对转换保留负高度、地图与 Georeference 变换不变。NullRHI 测试验证坐标逻辑；实际画面需重新启动 UE 验收。
+
+### 2026-09-10 桩基应用后坐标轴被地图遮挡
+
+确认旧 HandleFixedPileApplyClicked 使用 OriginWorld - UpWorld * 300，平面地图原点为 Z=15 时将轴放到 -285。删除旧 FixedPileAxisDepthOffsetUU 常量及下移操作，传入显示原点本身，坐标轴与小球基准对齐；不更改蓝图、地图、遥测或航线上传。此项仅修正轴的位置，不修改蓝图根据 East/North 生成的旋转。
+
+Development Editor 编译通过（BuildLogs/axes-ground-build.log）。实际画面验收：重新打开 UE 并应用桩基，水平地图位于 Z=0 时轴位置应为 Z=15，不再为 -285。
+
+本次 UI 回归：40/40 通过（36 成功、4 带警告、0 失败），报告 BuildLogs/AxesGroundUI/index.json。自动化为 NullRHI，实际地图遮挡画面仍需运行时验收。
+
+### 2026-09-10 坐标轴子网格偏移翻转
+
+前一次仅取消 Actor 下移还不完整。通过只读 Python 实例化实际 BP_GCS_CoordinateAxes，确认 InitializeCoordinateAxes 将 Actor 旋转 180 度，SM_XAxis/SM_YAxis/箭头局部 Z=20 因此变为世界 Z=-5（Actor Z=15），并非 Actor 隐藏。证据 BuildLogs/inspect-axes.log。
+
+C++ 在蓝图初始化后，沿 North x East 得到的地图上方向，将低于显示原点的静态网格偏移镜像到上方。保留轴水平坐标、东西南北朝向及 Actor 原点，材质、蓝图资源和地图不变。当前资产应为 Actor Z=15、轴网格 Z=35。添加实际资产初始化及重复应用回归检查，避免只验证 Actor 坐标遗漏组件遮挡。
+
+验证完成：Development Editor 编译成功；AxesMeshV4/index.json 定向回归 1/1 通过、无警告。实际蓝图重复初始化后，全部静态轴网格 Z=35、Actor Z=15，East/North 方向保留。测试使用 FEditorScriptExecutionGuard 允许编辑器测试世界执行蓝图；早期测试未开启此保护导致蓝图不执行，已修正。NullRHI 不验证像素，重启 UE 应用桩基后进行最终画面验收。
+
+### 2026-09-10 地图控件已接入
+
+用户已完成并保存 RightPanel UI；C++ 自动绑定导入地图、查看整张地图、透明度、宽度、东/北偏移、旋转及重置控件，无需另连蓝图。新增 GCSMapSubsystem 与 M_GCS_RuntimeMap 专用双面材质。原始遥测、NPZ、上传路径保持不变，底图调整独立于机群显示基准。本地设置在 Saved/MapSettings；导入图片需保留原路径。当前是本地贴图功能，在线地图源仍待后续实现。
+
+Development Editor 编译成功；全套 251 项测试通过（229 成功、22 带警告、0 失败）。报告 BuildLogs/MapControls/index.json。用户已关闭 UE；重启后验收实际鼠标、透明度及地图背面画面，NullRHI 不验证像素。

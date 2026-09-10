@@ -1,10 +1,13 @@
+#include "GCSUIBridgeSubsystem.h"
+#include "GCSMapSubsystem.h"
+#include "Components/StaticMeshComponent.h"
+#include "GCSInvisiblePawn.h"
 /**
  * @brief 实现主 UI 绑定、Fleet 分页、详情显示、命令选择和页面导航。
  *
  * 分类：Production。
  * 当前命令只调用 DSPGCSProductionCommandProviderSubsystem。
  */
-#include "GCSUIBridgeSubsystem.h"
 
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetLayoutLibrary.h"
@@ -74,7 +77,6 @@ namespace
 		TEXT("/Game/UI/WBP_GCS_UploadDashboard.WBP_GCS_UploadDashboard_C");
 	constexpr float UploadDashboardToolbarGap = 12.0f;
 	constexpr float FixedPileAxisLengthMeters = 1000.0f;
-	constexpr float FixedPileAxisDepthOffsetUU = 300.0f;
 	const FName SceneMapActorTag(TEXT("GCS.SceneMap"));
 
 	bool IsVisibleWidgetUnderLocation(
@@ -636,6 +638,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	ResetNavigationPages();
 	UnbindUploadDashboardControls();
 	UnbindReferenceAndMapControls();
+	UnbindOrbitControls();
 	UnbindHoverTestControls();
 
 	MainWidgetRef = MainWidget;
@@ -740,6 +743,8 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	BindColorPaletteButtons();
 	BindTimeControlControls();
 	BindReferenceAndMapControls();
+	BindOrbitControls();
+ if (auto* Map = GetGameInstance()->GetSubsystem<UGCSMapSubsystem>()) Map->BindUI(RightPanelWidget.Get());
 	BindRoutePlaybackControls();
 	BindFleetPanelButtons();
 	BindHoverTestControls();
@@ -796,6 +801,7 @@ void UGCSUIBridgeSubsystem::Deinitialize()
 	EndTopDownLocateLock();
 	UnbindHoverTestControls();
 	UnbindReferenceAndMapControls();
+	UnbindOrbitControls();
 	ResetUploadDashboard();
 	if (RouteWorkflowCoordinator)
 	{
@@ -3051,6 +3057,7 @@ void UGCSUIBridgeSubsystem::UnregisterMarqueeInputProcessor()
 
 void UGCSUIBridgeSubsystem::PollMarqueePlayerControllerInput()
 {
+	SyncOrbitControls();
 	UUserWidget* MainWidget = MainWidgetRef.Get();
 	APlayerController* PlayerController = MainWidget ? MainWidget->GetOwningPlayer() : nullptr;
 	UWorld* World = MainWidget ? MainWidget->GetWorld() : nullptr;
@@ -5533,6 +5540,7 @@ void UGCSUIBridgeSubsystem::BindTimeControlControls()
 void UGCSUIBridgeSubsystem::BindReferenceAndMapControls()
 {
 	UnbindReferenceAndMapControls();
+	UnbindOrbitControls();
 
 	UButton* ApplyPileButton = FindRightPanelButton(TEXT("BTN_ApplyFixedPile"));
 	UButton* BenchmarkExportButton = FindRightPanelButton(TEXT("BTN_DaoChu"));
@@ -5681,6 +5689,19 @@ bool UGCSUIBridgeSubsystem::InitializeCoordinateAxes(
 			AxisLengthMeters);
 		Actor->SetActorHiddenInGame(false);
 		Actor->ProcessEvent(Function, ParameterMemory);
+		// ENU directions in UE form an ESU frame: North x East points above the map.
+		// The authored axes have a local +Z offset, which flips below the map when
+		// the blueprint aligns local +Y with North. Reflect only that visual offset.
+		const FVector DisplayUp = FVector::CrossProduct(NorthWorld, EastWorld).GetSafeNormal();
+		TInlineComponentArray<UStaticMeshComponent*> AxisMeshes(Actor);
+		for (UStaticMeshComponent* Mesh : AxisMeshes)
+		{
+			const double Height = FVector::DotProduct(Mesh->GetComponentLocation() - OriginWorld, DisplayUp);
+			if (Height < 0.0)
+			{
+				Mesh->AddWorldOffset(DisplayUp * (-2.0 * Height));
+			}
+		}
 		TInlineComponentArray<UPrimitiveComponent*> AxisPrimitives(Actor);
 		for (UPrimitiveComponent* Primitive : AxisPrimitives)
 		{
@@ -5828,7 +5849,7 @@ void UGCSUIBridgeSubsystem::HandleFixedPileApplyClicked()
 		return;
 	}
 	if (!InitializeCoordinateAxes(
-		OriginWorld - UpWorld * FixedPileAxisDepthOffsetUU,
+		OriginWorld,
 		EastWorld,
 		NorthWorld,
 		0,
@@ -7194,4 +7215,67 @@ FGCSWorkflowView UGCSUIBridgeSubsystem::GetWorkflowStateForOrigin(
 {
     return RouteWorkflowCoordinator
         ? RouteWorkflowCoordinator->GetWorkflowViewForOrigin(Latitude, Longitude, Altitude) : FGCSWorkflowView{};
+}
+
+void UGCSUIBridgeSubsystem::BindOrbitControls()
+{
+ UnbindOrbitControls();
+ OrbitResetButton = FindRightPanelButton(TEXT("BTN_ResetOrbitView"));
+ OrbitLockCheckBox = FindRightPanelCheckBox(TEXT("CHK_OrbitOriginLocked"));
+ if (UButton* Button = OrbitResetButton.Get())
+  Button->OnClicked.AddUniqueDynamic(this, &UGCSUIBridgeSubsystem::HandleResetOrbitClicked);
+ if (UCheckBox* Check = OrbitLockCheckBox.Get())
+  Check->OnCheckStateChanged.AddUniqueDynamic(this, &UGCSUIBridgeSubsystem::HandleOrbitLockChanged);
+ SyncOrbitControls();
+}
+
+void UGCSUIBridgeSubsystem::UnbindOrbitControls()
+{
+ if (GetGameInstance()) if (auto* Map = GetGameInstance()->GetSubsystem<UGCSMapSubsystem>()) Map->UnbindUI();
+ if (UButton* Button = OrbitResetButton.Get())
+  Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleResetOrbitClicked);
+ if (UCheckBox* Check = OrbitLockCheckBox.Get())
+  Check->OnCheckStateChanged.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleOrbitLockChanged);
+ OrbitResetButton.Reset();
+ OrbitLockCheckBox.Reset();
+}
+
+void UGCSUIBridgeSubsystem::SyncOrbitControls()
+{
+ // Read-only projection, also covers Home resets and a replaced/late-spawned pawn.
+ // Reuse the existing UI input poll; no widget search or fleet scan each frame.
+ const auto* PC = MainWidgetRef.IsValid() ? MainWidgetRef->GetOwningPlayer() : nullptr;
+ const auto* Pawn = PC ? Cast<AGCSInvisiblePawn>(PC->GetPawn()) : nullptr;
+ if (auto* Button = OrbitResetButton.Get()) Button->SetIsEnabled(Pawn != nullptr);
+ if (auto* Check = OrbitLockCheckBox.Get())
+ {
+  Check->SetIsEnabled(Pawn != nullptr && !bTopDownLocateLocked);
+  if (Pawn && Check->IsChecked() != Pawn->IsOrbitOriginLocked())
+  {
+   TGuardValue<bool> Guard(bSyncingOrbitControls, true);
+   Check->SetIsChecked(Pawn->IsOrbitOriginLocked());
+  }
+ }
+}
+
+void UGCSUIBridgeSubsystem::HandleResetOrbitClicked()
+{
+ auto* PC = MainWidgetRef.IsValid() ? MainWidgetRef->GetOwningPlayer() : nullptr;
+ if (auto* Pawn = PC ? Cast<AGCSInvisiblePawn>(PC->GetPawn()) : nullptr)
+ {
+  EndTopDownLocateLock(PC);
+  Pawn->ResetOrbitView();
+ }
+ SyncOrbitControls();
+}
+
+void UGCSUIBridgeSubsystem::HandleOrbitLockChanged(bool bLocked)
+{
+ if (bSyncingOrbitControls) return;
+ auto* PC = MainWidgetRef.IsValid() ? MainWidgetRef->GetOwningPlayer() : nullptr;
+ if (auto* Pawn = PC ? Cast<AGCSInvisiblePawn>(PC->GetPawn()) : nullptr)
+ {
+  if (!bTopDownLocateLocked) Pawn->SetOrbitOriginLocked(bLocked);
+ }
+ SyncOrbitControls();
 }

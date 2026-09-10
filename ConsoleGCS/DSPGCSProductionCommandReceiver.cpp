@@ -335,7 +335,8 @@ void DSPGCSProductionCommandReceiver::SetRealCommandEnabled(
 
 std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
     CommandManager& commandManager,
-    const ResultSender& sendResult)
+    const ResultSender& sendResult,
+    const std::function<void()>& serviceIngress)
 {
     std::deque<QueuedCommand> commands;
     {
@@ -368,6 +369,7 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
                 " Succeeded=" + std::to_string(resultBatch.succeededCount) +
                 " Failed=" + std::to_string(resultBatch.failedCount));
             activeCommands_.erase(active);
+            if (serviceIngress) serviceIngress();
         }
     };
 
@@ -378,6 +380,8 @@ std::size_t DSPGCSProductionCommandReceiver::ProcessPending(
     std::size_t processed = 0;
     for (QueuedCommand& queued : commands)
     {
+        // Receive between child batches; never create a second Session owner.
+        if (serviceIngress) serviceIngress();
         ++processed;
         const dspgcs::CommandRequestDTO& request = queued.request;
         const std::string source = SourceName(request);

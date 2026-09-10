@@ -1033,7 +1033,62 @@ int RunConsolePipelineTests()
         VerifyDSPTransportConfigurationLoading();
         VerifySafetyUsesDeploymentConfig();
         VerifyUdpReceiverLoopback();
+
+        {
+            DroneManager sliced;
+            DroneSessionConfig defaults;
+            defaults.receiveOnly = true;
+            MavlinkDiscoveryService discovery(sliced, defaults);
+            MavlinkReadOnlyIngress ingress(sliced, discovery);
+            mavlink_message_t heartbeat{};
+            mavlink_msg_heartbeat_pack(1, 1, &heartbeat, MAV_TYPE_QUADROTOR,
+                MAV_AUTOPILOT_ARDUPILOTMEGA, 0, 0, MAV_STATE_ACTIVE);
+            std::uint8_t bytes[MAVLINK_MAX_PACKET_LEN];
+            const auto length = mavlink_msg_to_send_buffer(bytes, &heartbeat);
+            for (int i = 0; i < 513; ++i)
+                ingress.SubmitDatagram(bytes, length, "127.0.0.2", static_cast<std::uint16_t>(20000 + i));
+            int pumps = 0;
+            sliced.TickAll(std::chrono::steady_clock::now(), [&]() {
+                ++pumps;
+                ingress.SubmitDatagram(bytes, length, "127.0.0.2", static_cast<std::uint16_t>(21000 + pumps));
+            });
+            Expect(pumps == 4 && sliced.GetDroneCount() == 517,
+                "bounded Session sweep services ingress safely while discovery grows registry");
+            Expect(sliced.FindDrone("Drone000")->GetFlightData().online,
+                "cooperative ingress preserves vehicle identity and heartbeat state");
+        }
         VerifySharedMavlinkEndpoint();
+
+        // Decoder output reuse must preserve framing across datagrams and
+        // reject a corrupt frame between two valid frames in one datagram.
+        {
+            DroneSessionConfig defaults;
+            defaults.receiveOnly = true;
+            DroneManager framingManager;
+            MavlinkDiscoveryService framingDiscovery(framingManager, defaults);
+            MavlinkReadOnlyIngress framingIngress(framingManager, framingDiscovery);
+            mavlink_message_t heartbeat{};
+            mavlink_msg_heartbeat_pack(1, 1, &heartbeat, MAV_TYPE_QUADROTOR,
+                MAV_AUTOPILOT_ARDUPILOTMEGA, 0, 0, MAV_STATE_STANDBY);
+            const auto bytes = SerializeMessage(heartbeat);
+            auto damaged = bytes;
+            damaged.back() ^= 0x01;
+            auto batch = bytes;
+            batch.insert(batch.end(), damaged.begin(), damaged.end());
+            batch.insert(batch.end(), bytes.begin(), bytes.end());
+            const auto result = framingIngress.SubmitDatagram(
+                batch.data(), batch.size(), "127.0.0.1", 19001);
+            Expect(result.heartbeatsApplied == 2 && framingManager.GetDroneCount() == 1,
+                "reused decoder outputs accepted corrupt frame or lost valid frames");
+            const auto split = bytes.size() / 2;
+            Expect(framingIngress.SubmitDatagram(bytes.data(), split,
+                "127.0.0.1", 19002).heartbeatsApplied == 0,
+                "partial frame unexpectedly registered endpoint");
+            Expect(framingIngress.SubmitDatagram(bytes.data() + split,
+                bytes.size() - split, "127.0.0.1", 19002).heartbeatsApplied == 1 &&
+                framingManager.GetDroneCount() == 2,
+                "fragmented frame or independent endpoint was lost");
+        }
 
         DroneSessionConfig sessionDefaults;
         sessionDefaults.heartbeatTimeoutMs = 40;

@@ -34,10 +34,12 @@ MavlinkIngressStats MavlinkReadOnlyIngress::SubmitDatagram(
     EndpointParserState& parserState =
         parserStates[endpointIdentity.EndpointKey()];
 
+    // The decoder populates these outputs for a completed frame. Reuse them
+    // within this datagram instead of clearing a full message for every byte.
+    mavlink_message_t decodedMessage{};
+    mavlink_status_t decodedStatus{};
     for (std::size_t index = 0; index < byteCount; ++index)
     {
-        mavlink_message_t decodedMessage{};
-        mavlink_status_t decodedStatus{};
         if (mavlink_frame_char_buffer(
             &parserState.messageBuffer,
             &parserState.parseStatus,

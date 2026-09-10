@@ -134,7 +134,8 @@ MavlinkUdpReceiveResult MavlinkUdpReceiver::Receive(
         return MavlinkUdpReceiveResult::Error;
     }
 
-    std::array<std::uint8_t, 65507> buffer{};
+    // recvfrom initializes exactly [0, received); only that range is copied.
+    std::array<std::uint8_t, 65507> buffer;
     sockaddr_in sourceAddress{};
     int sourceAddressLength = sizeof(sourceAddress);
     const int received = recvfrom(

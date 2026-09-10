@@ -1,3 +1,6 @@
+#include <filesystem>
+#include <fstream>
+#include <windows.h>
 #include "ConsoleUI.h"
 
 #include <algorithm>
@@ -434,6 +437,65 @@ namespace
             "terminal record was silently lost behind noncritical logs");
     }
 
+    void VerifyRateAndRecordBound()
+    {
+        auto target = std::make_shared<FakeConsoleTarget>();
+        ConsoleUI::Shutdown();
+        ConsoleUI::ResetTestingConfiguration();
+        Expect(ConsoleUI::ConfigureForTesting(target, ConsoleOutputMode::Dashboard, 1024, 200ms), "rate configuration");
+        ConsoleUI::Init();
+        for (int i = 0; i < 100; ++i)
+        {
+            ConsoleUI::AddLog("rate", std::string(12000, 'x'));
+            std::this_thread::sleep_for(1ms);
+        }
+        Expect(ConsoleUI::WaitUntilIdle(3s), "rate-limited drain stalled");
+        ConsoleUI::Shutdown();
+        Expect(target->Frames().size() <= 5, "log arrivals bypassed render deadline");
+        auto linear = std::make_shared<FakeConsoleTarget>(ConsoleOutputHandleKind::Pipe);
+        Start(linear, ConsoleOutputMode::Linear);
+        ConsoleUI::AddLog("large", std::string(100000, 'x'));
+        Expect(ConsoleUI::WaitUntilIdle(2s), "large record stalled");
+        ConsoleUI::Shutdown();
+        const auto lines = linear->LinearLines();
+        Expect(Contains(lines, "[truncated]"), "oversized record was not bounded");
+        for (const auto& line : lines) Expect(line.size() < 5000, "unbounded log record");
+    }
+
+    void VerifyLogRotation()
+    {
+        ConsoleUI::Shutdown();
+        wchar_t previous[32768]{};
+        GetEnvironmentVariableW(L"DRONEGCS_BACKEND_LOG", previous, 32768);
+        const auto file = std::filesystem::temp_directory_path() /
+            ("DroneGCS-rotation-" + std::to_string(GetCurrentProcessId()) + ".log");
+        struct Restore
+        {
+            const wchar_t* previous;
+            std::filesystem::path file;
+            ~Restore()
+            {
+                ConsoleUI::Shutdown();
+                SetEnvironmentVariableW(L"DRONEGCS_BACKEND_LOG", *previous ? previous : nullptr);
+                std::error_code ec;
+                std::filesystem::remove(file, ec);
+                for (int i=1; i<=3; ++i) { auto archive=file; archive += "." + std::to_string(i); std::filesystem::remove(archive, ec); }
+            }
+        } restore{previous, file};
+        { std::ofstream seed(file, std::ios::binary); seed.seekp(32 * 1024 * 1024 - 1); seed.put('x'); }
+        SetEnvironmentVariableW(L"DRONEGCS_BACKEND_LOG", file.c_str());
+        auto target = std::make_shared<FakeConsoleTarget>(ConsoleOutputHandleKind::Pipe);
+        Start(target, ConsoleOutputMode::Linear);
+        ConsoleUI::AddTerminalLog("rotation-terminal-retained");
+        Expect(ConsoleUI::WaitUntilIdle(2s), "rotation stalled");
+        ConsoleUI::Shutdown();
+        auto archive=file; archive += ".1";
+        Expect(std::filesystem::exists(archive), "log did not rotate");
+        Expect(std::filesystem::file_size(file) < 4096, "active log not bounded");
+        std::ifstream current(file); std::string content((std::istreambuf_iterator<char>(current)), {});
+        Expect(content.find("rotation-terminal-retained") != std::string::npos, "terminal lost during rotation");
+    }
+
     void VerifyShutdownWithActiveProducer()
     {
         auto target = std::make_shared<FakeConsoleTarget>(
@@ -454,6 +516,35 @@ namespace
         Expect(target->Restored(), "renderer did not restore target on shutdown");
         Expect(target->WriterThreads().size() == 1,
             "shutdown introduced a second physical writer");
+    }
+
+    void VerifyLargeFleetSnapshotOwnership()
+    {
+        auto target = std::make_shared<FakeConsoleTarget>(
+            ConsoleOutputHandleKind::Console, 110, 36);
+        Start(target, ConsoleOutputMode::Dashboard);
+        std::vector<ConsoleDroneStatus> fleet;
+        fleet.reserve(20000);
+        for (int index = 0; index < 20000; ++index)
+            fleet.push_back({ "Drone" + std::to_string(index), true });
+        ConsoleUI::UpdateFleet(fleet);
+        fleet.clear(); // Published storage must not alias the caller.
+        for (int index = 0; index < 500; ++index)
+            ConsoleUI::AddLog("Scale", "reconnect=" + std::to_string(index));
+        Expect(ConsoleUI::WaitUntilIdle(5s), "20K fleet/log burst did not drain");
+        auto frames = target->Frames();
+        Expect(!frames.empty() && Contains(frames.back(), "Total Drone : 20000") &&
+            Contains(frames.back(), "Online      : 20000"),
+            "published fleet snapshot changed with caller storage");
+        ConsoleUI::UpdateFleet({ { "Replacement", false } });
+        Expect(ConsoleUI::WaitUntilIdle(5s), "replacement fleet did not render");
+        frames = target->Frames();
+        Expect(Contains(frames.back(), "Total Drone : 1") &&
+            Contains(frames.back(), "Offline     : 1"),
+            "renderer retained stale shared fleet snapshot");
+        ConsoleUI::Shutdown();
+        Expect(target->WriterThreads().size() == 1,
+            "large fleet introduced another physical writer");
     }
 
     void VerifyProductionStyleFrame()
@@ -494,7 +585,10 @@ int RunConsoleRenderTests()
         VerifyResize();
         VerifySingleWriterAndProducerOrder();
         VerifyBoundedQueueAndCriticalRetention();
+        VerifyRateAndRecordBound();
+        VerifyLogRotation();
         VerifyShutdownWithActiveProducer();
+        VerifyLargeFleetSnapshotOwnership();
         VerifyProductionStyleFrame();
         ConsoleUI::Shutdown();
         ConsoleUI::ResetTestingConfiguration();

@@ -8,6 +8,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Ticker.h"
+#include <deque>
 #include "DSPGCSProductionCommandTypes.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "DSPGCSProductionCommandProviderSubsystem.generated.h"
@@ -54,6 +56,7 @@ private:
 	{
 		EGCSProductionCommandType Type = EGCSProductionCommandType::Arm;
 		FString Source;
+		FString OperationID;
 		TSet<FString> PendingDroneIDs;
 	};
 
@@ -62,6 +65,11 @@ private:
 		TArray<FGCSProductionCommandResult> Results,
 		bool bBatchFinal);
 	FString NextCommandID();
+    bool PumpCommandBatches(float DeltaSeconds);
+    struct FQueuedBatch { FString CommandID; TArray<uint8> Bytes; };
+    std::deque<FQueuedBatch> QueuedBatches;
+    FTSTicker::FDelegateHandle BatchTicker;
+    friend class FGCSCommandBatchLifecycleTest;
 
 	TWeakObjectPtr<UDSPGCSProductionTelemetryProviderSubsystem> Channel;
 	TMap<FString, FPendingCommand> PendingCommands;

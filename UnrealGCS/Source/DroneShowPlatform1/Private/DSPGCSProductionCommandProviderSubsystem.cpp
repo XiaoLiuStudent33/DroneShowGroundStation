@@ -9,6 +9,7 @@
 #include "Async/Async.h"
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
 #include "DSPGCSProtocol.h"
+#include "DSPGCSCommandBatching.h"
 #include "GCSCommandResultConversion.h"
 #include "Misc/ConfigCacheIni.h"
 
@@ -126,6 +127,9 @@ void UDSPGCSProductionCommandProviderSubsystem::Initialize(
 
 void UDSPGCSProductionCommandProviderSubsystem::Deinitialize()
 {
+    FTSTicker::GetCoreTicker().RemoveTicker(BatchTicker);
+    BatchTicker.Reset();
+    QueuedBatches.clear();
 	if (UDSPGCSProductionTelemetryProviderSubsystem* ProductionChannel = Channel.Get())
 	{
 		ProductionChannel->SetCommandResultHandler({});
@@ -218,17 +222,42 @@ FString UDSPGCSProductionCommandProviderSubsystem::SubmitCommand(
 	Envelope.timestampUtcMs = Request.timestampUtcMs;
 	Envelope.correlationId = Request.commandId;
 
-	if (!ProductionChannel->SendFrame(dspgcs::EncodeCommand(Envelope, Request)))
-	{
-		UE_LOG(LogTemp, Error, TEXT("DSP-GCS command send failed CommandID=%s"), *CommandID);
-		return {};
-	}
-
-	FPendingCommand Pending;
-	Pending.Type = CommandType;
-	Pending.Source = TEXT("UI:UnrealGCS");
-	Pending.PendingDroneIDs = MoveTemp(UniqueTargets);
-	PendingCommands.Add(CommandID, MoveTemp(Pending));
+    const auto Parts = dspgcs::SplitCommandTargets(Envelope, Request);
+    if (Parts.empty()) return {};
+    for (const auto& Part : Parts)
+    {
+        auto ChildEnvelope = Envelope;
+        ChildEnvelope.correlationId = Part.commandId;
+        ChildEnvelope.sequence = ++Sequence;
+        auto Bytes = dspgcs::EncodeCommand(ChildEnvelope, Part);
+        const FString ChildID = UTF8_TO_TCHAR(Part.commandId.c_str());
+        FPendingCommand Pending;
+        Pending.Type = CommandType;
+        Pending.Source = TEXT("UI:UnrealGCS");
+        Pending.OperationID = CommandID;
+        for (const auto& ID : Part.targetDroneIds)
+            Pending.PendingDroneIDs.Add(UTF8_TO_TCHAR(ID.c_str()));
+        PendingCommands.Add(ChildID, MoveTemp(Pending));
+        if (Parts.size() == 1)
+        {
+            if (!ProductionChannel->SendFrame(Bytes))
+            {
+                PendingCommands.Remove(ChildID);
+                UE_LOG(LogTemp, Error, TEXT("DSP-GCS command send failed CommandID=%s"), *CommandID);
+                return {};
+            }
+        }
+        else
+        {
+            FQueuedBatch Batch;
+            Batch.CommandID = ChildID;
+            Batch.Bytes.Append(Bytes.data(), static_cast<int32>(Bytes.size()));
+            QueuedBatches.push_back(MoveTemp(Batch));
+        }
+    }
+    if (!QueuedBatches.empty() && !BatchTicker.IsValid())
+        BatchTicker = FTSTicker::GetCoreTicker().AddTicker(
+            FTickerDelegate::CreateUObject(this, &ThisClass::PumpCommandBatches), 0.02f);
 	UE_LOG(
 		LogTemp,
 		Display,
@@ -298,27 +327,74 @@ void UDSPGCSProductionCommandProviderSubsystem::ApplyResultBatch(
 		return;
 	}
 
-	for (FGCSProductionCommandResult& Result : Results)
-	{
-		Result.CommandType = Pending->Type;
-		Result.Source = Pending->Source;
-		LastResult = Result;
-		Pending->PendingDroneIDs.Remove(Result.DroneID);
-		OnCommandResult.Broadcast(Result);
-		UE_LOG(
-			LogTemp,
-			Display,
-			TEXT("DSP-GCS RESULT CommandID=%s DroneID=%s Result=%s Source=%s"),
-			*Result.CommandID,
-			*Result.DroneID,
-			*Result.AckState,
-			*Result.Source);
-	}
+    // Finish bookkeeping before broadcasting: subscribers can submit another
+    // command (rehashing PendingCommands) or tear down/rebind the provider.
+    TArray<FGCSProductionCommandResult> Deliver;
+    for (FGCSProductionCommandResult& Result : Results)
+    {
+        if (!Pending->PendingDroneIDs.Contains(Result.DroneID)) continue;
+        Result.CommandID = Pending->OperationID;
+        Result.CommandType = Pending->Type;
+        Result.Source = Pending->Source;
+        if (Result.bFinal) Pending->PendingDroneIDs.Remove(Result.DroneID);
+        Deliver.Add(MoveTemp(Result));
+    }
+    if (bBatchFinal)
+    {
+        for (const FString& DroneID : Pending->PendingDroneIDs)
+        {
+            FGCSProductionCommandResult Missing;
+            Missing.CommandID = Pending->OperationID;
+            Missing.DroneID = DroneID;
+            Missing.CommandType = Pending->Type;
+            Missing.Source = Pending->Source;
+            Missing.State = EGCSCommandResultState::Failed;
+            Missing.AckState = TEXT("FAILED");
+            Missing.ErrorCode = TEXT("INCOMPLETE_FINAL_RESULT");
+            Missing.Detail = TEXT("Final batch omitted a terminal vehicle result");
+            Missing.bFinal = true;
+            Deliver.Add(MoveTemp(Missing));
+        }
+    }
+    if (bBatchFinal || Pending->PendingDroneIDs.IsEmpty()) PendingCommands.Remove(CommandID);
+    for (const auto& Result : Deliver)
+    {
+        LastResult = Result;
+        OnCommandResult.Broadcast(Result);
+    }
+}
 
-	if (bBatchFinal || Pending->PendingDroneIDs.IsEmpty())
-	{
-		PendingCommands.Remove(CommandID);
-	}
+bool UDSPGCSProductionCommandProviderSubsystem::PumpCommandBatches(float)
+{
+    if (QueuedBatches.empty())
+    {
+        BatchTicker.Reset();
+        return false;
+    }
+    // Pop before callbacks. Each child is attempted once; never replay earlier
+    // successful children when another child's local send fails.
+    FQueuedBatch Batch = MoveTemp(QueuedBatches.front());
+    QueuedBatches.pop_front();
+    const auto* Pending = PendingCommands.Find(Batch.CommandID);
+    if (!Pending) return true;
+    auto* ProductionChannel = Channel.Get();
+    const std::vector<uint8> Bytes(Batch.Bytes.GetData(), Batch.Bytes.GetData() + Batch.Bytes.Num());
+    if (ProductionChannel && ProductionChannel->IsTelemetryLinkConnected() &&
+        ProductionChannel->SendFrame(Bytes)) return true;
+    TArray<FGCSProductionCommandResult> Failed;
+    for (const FString& DroneID : Pending->PendingDroneIDs)
+    {
+        FGCSProductionCommandResult Result;
+        Result.DroneID = DroneID;
+        Result.State = EGCSCommandResultState::Failed;
+        Result.AckState = TEXT("FAILED");
+        Result.ErrorCode = TEXT("LOCAL_SEND_FAILED");
+        Result.Detail = TEXT("Command batch could not be sent");
+        Result.bFinal = true;
+        Failed.Add(MoveTemp(Result));
+    }
+    ApplyResultBatch(Batch.CommandID, MoveTemp(Failed), true);
+    return true;
 }
 
 FString UDSPGCSProductionCommandProviderSubsystem::NextCommandID()

@@ -47,7 +47,8 @@ public:
         const dspgcs::CommandRequestDTO& request);
     std::size_t ProcessPending(
         CommandManager& commandManager,
-        const ResultSender& sendResult);
+        const ResultSender& sendResult,
+        const std::function<void()>& serviceIngress = {});
 
     std::size_t GetReceivedCommandCount() const;
 

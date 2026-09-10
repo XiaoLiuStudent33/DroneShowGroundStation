@@ -21,6 +21,7 @@ namespace
 {
     constexpr std::size_t DefaultQueueCapacity = 1024;
     constexpr std::size_t LogHistoryCapacity = 256;
+    constexpr std::size_t MaximumLogTextBytes = 4096;
     constexpr short MinimumDashboardWidth = 40;
     constexpr short MinimumDashboardHeight = 14;
 
@@ -300,7 +301,7 @@ namespace
             configuredTarget_.reset();
             configuredMode_ = ConsoleOutputMode::Auto;
             queueCapacity_ = DefaultQueueCapacity;
-            renderInterval_ = std::chrono::milliseconds(50);
+            renderInterval_ = std::chrono::milliseconds(200);
             ResetStateLocked();
         }
 
@@ -357,10 +358,13 @@ namespace
 
         void UpdateFleet(const std::vector<ConsoleDroneStatus>& drones)
         {
+            // Copy once per fleet update, outside the producer/log mutex.
+            // Log bursts must not copy 20K rows on every renderer wake-up.
+            auto snapshot = std::make_shared<const std::vector<ConsoleDroneStatus>>(drones);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (!accepting_) return;
-                fleet_ = drones;
+                fleet_ = std::move(snapshot);
                 ++fleetVersion_;
             }
             wake_.notify_one();
@@ -371,6 +375,16 @@ namespace
             std::string text,
             const ConsoleLogSeverity severity)
         {
+            // Bound per-record memory as well as record count. Formatting does
+            // not need the producer mutex and must not hold up ingress.
+            const auto timestamp = CurrentTimestamp();
+            if (text.size() > MaximumLogTextBytes)
+            {
+                auto end = MaximumLogTextBytes;
+                while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) --end;
+                text = text.substr(0, end) + " [truncated]";
+            }
+            if (category.size() > 64) category.resize(64);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (!accepting_)
@@ -381,13 +395,18 @@ namespace
 
                 ConsoleLogRecord record;
                 record.sequence = ++submittedLogCount_;
-                record.timestamp = CurrentTimestamp();
+                record.timestamp = timestamp;
                 record.category = category.empty() ? "Runtime" : std::move(category);
                 record.text = std::move(text);
                 record.severity = severity;
 
                 if (pending_.size() >= queueCapacity_)
                 {
+                    if (severity == ConsoleLogSeverity::Info)
+                    {
+                        ++droppedLogCount_;
+                        return;
+                    }
                     const auto nonCritical = std::find_if(
                         pending_.begin(), pending_.end(),
                         [](const ConsoleLogRecord& queued)
@@ -398,12 +417,6 @@ namespace
                     {
                         pending_.erase(nonCritical);
                         ++droppedLogCount_;
-                    }
-                    else if (severity == ConsoleLogSeverity::Info)
-                    {
-                        ++droppedLogCount_;
-                        wake_.notify_one();
-                        return;
                     }
                     else
                     {
@@ -449,7 +462,7 @@ namespace
         {
             pending_.clear();
             history_.clear();
-            fleet_.clear();
+            fleet_.reset();
             submittedLogCount_ = 0;
             renderedLogCount_ = 0;
             droppedLogCount_ = 0;
@@ -473,6 +486,14 @@ namespace
             const DWORD pathLength = GetEnvironmentVariableW(L"DRONEGCS_BACKEND_LOG", logPath, 32768);
             if (pathLength > 0 && pathLength < 32768)
                 sessionLog.open(std::filesystem::path(logPath), std::ios::app);
+            std::uintmax_t logBytes = 0;
+            if (sessionLog)
+            {
+                std::error_code error;
+                logBytes = std::filesystem::file_size(std::filesystem::path(logPath), error);
+                if (error) logBytes = 0;
+            }
+            auto nextRender = std::chrono::steady_clock::now();
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 rendererThreadId_ = std::this_thread::get_id();
@@ -481,17 +502,16 @@ namespace
             for (;;)
             {
                 std::deque<ConsoleLogRecord> records;
-                std::vector<ConsoleDroneStatus> fleet;
+                std::shared_ptr<const std::vector<ConsoleDroneStatus>> fleet;
                 std::uint64_t fleetVersion = 0;
                 std::uint64_t droppedCount = 0;
                 std::uint64_t droppedCriticalCount = 0;
                 bool stopping = false;
                 {
                     std::unique_lock<std::mutex> lock(mutex_);
-                    wake_.wait_for(lock, renderInterval_, [this]()
+                    wake_.wait_until(lock, nextRender, [this]()
                     {
-                        return stopRequested_ || !pending_.empty() ||
-                            renderedFleetVersion_ < fleetVersion_;
+                        return stopRequested_;
                     });
                     records.swap(pending_);
                     fleet = fleet_;
@@ -518,7 +538,35 @@ namespace
                 {
                     for (const auto& record : records)
                         for (const auto& line : SplitLines(record.text))
-                            sessionLog << FormatRecordPrefix(record) << line << '\n';
+                        {
+                            if (!sessionLog.is_open()) break;
+                            const auto formatted = FormatRecordPrefix(record) + line + '\n';
+                            if (logBytes + formatted.size() > 32 * 1024 * 1024)
+                            {
+                                sessionLog.close();
+                                const std::filesystem::path base(logPath);
+                                std::error_code error;
+                                // Only rotate this explicitly configured log's own archives.
+                                for (int index = 3; index >= 1; --index)
+                                {
+                                    auto destination = base; destination += "." + std::to_string(index);
+                                    std::filesystem::remove(destination, error);
+                                    auto source = base;
+                                    if (index > 1) source += "." + std::to_string(index - 1);
+                                    error.clear();
+                                    if (std::filesystem::exists(source, error))
+                                        std::filesystem::rename(source, destination, error);
+                                    if (error) break;
+                                }
+                                // On rotation failure stop file output, not the backend.
+                                if (error) { sessionLog.setstate(std::ios::badbit); break; }
+                                sessionLog.open(base, std::ios::out | std::ios::trunc);
+                                logBytes = 0;
+                            }
+                            if (!sessionLog.is_open()) break;
+                            sessionLog << formatted;
+                            logBytes += formatted.size();
+                        }
                     sessionLog.flush();
                 }
                 if (activeMode_ == ConsoleOutputMode::Linear)
@@ -526,7 +574,8 @@ namespace
                 else
                 {
                     AppendHistory(records);
-                    RenderDashboard(fleet);
+                    static const std::vector<ConsoleDroneStatus> emptyFleet;
+                    RenderDashboard(fleet ? *fleet : emptyFleet);
                 }
 
                 {
@@ -540,6 +589,8 @@ namespace
                     renderedFleetVersion_ = fleetVersion;
                 }
                 idle_.notify_all();
+                // A log burst never schedules immediate repeated dashboard draws.
+                nextRender = std::chrono::steady_clock::now() + renderInterval_;
 
                 if (stopping)
                 {
@@ -728,13 +779,13 @@ namespace
         std::condition_variable idle_;
         std::deque<ConsoleLogRecord> pending_;
         std::deque<std::string> history_;
-        std::vector<ConsoleDroneStatus> fleet_;
+        std::shared_ptr<const std::vector<ConsoleDroneStatus>> fleet_;
         std::shared_ptr<IConsoleRenderTarget> configuredTarget_;
         std::shared_ptr<IConsoleRenderTarget> target_;
         ConsoleOutputMode configuredMode_ = ConsoleOutputMode::Auto;
         ConsoleOutputMode activeMode_ = ConsoleOutputMode::Linear;
         std::size_t queueCapacity_ = DefaultQueueCapacity;
-        std::chrono::milliseconds renderInterval_{ 50 };
+        std::chrono::milliseconds renderInterval_{ 200 };
         std::thread renderer_;
         bool running_ = false;
         bool accepting_ = false;

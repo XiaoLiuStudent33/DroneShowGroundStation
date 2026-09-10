@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 
 #include "CesiumGeoreference.h"
+#include "Components/SceneComponent.h"
 #include "DroneFleetVisualizationActor.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -506,4 +507,63 @@ bool FDroneFleetVisualizationBridgeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSFlatMapDisplayTest, "DroneGCS.Visualization.FlatMap.GroundAndPreviewAlignment", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGCSFlatMapDisplayTest::RunTest(const FString&)
+{
+ auto* GI = NewObject<UGameInstance>(GEngine);
+ GI->InitializeStandalone(TEXT("FlatMapDisplayTest"));
+ auto* World = GI->GetWorld();
+ auto* Geo = World->SpawnActor<ACesiumGeoreference>();
+ auto* Map = World->SpawnActor<AActor>();
+ auto* Plane = NewObject<USceneComponent>(Map, TEXT("MapPlane"));
+ Map->SetRootComponent(Plane);
+ Plane->RegisterComponent();
+ Map->Tags.Add(TEXT("GCS.SceneMap"));
+ Map->SetActorLocationAndRotation(FVector(0, 0, -4500), FRotator(10, 15, 0));
+ const FTransform OriginalMap = Map->GetActorTransform();
+ const FTransform OriginalGeo = Geo->GetActorTransform();
+ const FVector MapUp = Map->GetActorUpVector();
+ auto* Viz = World->SpawnActor<ADroneFleetVisualizationActor>();
+ auto* Fleet = GI->GetSubsystem<UFleetManagerSubsystem>();
+ auto Snapshot = MakeGPSSnapshot(3, 1);
+ Snapshot.Drones[1].AltitudeAMSL = Snapshot.Drones[0].AltitudeAMSL + 10;
+ Snapshot.Drones[2].AltitudeAMSL = Snapshot.Drones[0].AltitudeAMSL - 2;
+ AddExpectedError(TEXT("Live altitude below display reference"), EAutomationExpectedErrorFlags::Contains, 1);
+ TestTrue(TEXT("Live snapshot applied"), Fleet->ApplySnapshot(Snapshot));
+ Viz->RefreshFromFleet();
+ const auto Live = Viz->GetDronePositions();
+ if (TestEqual(TEXT("Live count"), Live.Num(), 3))
+ {
+  TestTrue(TEXT("Ground sphere bottom touches actual map plane"), FMath::IsNearlyEqual(FVector::DotProduct(Live[0] - Map->GetActorLocation(), MapUp), 15.0, 0.01));
+  TestTrue(TEXT("Live altitude difference preserves ten meters"), FMath::IsNearlyEqual(FVector::DotProduct(Live[1] - Live[0], MapUp), 10.0 * Geo->GetScale(), 0.1));
+  TestTrue(TEXT("Negative live display altitude touches ground"), FMath::IsNearlyZero(FVector::DotProduct(Live[2] - Live[0], MapUp), 0.01));
+ }
+ TArray<FVector3f> ENU = {FVector3f::ZeroVector, FVector3f(4, 5, 10), FVector3f(4, 5, 0), FVector3f(4, 5, -2)};
+ TestEqual(TEXT("Raw telemetry altitude remains negative relative to origin"), Fleet->GetDronePage(0, 3)[2].AltitudeAMSL, Snapshot.Drones[2].AltitudeAMSL);
+ const auto OriginalENU = ENU;
+ TArray<FVector> Overlay, Absolute;
+ FVector Origin, AbsoluteOrigin;
+ FString Error;
+ const auto& D = Snapshot.Drones[0];
+ TestTrue(TEXT("Absolute Cesium conversion stays available"), Viz->ConvertRouteENUPositionsToWorld(ENU, D.GPSLat, D.GPSLon, D.AltitudeAMSL, Absolute, AbsoluteOrigin, Error));
+ AddExpectedError(TEXT("NPZ contains"), EAutomationExpectedErrorFlags::Contains, 1);
+ TestTrue(TEXT("Absolute conversion retains negative source height"), FMath::IsNearlyEqual(FVector::Distance(Absolute[2], Absolute[3]), 2.0 * Geo->GetScale(), 0.1));
+ TestTrue(TEXT("Overlay converts"), Viz->ConvertRouteENUPositionsToLiveWorld(ENU, D.GPSLat, D.GPSLon, D.AltitudeAMSL, Overlay, Origin, Error));
+ TArray<FLinearColor> Colors; Colors.Init(FLinearColor::White, ENU.Num());
+ TestTrue(TEXT("Full preview converts"), Viz->SetRoutePreviewFrame(ENU, Colors, D.GPSLat, D.GPSLon, D.AltitudeAMSL, Error));
+ const auto Preview = Viz->GetDronePositions();
+ TestTrue(TEXT("Overlay and full playback share exact positions"), Overlay == Preview);
+ TestTrue(TEXT("NPZ ground and live origin coincide"), Preview[0].Equals(Live[0], 0.01));
+ TestTrue(TEXT("NPZ landing returns to map surface"), FMath::IsNearlyEqual(FVector::DotProduct(Preview[2] - Map->GetActorLocation(), MapUp), 15.0, 0.01));
+ TestTrue(TEXT("Negative NPZ display height equals ground at same XY"), Preview[3].Equals(Preview[2], 0.01));
+ TestTrue(TEXT("Positive NPZ height remains ten meters"), FMath::IsNearlyEqual(FVector::DotProduct(Preview[1] - Preview[2], MapUp), 10.0 * Geo->GetScale(), 0.01));
+ TestTrue(TEXT("Source ENU untouched"), ENU == OriginalENU);
+ TestTrue(TEXT("Map transform untouched"), OriginalMap.Equals(Map->GetActorTransform()));
+ TestTrue(TEXT("Georeference transform untouched"), OriginalGeo.Equals(Geo->GetActorTransform()));
+ Viz->ExitRoutePreview();
+ TestTrue(TEXT("Exit preview returns to same ground anchor"), Viz->GetDronePositions()[0].Equals(Live[0], 0.01));
+ GI->Shutdown();
+ return true;
+}
 #endif

@@ -28,6 +28,10 @@
 #include <vector>
 
 class IMavlinkDatagramSender;
+struct SessionTickTimings
+{
+    double heartbeatSendMs = 0, statusMs = 0, ftpMs = 0, dispatchMs = 0, streamMs = 0;
+};
 
 enum class DroneSessionState
 {
@@ -93,7 +97,7 @@ public:
 
     bool Start();
     void Stop();
-    void Tick(std::chrono::steady_clock::time_point now);
+    void Tick(std::chrono::steady_clock::time_point now, SessionTickTimings* timings = nullptr);
     void RefreshHeartbeatStatus(
         std::chrono::steady_clock::time_point now);
     DroneSessionCommandSubmission SubmitCommand(

@@ -264,15 +264,24 @@ void DroneManager::RefreshHeartbeatStates(
 }
 
 void DroneManager::TickAll(
-    std::chrono::steady_clock::time_point now)
+    std::chrono::steady_clock::time_point now,
+    const std::function<void()>& serviceIngress, SessionTickTimings* timings)
 {
-    for (const std::string& droneId : sessionOrder)
+    // Ingress may append Sessions. Do not hold iterators across it.
+    // New Sessions join the next bounded sweep.
+    const std::size_t count = sessionOrder.size();
+    for (std::size_t index = 0; index < count; ++index)
     {
-        DroneSession* session = FindDrone(droneId);
+        if (serviceIngress && index != 0 && index % 128 == 0)
+        {
+            serviceIngress();
+            now = std::chrono::steady_clock::now();
+        }
+        DroneSession* session = FindDrone(sessionOrder[index]);
 
         if (session != nullptr)
         {
-            session->Tick(now);
+            session->Tick(now, timings);
         }
     }
 }

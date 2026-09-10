@@ -1,4 +1,6 @@
-﻿#include "../AppConfig.h"
+#include <unordered_set>
+#include "DSPGCSCommandBatching.h"
+#include "../AppConfig.h"
 #include "../CommandManager.h"
 #include "../ConsoleDSPGCSLoopbackTransport.h"
 #include "../DSPGCSProductionCommandReceiver.h"
@@ -166,6 +168,58 @@ int RunDSPCommandTests()
     }
 
     bool passed = true;
+    {
+        dspgcs::CommandRequestDTO large;
+        large.commandId = "scale-operation";
+        large.commandType = dspgcs::CommandType::SetLedColor;
+        large.parameters.red = 123;
+        for (int i = 0; i < 20000; ++i) large.targetDroneIds.push_back("Drone" + std::to_string(i));
+        dspgcs::MessageEnvelope envelope;
+        envelope.messageType = dspgcs::MessageType::CommandRequest;
+        envelope.correlationId = large.commandId;
+        const auto parts = dspgcs::SplitCommandTargets(envelope, large);
+        passed &= Check(parts.size() > 1, "20K command is split");
+        DroneManager emptyFleet;
+        CommandManager batchManager(emptyFleet);
+        DSPGCSProductionCommandReceiver batchReceiver;
+        std::vector<std::string> restored;
+        std::unordered_set<std::string> ids;
+        for (const auto& part : parts)
+        {
+            auto child = envelope;
+            child.correlationId = part.commandId;
+            const auto bytes = dspgcs::EncodeCommand(child, part);
+            batchReceiver.EnqueueFrame({bytes});
+            dspgcs::MessageEnvelope decodedEnvelope;
+            std::vector<std::uint8_t> payload;
+            dspgcs::CommandRequestDTO decoded;
+            passed &= Check(bytes.size() <= 60000 && part.targetDroneIds.size() <= 256 &&
+                dspgcs::DecodeEnvelope(bytes, decodedEnvelope, payload) && dspgcs::DecodeCommand(payload, decoded) &&
+                decoded.parameters.red == 123 && ids.insert(part.commandId).second,
+                "bounded uniquely identified command preserves wire and parameters");
+            restored.insert(restored.end(), decoded.targetDroneIds.begin(), decoded.targetDroneIds.end());
+        }
+        passed &= Check(restored == large.targetDroneIds, "20K targets appear exactly once in original order");
+        std::size_t resultTargets = 0, ingressCalls = 0, resultBatches = 0;
+        batchReceiver.ProcessPending(batchManager, [&](const dspgcs::CommandResultBatchDTO& result) {
+            resultTargets += result.results.size();
+            ++resultBatches;
+            passed &= Check(result.final && ids.count(result.commandId) == 1,
+                "existing backend returns final results for each child correlation");
+            passed &= Check(dspgcs::EncodeCommandResult(envelope, result).size() <= 60000,
+                "unknown-target rejection results fit a datagram");
+            return true;
+        }, [&]() { ++ingressCalls; });
+        passed &= Check(resultTargets == 20000 && resultBatches == parts.size() && ingressCalls >= parts.size(),
+            "20K backend rejection results complete exactly once while servicing ingress");
+
+        large.targetDroneIds = {std::string(60000, 'x')};
+        passed &= Check(dspgcs::SplitCommandTargets(envelope, large).empty(), "oversized target fails without partial plan");
+        large.targetDroneIds = {"Drone000"};
+        passed &= Check(dspgcs::SplitCommandTargets(envelope, large).front().commandId == large.commandId,
+            "single command preserves existing ID");
+    }
+
 
     // Pure safety-policy checks: no transport is started by these calls and no
     // DroneSession or MAVLink sender is reached.

@@ -311,6 +311,16 @@ private:
 	void BindFleetManager();
 	void UnbindFleetManager();
 	void CacheCesiumGeoreference();
+ // Optional flat-map display frame; physical GPS and route artifact conversion stay unchanged.
+ TWeakObjectPtr<USceneComponent> DisplayMapPlane;
+ mutable bool bReportedBelowMapRoute = false;
+ mutable bool bReportedBelowMapLive = false;
+ bool TryGetMapDisplayFrame(FVector& Origin, FVector& East, FVector& North, FVector& Up) const;
+ bool ConvertRouteToMapDisplay(const TArray<FVector3f>& PositionsENU,
+  TArray<FVector>& OutPositions, FVector& OutOrigin, FVector* OutCenter) const;
+ FVector LiveGeographicEast = FVector::XAxisVector;
+ FVector LiveGeographicNorth = -FVector::YAxisVector;
+ FVector LiveGeographicUp = FVector::ZAxisVector;
 	void UpdateOriginWorldPosition(const FFleetGeoOrigin& FleetGeoOrigin);
 	void CaptureLivePositionSample(
 		const FString& DroneID,

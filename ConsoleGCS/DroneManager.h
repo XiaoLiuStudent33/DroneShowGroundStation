@@ -45,7 +45,8 @@ public:
     bool StartDrone(const std::string& droneId);
     void RefreshHeartbeatStates(
         std::chrono::steady_clock::time_point now);
-    void TickAll(std::chrono::steady_clock::time_point now);
+    void TickAll(std::chrono::steady_clock::time_point now,
+        const std::function<void()>& serviceIngress = {}, SessionTickTimings* timings = nullptr);
     void StopAll();
 
     std::vector<std::string> GetDroneIds() const;

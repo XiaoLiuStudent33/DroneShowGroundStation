@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @brief 实现 ConsoleGCS 启动校验和主服务循环。
  *
  * 分类：Production；当前配置只进入多机 MAVLink Production 路径。
@@ -39,6 +39,7 @@
 #include <filesystem>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -751,6 +752,21 @@ int ConsoleGCSApplication::RunProductionMavlink(
             : "Read-only telemetry mode: command input and MAVLink sends disabled");
 
     auto lastRefresh = std::chrono::steady_clock::now();
+    // Opt-in aggregate diagnostics: no per-packet logging or protocol changes.
+    char performanceFlag[8]{};
+    const bool performanceEnabled =
+        GetEnvironmentVariableA("DRONEGCS_PERF", performanceFlag, sizeof(performanceFlag)) == 1 &&
+        performanceFlag[0] == '1';
+    auto performanceWindow = lastRefresh;
+    std::uint64_t performancePackets = 0, performanceBytes = 0;
+    std::uint64_t performanceHeartbeats = 0, performanceLimitHits = 0;
+    double performanceReceiveMs = 0, performanceTickMs = 0;
+    double performanceWorkMs = 0, performanceSnapshotMs = 0;
+    double performanceMaxLoopMs = 0;
+    double performanceMaxReceiveGapMs = 0;
+    auto lastDrainFinished = lastRefresh;
+    std::size_t performanceOnline = 0;
+    SessionTickTimings sessionTimings;
     auto lastTelemetryPublish = std::chrono::steady_clock::time_point{};
     const auto probeDiscoveryDeadline = std::chrono::steady_clock::now() +
         std::chrono::seconds(30);
@@ -771,13 +787,53 @@ int ConsoleGCSApplication::RunProductionMavlink(
     }
     if (launcherSession.Enabled())
         ConsoleUI::AddLog("Managed backend session: readiness and explicit orderly shutdown enabled");
+    bool readinessFailed = false;
+    double performanceMaxPublishGapMs = 0;
+    std::uint64_t performancePublishes = 0;
+    std::uint64_t performancePublishFailures = 0;
+    auto lastSuccessfulPublish = std::chrono::steady_clock::time_point{};
+    const auto publishDue = [&]()
+    {
+        const auto started = std::chrono::steady_clock::now();
+        if (!telemetryProvider.IsRunning() ||
+            (lastTelemetryPublish != std::chrono::steady_clock::time_point{} &&
+             started - lastTelemetryPublish < std::chrono::milliseconds(appConfig.dspgcsTelemetryIntervalMs))) return;
+        const bool published = telemetryProvider.PublishSnapshot(droneManager);
+        const auto finished = std::chrono::steady_clock::now();
+        if (performanceEnabled)
+        {
+            performanceSnapshotMs += std::chrono::duration<double, std::milli>(finished - started).count();
+            if (published && lastSuccessfulPublish != std::chrono::steady_clock::time_point{})
+                performanceMaxPublishGapMs = (std::max)(performanceMaxPublishGapMs,
+                    std::chrono::duration<double, std::milli>(finished - lastSuccessfulPublish).count());
+            if (published) ++performancePublishes;
+            else ++performancePublishFailures;
+        }
+        if (published) lastSuccessfulPublish = finished;
+        // Schedule from completion: slow encoding never causes a catch-up loop.
+        lastTelemetryPublish = finished;
+        if (!published) ConsoleUI::AddLog("DSP-GCS telemetry publish failed");
+        else if (!launcherSession.MarkReady()) readinessFailed = true;
+    };
     while (!launcherSession.ShouldStop())
     {
+        const auto loopStarted = std::chrono::steady_clock::now();
+        if (performanceEnabled)
+            performanceMaxReceiveGapMs = (std::max)(performanceMaxReceiveGapMs,
+                std::chrono::duration<double, std::milli>(loopStarted - lastDrainFinished).count());
+        bool drainLimitReached = false;
         // Drain a full synchronized thousand-aircraft telemetry burst before
         // sleeping. The bound prevents malformed traffic from starving the
         // rest of the service loop.
+        bool receiveFailed = false;
+        const auto drain = [&](const int packetBudget)
+        {
+        const auto receiveStarted = std::chrono::steady_clock::now();
+        if (performanceEnabled)
+            performanceMaxReceiveGapMs = (std::max)(performanceMaxReceiveGapMs,
+                std::chrono::duration<double, std::milli>(receiveStarted - lastDrainFinished).count());
         for (int datagramIndex = 0;
-             datagramIndex < appConfig.maxPacketsPerDrain;
+             datagramIndex < packetBudget;
              ++datagramIndex)
         {
             MavlinkReceivedDatagram datagram;
@@ -791,7 +847,8 @@ int ConsoleGCSApplication::RunProductionMavlink(
             if (receiveResult == MavlinkUdpReceiveResult::Error)
             {
                 ConsoleUI::AddLog(receiveError);
-                return -3;
+                receiveFailed = true;
+                break;
             }
 
             const MavlinkIngressStats stats = ingress.SubmitDatagram(
@@ -799,6 +856,15 @@ int ConsoleGCSApplication::RunProductionMavlink(
                 datagram.bytes.size(),
                 datagram.sourceIp,
                 datagram.sourcePort);
+            drainLimitReached = datagramIndex + 1 == packetBudget;
+            if (performanceEnabled)
+            {
+                ++performancePackets;
+                performanceBytes += datagram.bytes.size();
+                performanceHeartbeats += stats.heartbeatsApplied;
+                if (datagramIndex + 1 == packetBudget)
+                    ++performanceLimitHits;
+            }
             if (stats.identityConflicts > 0)
             {
                 ConsoleUI::AddLog(
@@ -806,10 +872,30 @@ int ConsoleGCSApplication::RunProductionMavlink(
                     ":" + std::to_string(datagram.sourcePort));
             }
         }
-
-        const auto now = std::chrono::steady_clock::now();
-        discovery.Update(now);
-        droneManager.TickAll(now);
+        lastDrainFinished = std::chrono::steady_clock::now();
+        if (performanceEnabled)
+            performanceReceiveMs += std::chrono::duration<double, std::milli>(lastDrainFinished - receiveStarted).count();
+        };
+        const auto serviceRealtime = [&]()
+        {
+            if (!receiveFailed) drain((std::min)(2048, appConfig.maxPacketsPerDrain));
+            publishDue();
+        };
+        drain(appConfig.maxPacketsPerDrain);
+        if (receiveFailed) return -3;
+        auto now = std::chrono::steady_clock::now();
+        // Keep receiving between bounded Session slices on this same owner thread.
+        const double receiveBeforeTick = performanceReceiveMs;
+        const double snapshotBeforeTick = performanceSnapshotMs;
+        droneManager.TickAll(now, serviceRealtime, performanceEnabled ? &sessionTimings : nullptr);
+        if (receiveFailed) return -3;
+        const auto tickFinished = std::chrono::steady_clock::now();
+        if (performanceEnabled)
+            performanceTickMs += std::chrono::duration<double, std::milli>(tickFinished - now).count()
+                - (performanceReceiveMs - receiveBeforeTick) - (performanceSnapshotMs - snapshotBeforeTick);
+        now = tickFinished;
+        const double receiveBeforeWork = performanceReceiveMs;
+        const double snapshotBeforeWork = performanceSnapshotMs;
 
         if (probeOptions.enabled && !missionProfileProbe)
         {
@@ -873,7 +959,8 @@ int ConsoleGCSApplication::RunProductionMavlink(
                     const dspgcs::CommandResultBatchDTO& resultBatch)
                 {
                     return telemetryProvider.SendCommandResult(resultBatch);
-                });
+                }, serviceRealtime);
+            if (receiveFailed) return -3;
         }
 
         if (telemetryProvider.IsRunning() && !hardwareTestOptions.enabled)
@@ -935,21 +1022,15 @@ int ConsoleGCSApplication::RunProductionMavlink(
                 telemetryProvider.SendUploadJobRouteStateDelta(delta);
         }
 
-        if (telemetryProvider.IsRunning() &&
-            (lastTelemetryPublish == std::chrono::steady_clock::time_point{} ||
-             now - lastTelemetryPublish >=
-                std::chrono::milliseconds(appConfig.dspgcsTelemetryIntervalMs)))
+        const auto snapshotStarted = std::chrono::steady_clock::now();
+        if (performanceEnabled)
+            performanceWorkMs += std::chrono::duration<double, std::milli>(snapshotStarted - tickFinished).count()
+                - (performanceReceiveMs - receiveBeforeWork) - (performanceSnapshotMs - snapshotBeforeWork);
+        publishDue();
+        if (readinessFailed)
         {
-            if (!telemetryProvider.PublishSnapshot(droneManager))
-            {
-                ConsoleUI::AddLog("DSP-GCS telemetry publish failed");
-            }
-            else if (!launcherSession.MarkReady())
-            {
-                ConsoleUI::AddErrorLog("Unable to notify launcher readiness");
-                return -7;
-            }
-            lastTelemetryPublish = now;
+            ConsoleUI::AddErrorLog("Unable to notify launcher readiness");
+            return -7;
         }
 
         for (DroneSession* session : droneManager.GetAllDrones())
@@ -970,11 +1051,52 @@ int ConsoleGCSApplication::RunProductionMavlink(
         {
             const std::vector<DroneSession*> sessions =
                 droneManager.GetAllDrones();
-            ConsoleUI::UpdateFleet(BuildConsoleFleetStatus(sessions));
+            const auto fleetStatus = BuildConsoleFleetStatus(sessions);
+            if (performanceEnabled)
+                performanceOnline = std::count_if(fleetStatus.begin(), fleetStatus.end(),
+                    [](const ConsoleDroneStatus& drone) { return drone.online; });
+            ConsoleUI::UpdateFleet(fleetStatus);
             lastRefresh = now;
         }
 
-        Sleep(10);
+        if (performanceEnabled)
+        {
+            const auto finished = std::chrono::steady_clock::now();
+            performanceMaxLoopMs = (std::max)(performanceMaxLoopMs,
+                std::chrono::duration<double, std::milli>(finished - loopStarted).count());
+            if (finished - performanceWindow >= std::chrono::seconds(1))
+            {
+                std::ostringstream message;
+                message << "[PERF] window_ms=" << std::chrono::duration<double, std::milli>(finished - performanceWindow).count()
+                    << " total=" << droneManager.GetDroneCount() << " online=" << performanceOnline
+                    << " packets=" << performancePackets << " bytes=" << performanceBytes
+                    << " heartbeats=" << performanceHeartbeats << " drain_limits=" << performanceLimitHits
+                    << " rx_ms=" << performanceReceiveMs << " tick_ms=" << performanceTickMs
+                    << " work_ms=" << performanceWorkMs << " snapshot_ms=" << performanceSnapshotMs
+                    << " max_loop_ms=" << performanceMaxLoopMs
+                    << " max_rx_gap_ms=" << performanceMaxReceiveGapMs;
+                message << " publishes=" << performancePublishes
+                    << " publish_failures=" << performancePublishFailures
+                    << " max_publish_gap_ms=" << performanceMaxPublishGapMs
+                    << " session_send_ms=" << sessionTimings.heartbeatSendMs
+                    << " session_status_ms=" << sessionTimings.statusMs
+                    << " session_ftp_ms=" << sessionTimings.ftpMs
+                    << " session_dispatch_ms=" << sessionTimings.dispatchMs
+                    << " session_stream_ms=" << sessionTimings.streamMs;
+                ConsoleUI::AddLog(message.str());
+                performancePackets = performanceBytes = performanceHeartbeats = performanceLimitHits = 0;
+                performanceReceiveMs = performanceTickMs = performanceWorkMs = performanceSnapshotMs = performanceMaxLoopMs = 0;
+                performanceMaxReceiveGapMs = 0;
+                sessionTimings = {};
+                performancePublishes = 0;
+                performancePublishFailures = 0;
+                performanceMaxPublishGapMs = 0;
+                performanceWindow = finished;
+            }
+        }
+        // A capped drain is not an idle socket. Still service commands/timers
+        // every loop, but do not add an idle delay while ingress is saturated.
+        Sleep(drainLimitReached ? 0 : 10);
     }
     ConsoleUI::AddLog("Managed backend session stopping; releasing network resources");
     return 0;

@@ -152,6 +152,8 @@ private:
 	friend class FGCSMarqueeInputProcessor;
 	friend class UGCSFleetRowCheckBinding;
 	friend class FGCSIndependentToolbarTogglesTest;
+	friend class FGCSOrbitControlsTest;
+ friend class UGCSMapSubsystem;
 	friend class FGCSSelectionStateSeparationTest;
 	friend class FGCSRouteWorkflowRebindStateTest;
 	friend class FGCSScheduledShowPreviewTest;
@@ -504,6 +506,14 @@ private:
 	void ClearMissionPausedTargets(const TArray<FString>& TargetDroneIDs);
 	void BindColorPaletteButtons();
 	void BindTimeControlControls();
+	void BindOrbitControls();
+	void UnbindOrbitControls();
+	void SyncOrbitControls();
+	UFUNCTION() void HandleResetOrbitClicked();
+	UFUNCTION() void HandleOrbitLockChanged(bool bLocked);
+	TWeakObjectPtr<UButton> OrbitResetButton;
+	TWeakObjectPtr<UCheckBox> OrbitLockCheckBox;
+	bool bSyncingOrbitControls = false;
 	void BindReferenceAndMapControls();
 	void UnbindReferenceAndMapControls();
 	ADroneFleetVisualizationActor* FindFleetVisualizationActor() const;

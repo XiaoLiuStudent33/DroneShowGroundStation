@@ -1,10 +1,11 @@
+#include "DroneFleetVisualizationActor.h"
+#include "GCSMapSubsystem.h"
 /**
  * @brief 实现 Fleet -> WGS84/Cesium -> UE World Position -> Niagara 数组的数据桥。
  *
  * 分类：Production。
  * Offline 只改变状态，仍保留粒子和 DroneOrder -> ParticleIndex；无效 GPS 使用 ZeroVector。
  */
-#include "DroneFleetVisualizationActor.h"
 
 #include "Camera/CameraTypes.h"
 #include "Camera/PlayerCameraManager.h"
@@ -971,6 +972,17 @@ void ADroneFleetVisualizationActor::CacheCesiumGeoreference()
 	}
 
 	bCesiumLookupAttempted = true;
+ for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+ {
+  if (It->ActorHasTag(TEXT("GCS.SceneMap")) || It->GetClass()->GetName().StartsWith(TEXT("BP_GCS_2DMapGround")))
+  {
+   DisplayMapPlane = It->GetRootComponent();
+   TInlineComponentArray<USceneComponent*> Components(*It);
+   for (auto* Component : Components)
+    if (Component->GetFName() == TEXT("MapPlane")) { DisplayMapPlane = Component; break; }
+   break;
+  }
+ }
 	UWorld* World = GetWorld();
 	if (World)
 	{
@@ -1112,6 +1124,7 @@ bool ADroneFleetVisualizationActor::TryGetGeographicTangentBasis(
 	OutEastWorld = FVector::ZeroVector;
 	OutNorthWorld = FVector::ZeroVector;
 	OutUpWorld = FVector::ZeroVector;
+	if (TryGetMapDisplayFrame(OutOriginWorld, OutEastWorld, OutNorthWorld, OutUpWorld)) return true;
 
 	ACesiumGeoreference* Georeference = CesiumGeoreference.Get();
 	if (!Georeference)
@@ -1201,7 +1214,9 @@ void ADroneFleetVisualizationActor::UpdateOriginWorldPosition(const FFleetGeoOri
 		return;
 	}
 
-	const FVector DisplayAnchorWorld = GetActorLocation();
+	FVector DisplayAnchorWorld = GetActorLocation();
+ FVector MapEast, MapNorth, MapUp;
+ TryGetMapDisplayFrame(DisplayAnchorWorld, MapEast, MapNorth, MapUp);
 	const bool bSameLockedOrigin = bOriginWorldPositionInitialized
 		&& CachedOriginDroneID == FleetGeoOrigin.OriginDroneID
 		&& CachedOriginLatitude == FleetGeoOrigin.OriginLatitude
@@ -1239,6 +1254,11 @@ void ADroneFleetVisualizationActor::UpdateOriginWorldPosition(const FFleetGeoOri
 		return;
 	}
 	OriginWorldPosition = DisplayAnchorWorld;
+ const FMatrix GeographicFrame = Georeference->ComputeEastSouthUpToUnrealTransformation(GeoreferencePosition);
+ const FTransform GeoTransform = Georeference->GetActorTransform();
+ LiveGeographicEast = GeoTransform.TransformVector(GeographicFrame.TransformVector(FVector::XAxisVector)).GetSafeNormal();
+ LiveGeographicNorth = -GeoTransform.TransformVector(GeographicFrame.TransformVector(FVector::YAxisVector)).GetSafeNormal();
+ LiveGeographicUp = GeoTransform.TransformVector(GeographicFrame.TransformVector(FVector::ZAxisVector)).GetSafeNormal();
 
 	CachedOriginDroneID = FleetGeoOrigin.OriginDroneID;
 	CachedOriginLatitude = FleetGeoOrigin.OriginLatitude;
@@ -1285,7 +1305,23 @@ FVector ADroneFleetVisualizationActor::ConvertDroneGPSPosition(
 	{
 		return FVector::ZeroVector;
 	}
-	return OriginWorldPosition + (GeographicWorldPosition - GeographicOriginWorldPosition);
+	FVector O, E, N, U;
+ if (TryGetMapDisplayFrame(O, E, N, U))
+ {
+  const FVector Delta = GeographicWorldPosition - GeographicOriginWorldPosition;
+  // Flatten the geographic tangent surface onto the authored 2D map. Preserve
+  // measured altitude difference explicitly instead of adding Earth curvature.
+  const double BaseHeight = FleetGeoOrigin.bOriginAltitudeValid ? FleetGeoOrigin.OriginAltitudeAMSL : 0.0;
+  if (!bReportedBelowMapLive && HeightMeters < BaseHeight - 0.01)
+  {
+   bReportedBelowMapLive = true;
+   UE_LOG(LogTemp, Warning, TEXT("[FlatMap] Live altitude below display reference: Drone=%s DeltaMeters=%.3f. Display height grounded at zero; original telemetry preserved."), *Drone.DroneID, HeightMeters - BaseHeight);
+  }
+  const double Units = Georeference->GetScale() * Georeference->GetActorTransform().TransformVector(FVector::ZAxisVector).Size();
+  return O + E * FVector::DotProduct(Delta, LiveGeographicEast)
+   + N * FVector::DotProduct(Delta, LiveGeographicNorth) + U * (FMath::Max(0.0, HeightMeters - BaseHeight) * Units);
+ }
+ return OriginWorldPosition + (GeographicWorldPosition - GeographicOriginWorldPosition);
 }
 
 void ADroneFleetVisualizationActor::RebuildDroneLabelAttributes()
@@ -1606,6 +1642,7 @@ bool ADroneFleetVisualizationActor::SetRoutePreviewFrame(
 		SuspendedLiveParticleDroneIDs = ParticleDroneIDs;
 		SuspendedLiveDroneColors = DroneColors;
 	}
+	ConvertRouteToMapDisplay(PositionsENU, NewWorldPositions, RouteOriginWorld, &NewFleetVisualCenter);
 	const bool bEnteringRoutePreview = VisualizationMode != EGCSVisualizationMode::RoutePreview;
 	VisualizationMode = EGCSVisualizationMode::RoutePreview;
 	if (bEnteringRoutePreview)
@@ -1776,6 +1813,7 @@ bool ADroneFleetVisualizationActor::ConvertRouteENUPositionsToLiveWorld(
 	// Passing absolute Cesium coordinates to User.RouteTargetPositions while
 	// User.DronePositions is display-anchored would also mix two coordinate
 	// spaces in one Niagara system and lose LWC precision.
+	if (ConvertRouteToMapDisplay(PositionsENU, OutWorldPositions, OutRouteOriginWorld, OutWorldBoundsCenter)) return true;
 	const FVector AbsoluteRouteOriginWorld = OutRouteOriginWorld;
 	const FVector LiveDisplayTranslation =
 		OriginWorldPosition - AbsoluteRouteOriginWorld;
@@ -1819,4 +1857,50 @@ void ADroneFleetVisualizationActor::ExitRoutePreview()
 	DroneColors = MoveTemp(SuspendedLiveDroneColors);
 	bDroneColorsDirty = true;
 	RefreshFromFleet();
+}
+
+bool ADroneFleetVisualizationActor::TryGetMapDisplayFrame(FVector& Origin, FVector& East, FVector& North, FVector& Up) const
+{
+ const auto* Plane = DisplayMapPlane.Get();
+ if (!Plane) return false;
+ FTransform T = Plane->GetComponentTransform();
+ if (GetGameInstance()) if (auto* Map = GetGameInstance()->GetSubsystem<UGCSMapSubsystem>()) Map->GetSceneFrame(T);
+ Up = T.TransformVectorNoScale(FVector::ZAxisVector).GetSafeNormal();
+ East = T.TransformVectorNoScale(FVector::XAxisVector).GetSafeNormal();
+ North = -T.TransformVectorNoScale(FVector::YAxisVector).GetSafeNormal();
+ if (Up.IsNearlyZero() || East.IsNearlyZero() || North.IsNearlyZero()) return false;
+ // The display anchor's horizontal location is retained; only the ground plane
+ // is calibrated. The marker has a 30 UU diameter, so its bottom touches ground.
+ Origin = GetActorLocation() - Up * FVector::DotProduct(GetActorLocation() - T.GetLocation(), Up)
+  + Up * (DroneSphereWorldDiameterUU * 0.5f);
+ return !Origin.ContainsNaN();
+}
+
+bool ADroneFleetVisualizationActor::ConvertRouteToMapDisplay(const TArray<FVector3f>& PositionsENU,
+ TArray<FVector>& OutPositions, FVector& OutOrigin, FVector* OutCenter) const
+{
+ FVector O, E, N, U;
+ const auto* Geo = CesiumGeoreference.Get();
+ if (!Geo || !TryGetMapDisplayFrame(O, E, N, U)) return false;
+ const double Units = Geo->GetScale() * Geo->GetActorTransform().TransformVector(FVector::ZAxisVector).Size();
+ FBox Bounds(ForceInit);
+ OutPositions.SetNumUninitialized(PositionsENU.Num());
+ int32 BelowGround = 0;
+ double MinZ = 0.0;
+ for (int32 I = 0; I < PositionsENU.Num(); ++I)
+ {
+  const FVector3f& P = PositionsENU[I];
+  if (P.Z < -0.01f) ++BelowGround;
+  MinZ = FMath::Min(MinZ, static_cast<double>(P.Z));
+  OutPositions[I] = O + (E * P.X + N * P.Y + U * FMath::Max(0.0, static_cast<double>(P.Z))) * Units;
+  Bounds += OutPositions[I];
+ }
+ if (BelowGround > 0 && !bReportedBelowMapRoute)
+ {
+  bReportedBelowMapRoute = true;
+  UE_LOG(LogTemp, Warning, TEXT("[FlatMap] NPZ contains %d positions below Z=0; MinZ=%.3fm. Display heights grounded at zero; original NPZ heights preserved."), BelowGround, MinZ);
+ }
+ OutOrigin = O;
+ if (OutCenter) *OutCenter = Bounds.IsValid ? Bounds.GetCenter() : O;
+ return true;
 }
