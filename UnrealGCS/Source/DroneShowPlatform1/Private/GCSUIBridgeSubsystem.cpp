@@ -647,8 +647,16 @@ UGCSUIBridgeSubsystem::UGCSUIBridgeSubsystem()
 	RouteImportWidgetClass = RouteImportClassFinder.Class;
 }
 
+void UGCSUIBridgeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
+{
+	Super::Initialize(Collection);
+	RouteWorkflowCoordinator = NewObject<UGCSRouteWorkflowCoordinator>(this);
+	RouteWorkflowCoordinator->InitializeWorkflow(GetGameInstance());
+}
+
 void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 {
+	if (RouteWorkflowCoordinator) RouteWorkflowCoordinator->DetachView();
 	UnregisterMarqueeInputProcessor();
 	UnbindFleetList();
 	ResetNavigationPages();

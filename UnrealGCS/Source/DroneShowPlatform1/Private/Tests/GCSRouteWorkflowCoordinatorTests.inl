@@ -150,6 +150,23 @@ bool FGCSRouteWorkflowOwnershipTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Hidden Show"),C->ShowRouteWorkflow(Error));
 	TestTrue(TEXT("Hidden Show reuses"),C->GetWorkflowWidgetForTest()==First);
 	TestEqual(TEXT("Visible again"),First->GetVisibility(),ESlateVisibility::Visible);
+	// Recreating the concrete workflow only replaces its view and delegates.
+	C->DetachView();
+	TestNull(TEXT("Detach releases concrete workflow"), C->GetWorkflowWidgetForTest());
+	TestTrue(TEXT("Detach keeps workflow ticker"), C->IsRefreshTickerActiveForTest());
+	const int32 DetachedCloseCount = C->GetCloseRequestCountForTest();
+	if (CloseButton) CloseButton->OnClicked.Broadcast();
+	TestEqual(TEXT("Detached widget cannot invoke coordinator"), C->GetCloseRequestCountForTest(), DetachedCloseCount);
+	TestTrue(TEXT("Recreate view"), C->ShowRouteWorkflow(Error));
+	TestTrue(TEXT("New concrete widget"), C->GetWorkflowWidgetForTest() != First);
+	TestEqual(TEXT("Applied intent survives widget recreation"), C->GetAppliedMaxConcurrentTargetsForTest(), 37);
+	TestEqual(TEXT("Selected page survives widget recreation"), C->GetSelectedPageIndexForTest(), 1);
+	UUserWidget* Recreated = C->GetWorkflowWidgetForTest();
+	UButton* NewClose = Recreated && Recreated->WidgetTree
+		? Cast<UButton>(Recreated->WidgetTree->FindWidget(TEXT("BTN_RouteClose"))) : nullptr;
+	TestNotNull(TEXT("Recreated close control"), NewClose);
+	if (NewClose) NewClose->OnClicked.Broadcast();
+	TestEqual(TEXT("Recreated widget invokes exactly once"), C->GetCloseRequestCountForTest(), DetachedCloseCount + 1);
 	C->Shutdown();
 	TestNull(TEXT("Reference cleared"),C->GetWorkflowWidgetForTest());
 	TestFalse(TEXT("Ticker stopped"),C->IsRefreshTickerActiveForTest());
@@ -1819,6 +1836,116 @@ bool FGCSRouteWorkflowAutoStartExactlyOnceTest::RunTest(const FString& Parameter
 	C->TickRefreshForTest();
 	TestEqual(TEXT("Late cross-transaction Accepted cannot restart"),StartCalls,1);
 	C->Shutdown(); return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowRebindStateTest,
+	"DroneGCS.UI.RouteWorkflow.Lifecycle.RebindKeepsTransaction",
+	EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FGCSRouteWorkflowRebindStateTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UGameInstance* GI=NewObject<UGameInstance>(GEngine);
+	GI->InitializeStandalone(TEXT("RouteWorkflowRebindStateWorld"));
+	UGCSUIBridgeSubsystem* Bridge = GI->GetSubsystem<UGCSUIBridgeSubsystem>();
+	UFleetManagerSubsystem* Fleet = GI->GetSubsystem<UFleetManagerSubsystem>();
+	UGCSRouteWorkflowCoordinator* C = Bridge->RouteWorkflowCoordinator;
+	if (!TestNotNull(TEXT("Workflow exists before any widget"), C)) { GI->Shutdown(); return false; }
+	TestTrue(TEXT("Workflow runs independently of first view"), C->IsRefreshTickerActiveForTest());
+	UClass* MainClass = LoadClass<UUserWidget>(nullptr,
+		TEXT("/Game/UI/WBP_GCS_Main_V2.WBP_GCS_Main_V2_C"));
+	if (!TestNotNull(TEXT("Concrete main class"), MainClass)) { GI->Shutdown(); return false; }
+	UUserWidget* FirstMain = CreateWidget<UUserWidget>(GI, MainClass);
+	UUserWidget* SecondMain = CreateWidget<UUserWidget>(GI, MainClass);
+	UUserWidget* FirstPanel = Cast<UUserWidget>(FirstMain->WidgetTree->FindWidget(TEXT("CHILD_RightPanel")));
+	UUserWidget* SecondPanel = Cast<UUserWidget>(SecondMain->WidgetTree->FindWidget(TEXT("CHILD_RightPanel")));
+	if (!TestNotNull(TEXT("First right panel"), FirstPanel) || !TestNotNull(TEXT("Second right panel"), SecondPanel))
+	{ GI->Shutdown(); return false; }
+	// Same missing optional pages as the existing Selection fixture, twice.
+	AddExpectedError(TEXT("Unable to load GCS navigation page: /Game/UI/WBP_GCS_PageMap."), EAutomationExpectedErrorFlags::Contains, 2);
+	AddExpectedError(TEXT("Unable to load GCS navigation page: /Game/UI/WBP_GCS_PageLogs."), EAutomationExpectedErrorFlags::Contains, 2);
+	Bridge->BindMainWidget(FirstMain);
+	C->SetAppliedMaxConcurrentTargetsForTest(6);
+	FGCSRouteAutoStartSnapshot Base;
+	Base.SelectedDroneIDs={TEXT("Drone000"),TEXT("Drone001"),TEXT("Drone010")};
+	Base.FleetSessionID=TEXT("fleet-a"); Base.FleetRevision=7;
+	Base.ArtifactSetID=TEXT("artifact-a"); Base.ArtifactSetDigest=FString::ChrN(64,TEXT('a'));
+	Base.SourceDatasetDigest=FString::ChrN(64,TEXT('b')); Base.RouteSlotCount=1000;
+	for(const TPair<FString,int32>& Mapping : {
+		TPair<FString,int32>(TEXT("Drone000"),0),TPair<FString,int32>(TEXT("Drone001"),1),
+		TPair<FString,int32>(TEXT("Drone010"),10)})
+	{
+		FGCSRouteAutoStartTargetSnapshot Target; Target.DroneID=Mapping.Key;
+		Target.EndpointIdentity=TEXT("127.0.0.1:")+FString::FromInt(14550+Mapping.Value);
+		Target.NumericDroneID=Mapping.Value; Target.RouteSlotIndex=Mapping.Value;
+		Target.RouteRelativePath=FString::Printf(TEXT("routes/%d.waypoints"),Mapping.Value);
+		Target.RouteFileByteSize=100; Target.RouteDigest=FString::ChrN(64,TEXT('c'));
+		Base.Targets.Add(Target);
+	}
+	for (const FString& ID : Base.SelectedDroneIDs)
+	{
+		FDroneData Drone; Drone.DroneID = ID; Drone.bOnline = true;
+		Fleet->AddDrone(Drone);
+	}
+	Fleet->SelectDrone(TEXT("Drone001"));
+	Bridge->ReplaceCommandDroneSelection(Base.SelectedDroneIDs);
+	int32 BuildCalls=0,FreezeCalls=0,SyncCalls=0,StartCalls=0;
+	FGCSRouteAutoStartSyncObservation Observation;
+	Observation.State=static_cast<uint8>(EDSPGCSFrozenAssignmentSyncState::SyncingToConsole);
+	FGCSRouteAutoStartTestHooks Hooks;
+	Hooks.CaptureSnapshot=[Base](FGCSRouteAutoStartSnapshot& Out,FString&){Out=Base;return true;};
+	Hooks.BuildAssignment=[&BuildCalls](FGCSRouteAutoStartSnapshot&,FString&){++BuildCalls;return true;};
+	Hooks.FreezeAssignment=[&FreezeCalls](FGCSRouteAutoStartSnapshot& S,FString&){++FreezeCalls;S.AssignmentAuthoritySessionID=TEXT("authority-a");S.AssignmentRevision=8;return true;};
+	Hooks.StartSync=[&SyncCalls,&Observation](FGCSRouteAutoStartSnapshot& S,FString&){++SyncCalls;S.SyncTransactionID=TEXT("sync-a");S.AssignmentDigest=FString::ChrN(64,TEXT('d'));Observation.TransactionID=S.SyncTransactionID;Observation.FleetSessionID=S.FleetSessionID;Observation.AssignmentAuthoritySessionID=S.AssignmentAuthoritySessionID;Observation.AssignmentRevision=S.AssignmentRevision;Observation.AssignmentDigest=S.AssignmentDigest;return true;};
+	Hooks.ObserveSync=[&Observation](){return Observation;};
+	Hooks.ValidateSnapshot=[](const FGCSRouteAutoStartSnapshot&,FString&){return true;};
+	Hooks.StartJob=[&StartCalls](int32 Maximum,FString& OutID,FString&){++StartCalls;OutID=TEXT("job-a");return Maximum==6;};
+	C->SetAutoStartTestHooks(MoveTemp(Hooks));
+	FString Error;
+	TestTrue(TEXT("Begin automatic transaction"),C->StartAutoStartForTest(Error));
+	FGCSConfirmedNpzMappingSnapshot Mapping;
+	Mapping.ConfirmationRevision = 7; Mapping.bValid = true;
+	Mapping.SelectedDroneIDs = Base.SelectedDroneIDs;
+	C->SetConfirmedNpzMappingForTest(Mapping);
+	const FString TransactionID = C->GetAutoStartSnapshotForTest().TransactionID;
+	const UGCSRouteUploadListItem* PreviewItem = C->FindRouteItemForTest(0);
+	TestNotNull(TEXT("Pending transaction has target preview"), PreviewItem);
+	Bridge->BindMainWidget(SecondMain);
+	TestTrue(TEXT("Rebinding keeps the same workflow owner"), C == Bridge->RouteWorkflowCoordinator);
+	TestTrue(TEXT("Target model survives rebind"), PreviewItem == C->FindRouteItemForTest(0));
+	TestTrue(TEXT("Command selection survives rebind"), Bridge->GetSelectedCommandDroneIDs() == Base.SelectedDroneIDs);
+	TestEqual(TEXT("Detail selection survives independently"), Fleet->GetCurrentSelectedDroneID(), FString(TEXT("Drone001")));
+	Bridge->SetCommandDroneSelected(TEXT("Drone002"), true);
+	TestTrue(TEXT("Pending transaction still blocks target mutation"), Bridge->GetSelectedCommandDroneIDs() == Base.SelectedDroneIDs);
+	Fleet->SelectDrone(TEXT("Drone010"));
+	TestEqual(TEXT("Detail change does not mutate frozen upload targets"), C->GetAutoStartSnapshotForTest().Targets.Num(), 3);
+	TestTrue(TEXT("Confirmed mapping survives rebind"), C->HasConfirmedNpzMappingForTest());
+	TestEqual(TEXT("Confirmation revision survives"), C->GetConfirmedNpzMappingForTest().ConfirmationRevision, int64(7));
+	TestEqual(TEXT("Transaction identity survives"), C->GetAutoStartSnapshotForTest().TransactionID, TransactionID);
+	TestFalse(TEXT("Old view callback detached"), Cast<UButton>(FirstPanel->WidgetTree->FindWidget(TEXT("BTN_ConsoleRouteUpload_1")))->OnClicked.Contains(C, FName(TEXT("HandleRouteWorkflowClicked"))));
+	TestTrue(TEXT("New view callback attached"), Cast<UButton>(SecondPanel->WidgetTree->FindWidget(TEXT("BTN_ConsoleRouteUpload_1")))->OnClicked.Contains(C, FName(TEXT("HandleRouteWorkflowClicked"))));
+	TestEqual(TEXT("One Working Assignment"),BuildCalls,1);
+	TestEqual(TEXT("One Freeze"),FreezeCalls,1);
+	TestEqual(TEXT("One Sync"),SyncCalls,1);
+	TestEqual(TEXT("No Job before Accepted"),StartCalls,0);
+	TestFalse(TEXT("Repeated click rejected"),C->StartAutoStartForTest(Error));
+	C->DetachView();
+	TestTrue(TEXT("Workflow ticker survives detached view"), C->IsRefreshTickerActiveForTest());
+	TestTrue(TEXT("Confirmed mapping survives detached view"), C->HasConfirmedNpzMappingForTest());
+	Observation.State=static_cast<uint8>(EDSPGCSFrozenAssignmentSyncState::ConsoleAccepted);
+	C->TickRefreshForTest(); C->TickRefreshForTest(); C->TickRefreshForTest();
+	TestEqual(TEXT("Start exactly once"),StartCalls,1);
+	TestTrue(TEXT("Rebind after dispatched Start"), C->Initialize(GI, SecondPanel));
+	C->TickRefreshForTest();
+	TestEqual(TEXT("Rebinding completed transaction cannot replay Start"), StartCalls, 1);
+	TestEqual(TEXT("Completed state"),C->GetAutoStartStateForTest(),EGCSRouteAutoStartState::Completed);
+	TestTrue(TEXT("Start dispatched flag"),C->GetAutoStartSnapshotForTest().bJobStartDispatched);
+	TestEqual(TEXT("Three selected targets preserved"),C->GetAutoStartSnapshotForTest().Targets.Num(),3);
+	TestEqual(TEXT("Applied concurrency frozen into AutoStart"),
+		C->GetAutoStartSnapshotForTest().MaxConcurrentTargets,6);
+	Observation.TransactionID=TEXT("late-job-a-sync");
+	C->TickRefreshForTest();
+	TestEqual(TEXT("Late cross-transaction Accepted cannot restart"),StartCalls,1);
+	C->Shutdown(); GI->Shutdown(); return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGCSRouteWorkflowAutoStartSingleTargetTest,

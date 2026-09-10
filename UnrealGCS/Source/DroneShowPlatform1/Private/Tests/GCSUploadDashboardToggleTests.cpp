@@ -286,6 +286,12 @@ bool FGCSUploadDashboardToggleTest::RunTest(const FString& Parameters)
 	if (WriteWindow && GlobalCap && SegmentItems)
 	{
 		TestTrue(TEXT("Write Window is read-only"), IsReadOnly(WriteWindow));
+		TestTrue(TEXT("Active binding locks tuning even before a full Main Widget is bound"), IsReadOnly(GlobalCap));
+		TestEqual(TEXT("Active binding has the production lock status"),
+			Bridge->GetUploadDashboardTuningStatusForTest(), FString(TEXT("JOB LOCKED")));
+		// Exercise editable draft behavior in an explicitly idle fixture.
+		UploadJobs->BindUploadJobForTest("");
+		Bridge->RefreshUploadDashboardForTest();
 		TestFalse(TEXT("Global Cap is the editable Draft"), IsReadOnly(GlobalCap));
 		TestTrue(TEXT("Segment Items is read-only"), IsReadOnly(SegmentItems));
 		TestEqual(TEXT("Write Window comes from Console Snapshot"),
@@ -357,6 +363,8 @@ bool FGCSUploadDashboardToggleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Restore leaves a modified local Draft"),
 		Bridge->IsUploadDashboardDraftDirtyForTest());
 
+	// Restore the active binding for the unchanged toggle/transaction assertions.
+	UploadJobs->BindUploadJobForTest("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 	for (int32 ClickIndex = 0; ClickIndex < 20; ++ClickIndex)
 	{
 		Fixture.DeviceButton->OnClicked.Broadcast();

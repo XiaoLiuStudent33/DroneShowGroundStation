@@ -54,6 +54,7 @@ class DRONESHOWPLATFORM1_API UGCSUIBridgeSubsystem final : public UGameInstanceS
 public:
 	UGCSUIBridgeSubsystem();
 	void BindMainWidget(UUserWidget* MainWidget);
+	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
 	// Detail presentation interface. The authoritative state remains in
@@ -124,6 +125,7 @@ private:
 	friend class UGCSFleetRowCheckBinding;
 	friend class FGCSIndependentToolbarTogglesTest;
 	friend class FGCSSelectionStateSeparationTest;
+	friend class FGCSRouteWorkflowRebindStateTest;
 	friend class FGCSScheduledShowPreviewTest;
 	friend class FGCSTelemetryFilterToggleTest;
 

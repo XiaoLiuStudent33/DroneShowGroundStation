@@ -224,3 +224,10 @@ Phase1限定范围已完成；Phase2未开始。核心重复组装与两项低�
 ## 2026-09-10 阶段 A：Command 稳定合同
 
 已完成现有结果结构的稳定状态补充、UI字符串判断替换、Private DSP转换边界及契约测试。原用户可见文本不变；阶段结束构建/回归通过，UE244/244、Launcher32/32。未重做全仓审计/架构方案，未进入B，未commit/push。构建日志、逐测试结果及等价检查位于BuildLogs/ArchitectureStageA-20260910。
+
+
+## 2026-09-10 压缩重构阶段 B 完成
+
+基线 `4820a11`。既有 Coordinator 改为由 UIBridge Subsystem 初始化并稳定持有；Widget 重绑定仅 DetachView/绑定，不清除 Confirmed Mapping、AutoStart 事务与目标模型。命令选择/详情选择继续分别由 UIBridge/Fleet 持有；Assignment/Upload Authority 和协议不变。Telemetry 复用 FDroneData/Fleet 查询事件，私有纯转换与 Provider 通信代码分离，无新状态所有者。先复现重绑丢失再修复；新增无视图单次提交/状态投影测试，强化 Widget 重建和 Delegate、活动 Job 门禁夹具。Command result loss/re-entry 未改，继续技术债。
+
+Console Release/Debug、UE Editor Development 均通过；Console 六次回归通过；Launcher 32/32；UE Full 245 + Synthetic 1 = 246/246（阶段 A 244 + 新增 2），0 failed / 0 not-run。首轮 UploadDashboard 部分 UI 夹具绕过原门禁导致的失败已记录，并补充活动 binding 锁定/idle 草稿两个场景，未放宽生产门禁。证据目录 `BuildLogs/ArchitectureStageB-20260910`、`UnrealGCS/Saved/Automation/ArchitectureStageB-20260910-*`；详见 [阶段 B 简报](Architecture/STAGE_B_REPORT.md)。未运行真机、未改 Content/协议/配置，未 commit/push，未进入阶段 C。

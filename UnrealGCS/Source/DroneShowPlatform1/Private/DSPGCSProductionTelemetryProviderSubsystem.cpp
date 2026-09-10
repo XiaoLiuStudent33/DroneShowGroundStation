@@ -11,6 +11,7 @@
 #include "DSPGCSUploadJobProtocol.h"
 
 #include "DSPGCSProtocol.h"
+#include "GCSVehicleStateProjection.h"
 #include "DSPGCSTransportFactory.h"
 #include "GCSServerAdapterSubsystem.h"
 #include "RouteGpsCaptureSubsystem.h"
@@ -82,37 +83,7 @@ namespace
 		return Result;
 	}
 
-	FDroneData ToProductionFleetDrone(const dspgcs::TelemetryDTO& Source, const bool bSelected)
-	{
-		FDroneData Target;
-		Target.DroneID = FromProductionProtocolString(Source.droneId);
-		Target.SysID = static_cast<int32>(Source.sysId);
-		Target.EndpointIdentity = FromProductionProtocolString(Source.connection.linkId);
-		Target.GPSLat = Source.gps.latitudeDeg;
-		Target.GPSLon = Source.gps.longitudeDeg;
-		Target.bGPSValid = Source.gps.valid;
-		Target.GPSFixType = static_cast<int32>(Source.gps.fixType);
-		Target.GPSSampleTimestampUtcMs = Source.sampleTimestampUtcMs;
-		Target.Altitude = Source.altitude.relativeMeters;
-		Target.AltitudeAMSL = Source.altitude.amslMeters;
-		Target.bAltitudeValid = Source.altitude.valid;
-		Target.Battery = Source.battery.valid
-			? Source.battery.remainingPercent
-			: 0.0f;
-		Target.Mode = FromProductionProtocolString(Source.mode.modeName);
-		Target.RSSI = Source.rssi.valid
-			? static_cast<int32>(Source.rssi.valueDbm)
-			: 0;
-		Target.bOnline = Source.connection.online;
-		Target.LEDColor = FLinearColor(
-			static_cast<float>(Source.led.red) / 255.0f,
-			static_cast<float>(Source.led.green) / 255.0f,
-			static_cast<float>(Source.led.blue) / 255.0f,
-			1.0f);
-		Target.bLEDColorValid = Source.led.confirmed;
-		Target.bSelected = bSelected;
-		return Target;
-	}
+
 }
 
 void UDSPGCSProductionTelemetryProviderSubsystem::Initialize(
@@ -432,7 +403,7 @@ void UDSPGCSProductionTelemetryProviderSubsystem::HandleTransportFrame(
 	for (size_t Index = 0; Index < CompleteBatch.items.size(); ++Index)
 	{
 		const dspgcs::TelemetryDTO& Source = CompleteBatch.items[Index];
-		Snapshot.Drones.Add(ToProductionFleetDrone(Source, Index == 0));
+		Snapshot.Drones.Add(GCSVehicleStateProjection::FromTransport(Source, Index == 0));
 		if (Source.mdhkStatus.received)
 		{
 			FMDHKTelemetryTableRow& Row = NewMDHKRows.AddDefaulted_GetRef();

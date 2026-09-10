@@ -182,3 +182,10 @@ Console Release/Debug、UE Editor Development成功；Console full/disarm/runtim
 ## 2026-09-10 阶段 A 自动化结果
 
 新增DroneGCS.Command.StableResultContract：11种ACK+未知状态、final true/false、原显示文本/目标/批次ID/错误信息、成功判断与文本独立。既有Selection测试fixture补齐State，断言未削弱。Console Release/Debug及UE Editor Development成功；Console full/disarm/runtime-config/concurrency/artifact10K/mission-benchmark六次成功；UE Full243+Synthetic1=244/244，0失败/未运行；Launcher32检查成功。复用Phase0已验证的回环/SafeTestMode配方，未跑真机。原报告见UnrealGCS/Saved/Automation/ArchitectureStageA-20260910-*；简要机器结果在BuildLogs/ArchitectureStageA-20260910/stage-a-results.json。与基线相比，新增1项；启动期既有Cesium等诊断不冒充已修复。
+
+
+## 2026-09-10 压缩重构阶段 B 完成
+
+基线 `4820a11`。既有 Coordinator 改为由 UIBridge Subsystem 初始化并稳定持有；Widget 重绑定仅 DetachView/绑定，不清除 Confirmed Mapping、AutoStart 事务与目标模型。命令选择/详情选择继续分别由 UIBridge/Fleet 持有；Assignment/Upload Authority 和协议不变。Telemetry 复用 FDroneData/Fleet 查询事件，私有纯转换与 Provider 通信代码分离，无新状态所有者。先复现重绑丢失再修复；新增无视图单次提交/状态投影测试，强化 Widget 重建和 Delegate、活动 Job 门禁夹具。Command result loss/re-entry 未改，继续技术债。
+
+Console Release/Debug、UE Editor Development 均通过；Console 六次回归通过；Launcher 32/32；UE Full 245 + Synthetic 1 = 246/246（阶段 A 244 + 新增 2），0 failed / 0 not-run。首轮 UploadDashboard 部分 UI 夹具绕过原门禁导致的失败已记录，并补充活动 binding 锁定/idle 草稿两个场景，未放宽生产门禁。证据目录 `BuildLogs/ArchitectureStageB-20260910`、`UnrealGCS/Saved/Automation/ArchitectureStageB-20260910-*`；详见 [阶段 B 简报](Architecture/STAGE_B_REPORT.md)。未运行真机、未改 Content/协议/配置，未 commit/push，未进入阶段 C。

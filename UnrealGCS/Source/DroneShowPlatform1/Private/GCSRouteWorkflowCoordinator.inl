@@ -257,17 +257,26 @@ namespace GCSRouteWorkflowPrivate
 	}
 }
 
+bool UGCSRouteWorkflowCoordinator::InitializeWorkflow(UGameInstance* GI)
+{
+	if (!IsInGameThread() || !GI) return false;
+	if (GameInstanceRef.IsValid() && GameInstanceRef.Get() != GI) return false;
+	GameInstanceRef = GI;
+	StartRefreshTicker();
+	return true;
+}
+
 bool UGCSRouteWorkflowCoordinator::Initialize(UGameInstance* GI, UUserWidget* RightPanel)
 {
-	Shutdown();
-	if (!IsInGameThread() || !GI || !RightPanel || !RightPanel->WidgetTree) return false;
+	if (!InitializeWorkflow(GI)) return false;
+	DetachView();
+	if (!RightPanel || !RightPanel->WidgetTree) return false;
 	UButton* Button = Cast<UButton>(RightPanel->WidgetTree->FindWidget(TEXT("BTN_ConsoleRouteUpload_1")));
 	if (!Button)
 	{
 		UE_LOG(LogGCSRouteWorkflow, Error, TEXT("WBP_GCS_RightPanel is missing BTN_ConsoleRouteUpload_1."));
 		return false;
 	}
-	GameInstanceRef = GI;
 	RightPanelWidgetRef = RightPanel;
 	OpenWorkflowButtonRef = Button;
 	Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteWorkflowClicked);
@@ -275,19 +284,30 @@ bool UGCSRouteWorkflowCoordinator::Initialize(UGameInstance* GI, UUserWidget* Ri
 	return true;
 }
 
-void UGCSRouteWorkflowCoordinator::Shutdown()
+void UGCSRouteWorkflowCoordinator::DetachView()
 {
-	StopRefreshTicker();
-	ClearConfirmedRouteSlotDisplayOverride();
 	UnbindCommandControls();
-	ClearRouteListModel();
-	if (UButton* Button = OpenWorkflowButtonRef.Get()) Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteWorkflowClicked);
+	if (UButton* Button = OpenWorkflowButtonRef.Get())
+		Button->OnClicked.RemoveDynamic(this, &UGCSRouteWorkflowCoordinator::HandleRouteWorkflowClicked);
+	if (UListView* List = GCSRouteWorkflowPrivate::Get<UListView>(UploadWidgets, TEXT("LIST_RouteUploadStates")))
+		List->ClearListItems();
 	if (RouteWorkflowWidget) RouteWorkflowWidget->RemoveFromParent();
 	RouteWorkflowWidget = nullptr;
 	RouteConvertWidgetRef.Reset(); RouteUploadWidgetRef.Reset();
 	WorkflowWidgets.Reset(); ConvertWidgets.Reset(); UploadWidgets.Reset();
-	OpenWorkflowButtonRef.Reset(); RightPanelWidgetRef.Reset(); GameInstanceRef.Reset();
+	OpenWorkflowButtonRef.Reset(); RightPanelWidgetRef.Reset();
+	ValidatedRouteRows.Reset(); RouteRowDiagnostics.Reset();
 	bBindingValid = false;
+	bViewVisible = false;
+}
+
+void UGCSRouteWorkflowCoordinator::Shutdown()
+{
+	StopRefreshTicker();
+	ClearConfirmedRouteSlotDisplayOverride();
+	DetachView();
+	ClearRouteListModel();
+	GameInstanceRef.Reset();
 	bUploadArtifactMismatch = false;
 	SelectedRouteImportFilePath.Reset();
 	SelectedRouteSourceDigest.Reset();
@@ -350,7 +370,6 @@ bool UGCSRouteWorkflowCoordinator::ShowRouteWorkflow(FString& OutError)
 		if (!BindWorkflowWidgets(RouteWorkflowWidget, OutError))
 		{
 			RouteWorkflowWidget->SetVisibility(ESlateVisibility::Hidden);
-			StopRefreshTicker();
 			return false;
 		}
 	}
@@ -506,7 +525,12 @@ bool UGCSRouteWorkflowCoordinator::BindWorkflowWidgets(UUserWidget* Workflow, FS
 		TEXT("BTN_RetryFailed"),TEXT("BTN_ApplyMaxConcurrency")}), UploadWidgets, OutError)) return false;
 	WorkflowWidgets = MoveTemp(WorkflowMap);
 	RouteConvertWidgetRef = Convert; RouteUploadWidgetRef = Upload;
-	ClearRouteListModel();
+	if (UListView* List = Get<UListView>(UploadWidgets, TEXT("LIST_RouteUploadStates")))
+	{
+		TArray<UObject*> Items;
+		for (UGCSRouteUploadListItem* Item : RouteListItems) Items.Add(Item);
+		List->SetListItems(Items);
+	}
 	SetEdit(UploadWidgets, TEXT("EDT_MaxConcurrency"),
 		FString::FromInt(AppliedMaxConcurrentTargets));
 	ApplyReadOnlyControlState();
@@ -3756,9 +3780,8 @@ void UGCSRouteWorkflowCoordinator::RefreshVisibleRouteRows()
 	}
 }
 
-bool UGCSRouteWorkflowCoordinator::TickRefresh(float DeltaSeconds)
+void UGCSRouteWorkflowCoordinator::AdvanceWorkflowState()
 {
-	(void)DeltaSeconds;
 	AdvanceAutoStartTransaction();
 	if (bHasConfirmedNpzMapping && ConfirmedNpzMapping.bValid &&
 		!IsCommandSelectionMutationBlocked())
@@ -3769,6 +3792,12 @@ bool UGCSRouteWorkflowCoordinator::TickRefresh(float DeltaSeconds)
 			InvalidateConfirmedNpzMapping(InvalidReason, true);
 		}
 	}
+}
+
+bool UGCSRouteWorkflowCoordinator::TickRefresh(float DeltaSeconds)
+{
+	(void)DeltaSeconds;
+	AdvanceWorkflowState();
 	if (RouteWorkflowWidget && RouteWorkflowWidget->IsVisible())
 	{
 		RefreshReadOnlyState();

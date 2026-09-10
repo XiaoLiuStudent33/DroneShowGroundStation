@@ -258,10 +258,10 @@ struct FGCSRouteAutoStartTestHooks
 #endif
 
 /**
- * Presentation-only owner for the Route Workflow window.
+ * GameInstance-scoped workflow intent and orchestration, with a detachable view.
  *
  * All displayed values remain owned by their production subsystems. This
- * coordinator owns one widget instance, validates its authored hierarchy, and
+ * coordinator retains confirmation/AutoStart state independently of its widget, and
  * copies authoritative read-only snapshots into UMG on the Game Thread.
  */
 UCLASS()
@@ -271,7 +271,10 @@ class UGCSRouteWorkflowCoordinator final : public UObject
 
 public:
 	static constexpr int32 DefaultMaxConcurrentTargets = 50;
+	bool InitializeWorkflow(UGameInstance* InGameInstance);
 	bool Initialize(UGameInstance* InGameInstance, UUserWidget* InRightPanelWidget);
+	/** Releases only presentation references/delegates; never resets workflow intent. */
+	void DetachView();
 	void Shutdown();
 	bool ShowRouteWorkflow(FString& OutError);
 	bool IsCommandSelectionMutationBlocked() const;
@@ -552,6 +555,7 @@ private:
 	void FinishAutoStart(EGCSRouteAutoStartState FinalState, const FString& Diagnostic);
 	void ResetAutoStartForNewDataset();
 	bool IsAutoStartInFlight() const;
+	void AdvanceWorkflowState();
 	bool TickRefresh(float DeltaSeconds);
 	void StartRefreshTicker();
 	void StopRefreshTicker();
