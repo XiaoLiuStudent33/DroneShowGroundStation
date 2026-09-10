@@ -2479,12 +2479,6 @@ void UGCSUIBridgeSubsystem::HandleStopClicked()
 void UGCSUIBridgeSubsystem::HandleProductionCommandResult(
 	const FGCSProductionCommandResult& Result)
 {
-	const auto IsSuccessfulResult = [](const FGCSProductionCommandResult& Value)
-	{
-		return Value.AckState.Equals(TEXT("SENT"), ESearchCase::IgnoreCase)
-			|| Value.AckState.Equals(TEXT("ACCEPTED"), ESearchCase::IgnoreCase)
-			|| Value.AckState.Equals(TEXT("SIMULATED"), ESearchCase::IgnoreCase);
-	};
 	const FString StateText =
 		Result.CommandType == EGCSProductionCommandType::HoverTest && Result.bSimulated
 			? TEXT("WAITING_COMMAND")
@@ -2508,7 +2502,7 @@ void UGCSUIBridgeSubsystem::HandleProductionCommandResult(
 	{
 		PendingMissionPlaybackCompletedDroneIDs.Add(Result.DroneID);
 		++PendingMissionPlaybackResultCount;
-		const bool bSucceeded = IsSuccessfulResult(Result);
+		const bool bSucceeded = Result.IsSuccessfulDispatch();
 		if (bSucceeded)
 		{
 			++PendingMissionPlaybackSucceededCount;
@@ -2572,7 +2566,7 @@ void UGCSUIBridgeSubsystem::HandleProductionCommandResult(
 	{
 		PendingTimeControlCompletedDroneIDs.Add(Result.DroneID);
 		++PendingTimeControlResultCount;
-		const bool bSucceeded = IsSuccessfulResult(Result);
+		const bool bSucceeded = Result.IsSuccessfulDispatch();
 		if (bSucceeded)
 		{
 			++PendingTimeControlSucceededCount;
@@ -2651,7 +2645,7 @@ void UGCSUIBridgeSubsystem::HandleProductionCommandResult(
 				TEXT("%s %s：%s"),
 				ActionName,
 				*Result.DroneID,
-				IsSuccessfulResult(Result) ? TEXT("已发送") : TEXT("失败")));
+				Result.IsSuccessfulDispatch() ? TEXT("已发送") : TEXT("失败")));
 	}
 	UE_LOG(
 		LogTemp,

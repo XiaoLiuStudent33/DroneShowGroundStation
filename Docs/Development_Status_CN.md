@@ -220,3 +220,7 @@ Phase 0已完成并记录局限，见 [Architecture/BASELINE.md](Architecture/BA
 ## 2026-09-09 架构治理Phase 1
 
 Phase1限定范围已完成；Phase2未开始。核心重复组装与两项低风险依赖收窄通过编译和Phase0完整可用自动回归。没有新增类/接口/状态或生产行为变化；未提交。逐文件理由、保留债务与验证见 [Architecture/17_PHASE1_REPORT.md](Architecture/17_PHASE1_REPORT.md)。
+
+## 2026-09-10 阶段 A：Command 稳定合同
+
+已完成现有结果结构的稳定状态补充、UI字符串判断替换、Private DSP转换边界及契约测试。原用户可见文本不变；阶段结束构建/回归通过，UE244/244、Launcher32/32。未重做全仓审计/架构方案，未进入B，未commit/push。构建日志、逐测试结果及等价检查位于BuildLogs/ArchitectureStageA-20260910。

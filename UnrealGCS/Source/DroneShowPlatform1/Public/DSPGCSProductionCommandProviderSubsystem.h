@@ -10,15 +10,7 @@
 #include "CoreMinimal.h"
 #include "DSPGCSProductionCommandTypes.h"
 #include "Subsystems/GameInstanceSubsystem.h"
-#include <cstdint>
-#include <vector>
 #include "DSPGCSProductionCommandProviderSubsystem.generated.h"
-
-namespace dspgcs
-{
-	struct MessageEnvelope;
-	struct CommandResultBatchDTO;
-}
 
 class UDSPGCSProductionTelemetryProviderSubsystem;
 
@@ -62,12 +54,10 @@ private:
 		TSet<FString> PendingDroneIDs;
 	};
 
-	void HandleResultPayload(
-		const dspgcs::MessageEnvelope& Envelope,
-		const std::vector<std::uint8_t>& Payload);
 	void ApplyResultBatch(
-		dspgcs::MessageEnvelope Envelope,
-		dspgcs::CommandResultBatchDTO Batch);
+		const FString& CommandID,
+		TArray<FGCSProductionCommandResult> Results,
+		bool bBatchFinal);
 	FString NextCommandID();
 
 	TWeakObjectPtr<UDSPGCSProductionTelemetryProviderSubsystem> Channel;

@@ -178,3 +178,7 @@ Repository-side second-PC logs: NONE
 ## 2026-09-09 Phase 1实测回归
 
 Console Release/Debug、UE Editor Development成功；Console full/disarm/runtime-config/concurrency/artifact10K/mission-benchmark六次运行全部通过；UE Full242+Synthetic1=243/243、0失败/未运行；Launcher Smoke32检查通过。测试名/时长与完整UE报告见 [Architecture/PHASE1_EVIDENCE.json](Architecture/PHASE1_EVIDENCE.json)。Receiver helper展开后与正式基线去空白文本等价；反射类声明和69资源不变。测试资产/入口无新增或修改，未运行硬件测试。
+
+## 2026-09-10 阶段 A 自动化结果
+
+新增DroneGCS.Command.StableResultContract：11种ACK+未知状态、final true/false、原显示文本/目标/批次ID/错误信息、成功判断与文本独立。既有Selection测试fixture补齐State，断言未削弱。Console Release/Debug及UE Editor Development成功；Console full/disarm/runtime-config/concurrency/artifact10K/mission-benchmark六次成功；UE Full243+Synthetic1=244/244，0失败/未运行；Launcher32检查成功。复用Phase0已验证的回环/SafeTestMode配方，未跑真机。原报告见UnrealGCS/Saved/Automation/ArchitectureStageA-20260910-*；简要机器结果在BuildLogs/ArchitectureStageA-20260910/stage-a-results.json。与基线相比，新增1项；启动期既有Cesium等诊断不冒充已修复。

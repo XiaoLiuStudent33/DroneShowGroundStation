@@ -336,6 +336,7 @@ bool FGCSSelectionStateSeparationTest::RunTest(const FString& Parameters)
 		PauseResult.DroneID = DroneID;
 		PauseResult.CommandType = EGCSProductionCommandType::MissionPause;
 		PauseResult.AckState = TEXT("ACCEPTED");
+		PauseResult.State = EGCSCommandResultState::Accepted;
 		PauseResult.bFinal = true;
 		Bridge->HandleProductionCommandResult(PauseResult);
 	}

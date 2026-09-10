@@ -99,6 +99,24 @@ struct DRONESHOWPLATFORM1_API FGCSProductionCommandParameters
 	float AdvancedSpeedMetersPerSecond = 0.0f;
 };
 
+/** Application result semantics; values are independent of wire ACK numbers. */
+UENUM(BlueprintType)
+enum class EGCSCommandResultState : uint8
+{
+	Unknown,
+	Received,
+	Validated,
+	Queued,
+	Sent,
+	InProgress,
+	Accepted,
+	Rejected,
+	Failed,
+	TimedOut,
+	Cancelled,
+	Simulated
+};
+
 USTRUCT(BlueprintType)
 struct DRONESHOWPLATFORM1_API FGCSProductionCommandResult
 {
@@ -118,6 +136,18 @@ struct DRONESHOWPLATFORM1_API FGCSProductionCommandResult
 
 	UPROPERTY(BlueprintReadOnly, Category = "Drone GCS|Command")
 	FString AckState;
+
+	/** Stable decision input. AckState remains unchanged display text only. */
+	UPROPERTY(BlueprintReadOnly, Category = "Drone GCS|Command")
+	EGCSCommandResultState State = EGCSCommandResultState::Unknown;
+
+	/** Preserves the existing Sent/Accepted/Simulated UI policy, not physical completion. */
+	bool IsSuccessfulDispatch() const
+	{
+		return State == EGCSCommandResultState::Sent
+			|| State == EGCSCommandResultState::Accepted
+			|| State == EGCSCommandResultState::Simulated;
+	}
 
 	UPROPERTY(BlueprintReadOnly, Category = "Drone GCS|Command")
 	FString ErrorCode;

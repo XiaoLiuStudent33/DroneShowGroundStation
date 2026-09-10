@@ -144,3 +144,7 @@ Console Release x64 Solution Build 已于 2026-08-25 通过（0 errors、12 warn
 ## 2026-09-09 Phase 1完成，Phase 2未开始
 
 正式基线b3da56f；本轮仅3个生产文件局部整理：Receiver纯参数组装去重、CommandProvider公共头前置声明、Sockets/Networking降Private。未改业务行为/Blueprint/协议/Authority。Console Release/Debug、UE Development构建通过；UE243/243、Console6次运行、Launcher32检查通过。生产代码+38/-39行。未自行stage/commit；详见 [Architecture/17_PHASE1_REPORT.md](Architecture/17_PHASE1_REPORT.md)。
+
+## 2026-09-10 压缩重构阶段 A 完成
+
+后续按用户确认合并为A Command+Stable Contract、B Coordinator+Telemetry+Workflow State、C UIBridge Slimming+Presenter/Application API、Final UI Migration/Readiness；本轮仅A，B未开始。基线b5f9a6d。复用现有CommandType/Parameters/Result，新增EGCSCommandResultState及IsSuccessfulDispatch；AckState原文本保留显示，UI业务判断改用状态。DSP结果转换仅在Private，CommandProvider公共头不再出现DSP wire类型；请求签名、CommandID、参数、ACK/timeout/retry、映射/上传/遥测来源不变。无新DTO、Service或Authority；不改资产、不提交。Console Release/Debug、UE Development通过；Console六次回归、Launcher32/32、UE244/244（原243+新契约1）通过。原final-result丢失/事件重入、UI工作流状态归属及Telemetry/Upload公共合同仍待后续限定阶段处理。MavlinkCommand.cpp仅发现行尾变化，Git内容hash与HEAD一致，保留未处理。

@@ -9,6 +9,7 @@
 #include "Async/Async.h"
 #include "DSPGCSProductionTelemetryProviderSubsystem.h"
 #include "DSPGCSProtocol.h"
+#include "GCSCommandResultConversion.h"
 #include "Misc/ConfigCacheIni.h"
 
 namespace
@@ -46,24 +47,6 @@ namespace
 		return dspgcs::CommandType::Arm;
 	}
 
-	FString AckStateName(const dspgcs::AckState State)
-	{
-		switch (State)
-		{
-		case dspgcs::AckState::Received: return TEXT("RECEIVED");
-		case dspgcs::AckState::Validated: return TEXT("VALIDATED");
-		case dspgcs::AckState::Queued: return TEXT("QUEUED");
-		case dspgcs::AckState::Sent: return TEXT("SENT");
-		case dspgcs::AckState::InProgress: return TEXT("IN_PROGRESS");
-		case dspgcs::AckState::Accepted: return TEXT("ACCEPTED");
-		case dspgcs::AckState::Rejected: return TEXT("REJECTED");
-		case dspgcs::AckState::Failed: return TEXT("FAILED");
-		case dspgcs::AckState::TimedOut: return TEXT("TIMEOUT");
-		case dspgcs::AckState::Cancelled: return TEXT("CANCELLED");
-		case dspgcs::AckState::Simulated: return TEXT("SIMULATED");
-		}
-		return TEXT("UNKNOWN");
-	}
 
 	FString CommandFromProtocolString(const std::string& Value)
 	{
@@ -111,12 +94,31 @@ void UDSPGCSProductionCommandProviderSubsystem::Initialize(
 	const TWeakObjectPtr<UDSPGCSProductionCommandProviderSubsystem> WeakThis(this);
 	ProductionChannel->SetCommandResultHandler(
 		[WeakThis](
-			const dspgcs::MessageEnvelope& Envelope,
+			const dspgcs::MessageEnvelope&,
 			const std::vector<std::uint8_t>& Payload)
 		{
-			if (UDSPGCSProductionCommandProviderSubsystem* Self = WeakThis.Get())
+			if (WeakThis.Get())
 			{
-				Self->HandleResultPayload(Envelope, Payload);
+				dspgcs::CommandResultBatchDTO Batch;
+				if (!dspgcs::DecodeCommandResult(Payload, Batch))
+				{
+					return;
+				}
+				AsyncTask(ENamedThreads::GameThread,
+					[WeakThis, Batch = MoveTemp(Batch)]() mutable
+				{
+					if (UDSPGCSProductionCommandProviderSubsystem* Provider = WeakThis.Get())
+					{
+						const FString CommandID = CommandFromProtocolString(Batch.commandId);
+						TArray<FGCSProductionCommandResult> Results;
+						Results.Reserve(static_cast<int32>(Batch.results.size()));
+						for (const dspgcs::DroneCommandResultDTO& Item : Batch.results)
+						{
+							Results.Add(GCSCommandResultConversion::ToResult(CommandID, Item));
+						}
+						Provider->ApplyResultBatch(CommandID, MoveTemp(Results), Batch.final);
+					}
+				});
 			}
 		});
 	UE_LOG(LogTemp, Display, TEXT("DSP-GCS production command provider enabled (SAFE_TEST_MODE)."));
@@ -284,36 +286,11 @@ void UDSPGCSProductionCommandProviderSubsystem::SetControlMode(
 			: TEXT("MANUAL"));
 }
 
-void UDSPGCSProductionCommandProviderSubsystem::HandleResultPayload(
-	const dspgcs::MessageEnvelope& Envelope,
-	const std::vector<std::uint8_t>& Payload)
-{
-	dspgcs::CommandResultBatchDTO Batch;
-	if (!dspgcs::DecodeCommandResult(Payload, Batch))
-	{
-		return;
-	}
-	const TWeakObjectPtr<UDSPGCSProductionCommandProviderSubsystem> WeakThis(this);
-	AsyncTask(
-		ENamedThreads::GameThread,
-		[WeakThis,
-		 EnvelopeCopy = dspgcs::MessageEnvelope(Envelope),
-		 BatchCopy = MoveTemp(Batch)]() mutable
-	{
-		if (UDSPGCSProductionCommandProviderSubsystem* Self = WeakThis.Get())
-		{
-			Self->ApplyResultBatch(
-				MoveTemp(EnvelopeCopy),
-				MoveTemp(BatchCopy));
-		}
-	});
-}
-
 void UDSPGCSProductionCommandProviderSubsystem::ApplyResultBatch(
-	dspgcs::MessageEnvelope Envelope,
-	dspgcs::CommandResultBatchDTO Batch)
+	const FString& CommandID,
+	TArray<FGCSProductionCommandResult> Results,
+	const bool bBatchFinal)
 {
-	const FString CommandID = CommandFromProtocolString(Batch.commandId);
 	FPendingCommand* Pending = PendingCommands.Find(CommandID);
 	if (!Pending)
 	{
@@ -321,18 +298,10 @@ void UDSPGCSProductionCommandProviderSubsystem::ApplyResultBatch(
 		return;
 	}
 
-	for (const dspgcs::DroneCommandResultDTO& ProtocolResult : Batch.results)
+	for (FGCSProductionCommandResult& Result : Results)
 	{
-		FGCSProductionCommandResult Result;
-		Result.CommandID = CommandID;
-		Result.DroneID = CommandFromProtocolString(ProtocolResult.droneId);
 		Result.CommandType = Pending->Type;
 		Result.Source = Pending->Source;
-		Result.AckState = AckStateName(ProtocolResult.ackState);
-		Result.ErrorCode = CommandFromProtocolString(ProtocolResult.error.code);
-		Result.Detail = CommandFromProtocolString(ProtocolResult.error.message);
-		Result.bSimulated = ProtocolResult.ackState == dspgcs::AckState::Simulated;
-		Result.bFinal = ProtocolResult.final;
 		LastResult = Result;
 		Pending->PendingDroneIDs.Remove(Result.DroneID);
 		OnCommandResult.Broadcast(Result);
@@ -346,7 +315,7 @@ void UDSPGCSProductionCommandProviderSubsystem::ApplyResultBatch(
 			*Result.Source);
 	}
 
-	if (Batch.final || Pending->PendingDroneIDs.IsEmpty())
+	if (bBatchFinal || Pending->PendingDroneIDs.IsEmpty())
 	{
 		PendingCommands.Remove(CommandID);
 	}
