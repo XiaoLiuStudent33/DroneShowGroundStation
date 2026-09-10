@@ -140,35 +140,11 @@ namespace
 			: INDEX_NONE;
 	}
 
-	bool SetTelemetryInteger(UObject* Object, const FName Name, const int32 Value)
-	{
-		if (FIntProperty* Property = FindFProperty<FIntProperty>(Object->GetClass(), Name))
-		{
-			Property->SetPropertyValue_InContainer(Object, Value);
-			return true;
-		}
-		return false;
-	}
 
-	bool SetTelemetryInteger64(UObject* Object, const FName Name, const int64 Value)
-	{
-		if (FInt64Property* Property = FindFProperty<FInt64Property>(Object->GetClass(), Name))
-		{
-			Property->SetPropertyValue_InContainer(Object, Value);
-			return true;
-		}
-		return false;
-	}
 
-	bool SetTelemetryString(UObject* Object, const FName Name, const FString& Value)
-	{
-		if (FStrProperty* Property = FindFProperty<FStrProperty>(Object->GetClass(), Name))
-		{
-			Property->SetPropertyValue_InContainer(Object, Value);
-			return true;
-		}
-		return false;
-	}
+
+
+
 
 	bool SetFleetString(
 		UObject* Object,
@@ -221,20 +197,7 @@ namespace
 		return false;
 	}
 
-	bool SetTelemetryReal(UObject* Object, const FName Name, const double Value)
-	{
-		if (FDoubleProperty* Property = FindFProperty<FDoubleProperty>(Object->GetClass(), Name))
-		{
-			Property->SetPropertyValue_InContainer(Object, Value);
-			return true;
-		}
-		if (FFloatProperty* Property = FindFProperty<FFloatProperty>(Object->GetClass(), Name))
-		{
-			Property->SetPropertyValue_InContainer(Object, static_cast<float>(Value));
-			return true;
-		}
-		return false;
-	}
+
 
 	bool IsSceneMapActor(const AActor* Actor)
 	{
@@ -650,6 +613,17 @@ UGCSUIBridgeSubsystem::UGCSUIBridgeSubsystem()
 void UGCSUIBridgeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	Collection.InitializeDependency<UDSPGCSProductionCommandProviderSubsystem>();
+	if (UDSPGCSProductionCommandProviderSubsystem* Commands =
+		GetGameInstance()->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>())
+	{
+		Commands->OnCommandResult.RemoveDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleProductionCommandResult);
+		Commands->OnCommandResult.AddDynamic(
+			this,
+			&UGCSUIBridgeSubsystem::HandleProductionCommandResult);
+	}
 	RouteWorkflowCoordinator = NewObject<UGCSRouteWorkflowCoordinator>(this);
 	RouteWorkflowCoordinator->InitializeWorkflow(GetGameInstance());
 }
@@ -773,16 +747,6 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	RefreshHoverMVPControls();
 	RefreshHoverTestControls();
 
-	if (UDSPGCSProductionCommandProviderSubsystem* Commands =
-		GetGameInstance()->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>())
-	{
-		Commands->OnCommandResult.RemoveDynamic(
-			this,
-			&UGCSUIBridgeSubsystem::HandleProductionCommandResult);
-		Commands->OnCommandResult.AddDynamic(
-			this,
-			&UGCSUIBridgeSubsystem::HandleProductionCommandResult);
-	}
 	if (UDSPGCSProductionTelemetryProviderSubsystem* Telemetry =
 		GetGameInstance()->GetSubsystem<UDSPGCSProductionTelemetryProviderSubsystem>())
 	{
@@ -2245,15 +2209,30 @@ void UGCSUIBridgeSubsystem::HandleTimeStartClicked()
 				: TEXT("已有授时任务，请先结束当前任务，勿重复授时"));
 		return;
 	}
-	USpinBox* HourInput = FindRightPanelSpinBox(TEXT("SPN_TimeHour"));
-	USpinBox* MinuteInput = FindRightPanelSpinBox(TEXT("SPN_TimeMinute"));
-	USpinBox* SecondInput = FindRightPanelSpinBox(TEXT("SPN_TimeSecond"));
-	const TArray<FString> Targets = GetCommandTargetDroneIDs();
-	if (!HourInput || !MinuteInput || !SecondInput)
+	USpinBox* Hour = FindRightPanelSpinBox(TEXT("SPN_TimeHour"));
+    USpinBox* Minute = FindRightPanelSpinBox(TEXT("SPN_TimeMinute"));
+    USpinBox* Second = FindRightPanelSpinBox(TEXT("SPN_TimeSecond"));
+    if (!Hour || !Minute || !Second)
+    {
+        SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("授时控件缺失，请检查资产命名"));
+        return;
+    }
+    StartScheduledMission(FMath::RoundToInt(Hour->GetValue()),
+        FMath::RoundToInt(Minute->GetValue()), FMath::RoundToInt(Second->GetValue()));
+}
+
+void UGCSUIBridgeSubsystem::StartScheduledMission(int32 Hour, int32 Minute, int32 Second)
+{
+	if (bTimeControlCountdownActive || !PendingTimeControlCommandID.IsEmpty())
 	{
-		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("授时控件缺失，请检查资产命名"));
+		SetRightPanelText(
+			TEXT("TXT_TimeControlStatus"),
+			PendingTimeControlCommandType == EGCSProductionCommandType::TimeStop
+				? TEXT("正在取消授时并发送降落，请等待完成")
+				: TEXT("已有授时任务，请先结束当前任务，勿重复授时"));
 		return;
 	}
+	const TArray<FString> Targets = GetCommandTargetDroneIDs();
 	if (Targets.IsEmpty())
 	{
 		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("请先选择无人机"));
@@ -2275,9 +2254,9 @@ void UGCSUIBridgeSubsystem::HandleTimeStartClicked()
 		return;
 	}
 
-	const int32 Hour = FMath::Clamp(FMath::RoundToInt(HourInput->GetValue()), 0, 23);
-	const int32 Minute = FMath::Clamp(FMath::RoundToInt(MinuteInput->GetValue()), 0, 59);
-	const int32 Second = FMath::Clamp(FMath::RoundToInt(SecondInput->GetValue()), 0, 59);
+	Hour = FMath::Clamp(Hour, 0, 23);
+	Minute = FMath::Clamp(Minute, 0, 59);
+	Second = FMath::Clamp(Second, 0, 59);
 	const FDateTime Now = FDateTime::Now();
 	FDateTime RequestedTimeLocal(
 		Now.GetYear(),
@@ -2417,13 +2396,15 @@ void UGCSUIBridgeSubsystem::HandleTimeStopClicked()
 		Targets.Num());
 }
 
-void UGCSUIBridgeSubsystem::HandleExecuteDanceStepClicked()
+void UGCSUIBridgeSubsystem::HandleExecuteDanceStepClicked() { ExecuteDanceStep(); }
+
+FString UGCSUIBridgeSubsystem::ExecuteDanceStep()
 {
 	const TArray<FString> Targets = GetCommandTargetDroneIDs();
 	if (Targets.IsEmpty())
 	{
 		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("请先选择无人机"));
-		return;
+		return {};
 	}
 
 	const FString CommandID = SubmitProductionCommandForTargets(
@@ -2432,15 +2413,18 @@ void UGCSUIBridgeSubsystem::HandleExecuteDanceStepClicked()
 	if (CommandID.IsEmpty())
 	{
 		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("执行舞步发送失败"));
-		return;
+		return {};
 	}
 
 	SetRightPanelText(
 		TEXT("TXT_TimeControlStatus"),
 		FString::Printf(TEXT("执行舞步已发送：AUTO＋起飞（%d架）"), Targets.Num()));
+	return CommandID;
 }
 
-void UGCSUIBridgeSubsystem::HandleEndDanceStepClicked()
+void UGCSUIBridgeSubsystem::HandleEndDanceStepClicked() { EndDanceStep(); }
+
+FString UGCSUIBridgeSubsystem::EndDanceStep()
 {
 	const TArray<FString> Targets = TimeControlTargetDroneIDs.IsEmpty()
 		? GetCommandTargetDroneIDs()
@@ -2448,7 +2432,7 @@ void UGCSUIBridgeSubsystem::HandleEndDanceStepClicked()
 	if (Targets.IsEmpty())
 	{
 		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("请先选择无人机"));
-		return;
+		return {};
 	}
 
 	FGCSProductionCommandParameters Parameters;
@@ -2460,7 +2444,7 @@ void UGCSUIBridgeSubsystem::HandleEndDanceStepClicked()
 	if (CommandID.IsEmpty())
 	{
 		SetRightPanelText(TEXT("TXT_TimeControlStatus"), TEXT("结束舞步发送失败"));
-		return;
+		return {};
 	}
 
 	if (URoutePreviewSubsystem* RoutePreview =
@@ -2475,6 +2459,7 @@ void UGCSUIBridgeSubsystem::HandleEndDanceStepClicked()
 	SetRightPanelText(
 		TEXT("TXT_TimeControlStatus"),
 		FString::Printf(TEXT("结束舞步已发送：取消授时＋降落（%d架）"), Targets.Num()));
+	return CommandID;
 }
 
 void UGCSUIBridgeSubsystem::HandleStopClicked()
@@ -2487,20 +2472,7 @@ void UGCSUIBridgeSubsystem::HandleStopClicked()
 void UGCSUIBridgeSubsystem::HandleProductionCommandResult(
 	const FGCSProductionCommandResult& Result)
 {
-	const FString StateText =
-		Result.CommandType == EGCSProductionCommandType::HoverTest && Result.bSimulated
-			? TEXT("WAITING_COMMAND")
-			: Result.AckState;
-	const FString Diagnostic = !Result.Detail.IsEmpty()
-		? Result.Detail
-		: Result.ErrorCode;
-	LastCommandResultText = FString::Printf(
-		TEXT("CMD %s  %s%s%s  %s"),
-		*Result.DroneID,
-		*StateText,
-		Diagnostic.IsEmpty() ? TEXT("") : TEXT("  "),
-		*Diagnostic,
-		*Result.CommandID);
+	LastCommandResultText = FGCSUIWidgetPresenter::CommandResultText(Result);
 	SetText(TEXT("Attitude"), LastCommandResultText);
 
 	if (!PendingMissionPlaybackCommandID.IsEmpty()
@@ -4824,16 +4796,7 @@ UGCSUIBridgeSubsystem::GetProductionTelemetryLinkState() const
 
 void UGCSUIBridgeSubsystem::RefreshProductionCommandAvailability()
 {
-	const UGameInstance* GameInstance = GetGameInstance();
-	const UDSPGCSProductionCommandProviderSubsystem* Commands = GameInstance
-		? GameInstance->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>()
-		: nullptr;
-	const UDSPGCSProductionTelemetryProviderSubsystem* Telemetry = GameInstance
-		? GameInstance->GetSubsystem<UDSPGCSProductionTelemetryProviderSubsystem>()
-		: nullptr;
-	const bool bCanSendProductionCommands = Commands && Commands->IsEnabled()
-		&& Telemetry && Telemetry->IsEnabled()
-		&& Telemetry->IsTelemetryLinkConnected();
+	const bool bCanSendProductionCommands = CanSendOperatorCommands();
 
 	for (const FName ButtonName :
 		{ FName(TEXT("BTN_Unlock")),
@@ -6982,17 +6945,7 @@ void UGCSUIBridgeSubsystem::RefreshTelemetryTableFromProduction()
 		return;
 	}
 
-	TArray<FMDHKTelemetryTableRow> Rows = Provider->GetMDHKTelemetryRows();
-	Rows.Sort([](const FMDHKTelemetryTableRow& Left, const FMDHKTelemetryTableRow& Right)
-	{
-		const int32 LeftNumber = ParseLogicalDroneNumber(Left.DroneID);
-		const int32 RightNumber = ParseLogicalDroneNumber(Right.DroneID);
-		if (LeftNumber != INDEX_NONE && RightNumber != INDEX_NONE && LeftNumber != RightNumber)
-		{
-			return LeftNumber < RightNumber;
-		}
-		return Left.DroneID < Right.DroneID;
-	});
+	const TArray<FMDHKTelemetryTableRow> Rows = GetTelemetryTableRows();
 
 	bool bRebuildItems = TelemetryRowObjects.Num() != Rows.Num()
 		|| TelemetryList->GetNumItems() != Rows.Num();
@@ -7034,43 +6987,7 @@ void UGCSUIBridgeSubsystem::RefreshTelemetryTableFromProduction()
 			TelemetryList->AddItem(RowObject);
 		}
 
-		const int32 LogicalID = ParseLogicalDroneNumber(Row.DroneID);
-		const bool bPropertiesValid =
-			SetTelemetryInteger(RowObject, TEXT("UavID"), LogicalID) &&
-			SetTelemetryInteger(RowObject, TEXT("Battery"),
-				Row.bBatteryRemainingValid ? Row.BatteryRemainingPercent : -1) &&
-			SetTelemetryReal(RowObject, TEXT("Temperature"),
-				Row.bBatteryTemperatureValid ? Row.BatteryTemperatureCelsius : 0.0) &&
-			SetTelemetryReal(RowObject, TEXT("Cell1"), Row.bCell1Valid ? Row.Cell1Volts : 0.0) &&
-			SetTelemetryReal(RowObject, TEXT("Cell2"), Row.bCell2Valid ? Row.Cell2Volts : 0.0) &&
-			SetTelemetryReal(RowObject, TEXT("Cell3"), Row.bCell3Valid ? Row.Cell3Volts : 0.0) &&
-			SetTelemetryReal(RowObject, TEXT("Cell4"), Row.bCell4Valid ? Row.Cell4Volts : 0.0) &&
-			SetTelemetryReal(RowObject, TEXT("Latitude"), Row.bGPSValid ? Row.LatitudeDeg : 0.0) &&
-			SetTelemetryReal(RowObject, TEXT("Longitude"), Row.bGPSValid ? Row.LongitudeDeg : 0.0) &&
-			SetTelemetryReal(RowObject, TEXT("Altitude"),
-				Row.bAltitudeValid ? Row.AltitudeAmslMeters : 0.0) &&
-			SetTelemetryInteger64(RowObject, TEXT("TimeBootMs"), Row.TimeBootMs) &&
-			SetTelemetryString(RowObject, TEXT("GPSUtc"), Row.GPSUtc) &&
-			SetTelemetryString(RowObject, TEXT("ValidFlags"), Row.ValidFlagsText) &&
-			SetTelemetryReal(RowObject, TEXT("RelativeAltitude"), Row.RelativeAltitudeMeters) &&
-			SetTelemetryInteger64(RowObject, TEXT("FreeMemoryBytes"), Row.FreeMemoryBytes) &&
-			SetTelemetryString(RowObject, TEXT("FlightSWVersion"), Row.FlightSoftwareVersionText) &&
-			SetTelemetryReal(RowObject, TEXT("WaypointDistance"), Row.WaypointDistanceMeters) &&
-			SetTelemetryReal(RowObject, TEXT("CompassVariance"), Row.CompassVariance) &&
-			SetTelemetryReal(RowObject, TEXT("MagField1"), Row.MagneticField1Mgauss) &&
-			SetTelemetryReal(RowObject, TEXT("MagField2"), Row.MagneticField2Mgauss) &&
-			SetTelemetryInteger(RowObject, TEXT("BatteryCycleCount"), Row.BatteryCycleCount) &&
-			SetTelemetryInteger(RowObject, TEXT("CellVoltageDeltaMv"), Row.CellVoltageDeltaMv) &&
-			SetTelemetryString(RowObject, TEXT("EKFFlags"), Row.EKFFlagsText) &&
-			SetTelemetryInteger(RowObject, TEXT("MissionSeq"), Row.MissionSequence) &&
-			SetTelemetryInteger(RowObject, TEXT("MissionTotal"), Row.MissionTotal) &&
-			SetTelemetryReal(RowObject, TEXT("BatteryCurrent"), Row.BatteryCurrentAmps) &&
-			SetTelemetryInteger(RowObject, TEXT("GPSFixType"), Row.GPSFixType) &&
-			SetTelemetryInteger(RowObject, TEXT("SatellitesVisible"), Row.SatellitesVisible) &&
-			SetTelemetryInteger(RowObject, TEXT("PayloadSchemaVersion"), Row.PayloadSchemaVersion) &&
-			SetTelemetryString(RowObject, TEXT("RGB"), Row.RGBText) &&
-			SetTelemetryString(RowObject, TEXT("FlightCustomVersion"), Row.FlightCustomVersionText) &&
-			SetTelemetryString(RowObject, TEXT("HardwareID"), Row.HardwareID);
+		const bool bPropertiesValid = FGCSUIWidgetPresenter::ApplyTelemetryRow(RowObject, Row);
 		if (!bPropertiesValid)
 		{
 			UE_LOG(LogTemp, Error,
@@ -7147,3 +7064,134 @@ UUserWidget* UGCSUIBridgeSubsystem::CreateNavigationPage(
 }
 
 #include "GCSRouteWorkflowCoordinator.inl"
+
+TArray<FMDHKTelemetryTableRow> UGCSUIBridgeSubsystem::GetTelemetryTableRows() const
+{
+    const auto* Provider = GetGameInstance()
+        ? GetGameInstance()->GetSubsystem<UDSPGCSProductionTelemetryProviderSubsystem>() : nullptr;
+    if (!Provider) return {};
+	TArray<FMDHKTelemetryTableRow> Rows = Provider->GetMDHKTelemetryRows();
+	Rows.Sort([](const FMDHKTelemetryTableRow& Left, const FMDHKTelemetryTableRow& Right)
+	{
+		const int32 LeftNumber = ParseLogicalDroneNumber(Left.DroneID);
+		const int32 RightNumber = ParseLogicalDroneNumber(Right.DroneID);
+		if (LeftNumber != INDEX_NONE && RightNumber != INDEX_NONE && LeftNumber != RightNumber)
+		{
+			return LeftNumber < RightNumber;
+		}
+		return Left.DroneID < Right.DroneID;
+	});
+
+	return Rows;
+}
+
+bool UGCSUIBridgeSubsystem::CanSendOperatorCommands() const
+{
+    const auto* Commands = GetGameInstance()
+        ? GetGameInstance()->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>() : nullptr;
+    return Commands && Commands->IsReadyForOperatorCommands();
+}
+
+FGCSProductionCommandResult UGCSUIBridgeSubsystem::GetCommandResult() const
+{
+    const auto* Commands = GetGameInstance()
+        ? GetGameInstance()->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>() : nullptr;
+    return Commands ? Commands->GetLastResult() : FGCSProductionCommandResult{};
+}
+
+EDSPGCSTelemetryLinkState UGCSUIBridgeSubsystem::GetConnectionState() const
+{
+    const auto* Source = GetGameInstance()->GetSubsystem<UDSPGCSProductionTelemetryProviderSubsystem>();
+    return Source ? Source->GetTelemetryLinkState() : EDSPGCSTelemetryLinkState::Disconnected;
+}
+FGCSProductionCommandResultEvent& UGCSUIBridgeSubsystem::GetCommandResultEvent()
+{
+    return GetGameInstance()->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>()->OnCommandResult;
+}
+void UGCSUIBridgeSubsystem::SetOperatorControlMode(EGCSGroundStationControlMode Mode)
+{
+    GetGameInstance()->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>()->SetControlMode(Mode);
+}
+EGCSGroundStationControlMode UGCSUIBridgeSubsystem::GetOperatorControlMode() const
+{
+    return GetGameInstance()->GetSubsystem<UDSPGCSProductionCommandProviderSubsystem>()->GetControlMode();
+}
+bool UGCSUIBridgeSubsystem::CanExecuteOperatorCommand(EGCSProductionCommandType Type) const
+{
+    if (!CanSendOperatorCommands()) return false;
+    if (Type == EGCSProductionCommandType::MissionPause) return PendingMissionPlaybackCommandID.IsEmpty();
+    if (Type == EGCSProductionCommandType::MissionForward || Type == EGCSProductionCommandType::MissionBackward)
+        return PendingMissionPlaybackCommandID.IsEmpty() && AreCurrentCommandTargetsMissionPaused();
+    return true;
+}
+FString UGCSUIBridgeSubsystem::ExecuteOperatorCommand(EGCSProductionCommandType Type,
+    const FGCSProductionCommandParameters& Parameters, bool bOperatorConfirmed)
+{
+    // Confirmation is an explicit UI intent, never inferred from a Button label.
+    switch (Type)
+    {
+    case EGCSProductionCommandType::Shutdown:
+    case EGCSProductionCommandType::Standby:
+    case EGCSProductionCommandType::Reboot:
+    case EGCSProductionCommandType::TriggerSmoke:
+        if (!bOperatorConfirmed) return {};
+        break;
+    default: break;
+    }
+    if (Type == EGCSProductionCommandType::MissionPause || Type == EGCSProductionCommandType::MissionForward
+        || Type == EGCSProductionCommandType::MissionBackward)
+    {
+        if (!PendingMissionPlaybackCommandID.IsEmpty()) return {};
+        SubmitMissionPlaybackCommand(Type);
+        return PendingMissionPlaybackCommandID;
+    }
+    if (Type == EGCSProductionCommandType::TimeStart)
+    {
+        if (bTimeControlCountdownActive || !PendingTimeControlCommandID.IsEmpty()) return {};
+        StartScheduledMission(Parameters.ScheduledHour, Parameters.ScheduledMinute, Parameters.ScheduledSecond);
+        return PendingTimeControlCommandID;
+    }
+    if (Type == EGCSProductionCommandType::TimeStop) { HandleTimeStopClicked(); return PendingTimeControlCommandID; }
+    if (Type == EGCSProductionCommandType::ExecuteDanceStep) { return ExecuteDanceStep(); }
+    if (Type == EGCSProductionCommandType::EndDanceStep) { return EndDanceStep(); }
+    const TArray<FString> Targets = GetCommandTargetDroneIDs();
+    const FString ID = SubmitSelectedProductionCommand(Type, Parameters);
+    if (!ID.IsEmpty() && (Type == EGCSProductionCommandType::RTL || Type == EGCSProductionCommandType::Land))
+    {
+        ClearMissionPausedTargets(Targets);
+        RefreshProductionCommandAvailability();
+    }
+    return ID;
+}
+FGCSWorkflowView UGCSUIBridgeSubsystem::GetWorkflowState() const
+{
+    return RouteWorkflowCoordinator ? RouteWorkflowCoordinator->GetWorkflowView() : FGCSWorkflowView{};
+}
+void UGCSUIBridgeSubsystem::SelectRouteFile(const FString& Path) { if (RouteWorkflowCoordinator) RouteWorkflowCoordinator->SelectRouteFile(Path); }
+void UGCSUIBridgeSubsystem::SelectRouteWorkspace(const FString& Path) { if (RouteWorkflowCoordinator) RouteWorkflowCoordinator->SelectWorkspace(Path); }
+void UGCSUIBridgeSubsystem::CommitRoutePreview(const FString& Latitude, const FString& Longitude, const FString& Altitude)
+{ if (RouteWorkflowCoordinator) RouteWorkflowCoordinator->LoadPreviewWithOrigin(Latitude, Longitude, Altitude); }
+void UGCSUIBridgeSubsystem::ApplyUploadConcurrency(const FString& Value)
+{ if (RouteWorkflowCoordinator) RouteWorkflowCoordinator->ApplyUploadConcurrency(Value); }
+void UGCSUIBridgeSubsystem::ExecuteWorkflowAction(EGCSWorkflowAction Action)
+{ if (RouteWorkflowCoordinator) RouteWorkflowCoordinator->ExecuteWorkflowAction(Action); }
+
+FGCSMissionView UGCSUIBridgeSubsystem::GetMissionState() const
+{
+    FGCSMissionView View;
+    View.TargetDroneIDs = TimeControlTargetDroneIDs;
+    View.PendingCommandID = PendingTimeControlCommandID;
+    View.ScheduledLocalTime = ScheduledTimeLocal;
+    View.bCountdownActive = bTimeControlCountdownActive;
+    View.TargetCount = PendingTimeControlTargetCount;
+    View.ResultCount = PendingTimeControlResultCount;
+    View.SucceededCount = PendingTimeControlSucceededCount;
+    return View;
+}
+
+FGCSWorkflowView UGCSUIBridgeSubsystem::GetWorkflowStateForOrigin(
+    const FString& Latitude, const FString& Longitude, const FString& Altitude) const
+{
+    return RouteWorkflowCoordinator
+        ? RouteWorkflowCoordinator->GetWorkflowViewForOrigin(Latitude, Longitude, Altitude) : FGCSWorkflowView{};
+}

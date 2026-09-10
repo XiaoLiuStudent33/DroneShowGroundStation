@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "GCSWorkflowTypes.h"
 #include "Components/ComboBoxString.h"
 #include "Containers/Ticker.h"
 #include "RouteAssignmentTypes.h"
@@ -13,19 +14,6 @@ class UGameInstance;
 class UListView;
 class UUserWidget;
 class UWidget;
-
-enum class EGCSRouteAutoStartState : uint8
-{
-	Idle,
-	ValidatingMapping,
-	Freezing,
-	SyncingConsole,
-	StartingJob,
-	// The local orchestration dispatched Start; this is not Console acceptance.
-	Completed,
-	Failed,
-	CancelledAsStale
-};
 
 struct FGCSRouteAutoStartTargetSnapshot
 {
@@ -63,40 +51,6 @@ struct FGCSRouteAutoStartSnapshot
 	bool bJobStartDispatched = false;
 	bool bUsesConfirmedNpzMapping = false;
 	int64 ConfirmedMappingRevision = 0;
-};
-
-struct FGCSConfirmedNpzMappingEntry
-{
-	FString DroneID;
-	FString EndpointIdentity;
-	int32 RouteSlotIndex = INDEX_NONE;
-	double MatchDistanceMeters = 0.0;
-};
-
-/** Session-only operator confirmation. Upload authority remains Working/Frozen Assignment. */
-struct FGCSConfirmedNpzMappingSnapshot
-{
-	int64 ConfirmationRevision = 0;
-	int64 RouteDatasetGeneration = 0;
-	FString SourceDatasetDigest;
-	int32 RouteCount = 0;
-	int32 NormalizedShowOriginLatitudeE7 = 0;
-	int32 NormalizedShowOriginLongitudeE7 = 0;
-	FString F1CaptureAuthoritySessionID;
-	FString F1CaptureRequestID;
-	int64 F1CaptureRevision = 0;
-	FString SelectionDigest;
-	TArray<FString> SelectedDroneIDs;
-	FString FleetSessionID;
-	TArray<FGCSConfirmedNpzMappingEntry> Entries;
-	/** Selected participants without an executable one-to-one RouteSlot match. */
-	TArray<FString> UnassignedDroneIDs;
-	/** Subset of UnassignedDroneIDs classified as excess/spare by the matcher. */
-	TArray<FString> SpareDroneIDs;
-	/** RouteSlots left vacant by this degraded confirmation. */
-	TArray<int32> VacantRouteSlots;
-	bool bValid = false;
-	FString InvalidReason;
 };
 
 struct FGCSRouteAutoStartSyncObservation
@@ -151,14 +105,6 @@ struct FGCSRouteWorkflowCommandGateInputs
 	bool bCommandInFlight = false;
 };
 
-struct FGCSRouteWorkflowCommandGate
-{
-	bool bRouteBrowseEnabled = false;
-	bool bOutputBrowseEnabled = false;
-	bool bLoadPreviewEnabled = false;
-	bool bGenerateWaypointsEnabled = false;
-};
-
 enum class EGCSRouteWorkflowCommandErrorCategory : uint8
 {
 	None,
@@ -180,17 +126,6 @@ struct FGCSRouteUploadCommandGateInputs
 	bool bCommandInFlight = false;
 	uint8 JobState = 0;
 	uint32 FailedCount = 0;
-};
-
-struct FGCSRouteUploadCommandGate
-{
-	bool bStartEnabled = false;
-	bool bPauseEnabled = false;
-	bool bResumeEnabled = false;
-	bool bCancelEnabled = false;
-	bool bRetryFailedEnabled = false;
-	bool bApplyMaxEnabled = false;
-	FString StartBlockedReason;
 };
 
 enum class EGCSShowOriginDraftSource : uint8
@@ -283,6 +218,15 @@ public:
 	{
 		return AppliedMaxConcurrentTargets;
 	}
+
+    FGCSWorkflowView GetWorkflowView() const;
+    FGCSWorkflowView GetWorkflowViewForOrigin(const FString& Latitude, const FString& Longitude, const FString& Altitude) const;
+    FString GetUploadStatusPresentation() const;
+    void SelectRouteFile(const FString& Path);
+    void SelectWorkspace(const FString& Path);
+    void LoadPreviewWithOrigin(const FString& Latitude, const FString& Longitude, const FString& Altitude);
+    void ApplyUploadConcurrency(const FString& Value);
+    void ExecuteWorkflowAction(EGCSWorkflowAction Action);
 
 	static double ComputeProgressRatio(uint64 Completed, uint64 Total);
 	static FString FormatByteCount(uint64 Bytes);
@@ -508,7 +452,7 @@ private:
 	void SelectRoutePage(int32 PageIndex);
 	void BindCommandControls();
 	void UnbindCommandControls();
-	FGCSRouteWorkflowCommandGateInputs GatherCommandGateInputs() const;
+	FGCSRouteWorkflowCommandGateInputs GatherCommandGateInputs(bool bReadViewDraft = true) const;
 	void UpdateCommandControlState();
 	FGCSRouteUploadCommandGateInputs GatherUploadCommandGateInputs() const;
 	void UpdateUploadCommandControlState();

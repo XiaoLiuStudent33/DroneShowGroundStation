@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 
+struct FMDHKTelemetryTableRow;
+struct FGCSProductionCommandResult;
 class UButton;
 class UTextBlock;
 class UUserWidget;
@@ -10,6 +12,8 @@ enum class EGCSDroneDisplayStatus : uint8;
 /** Stateless widget lookup and presentation helpers for GCSUIBridgeSubsystem. */
 struct FGCSUIWidgetPresenter final
 {
+	static bool ApplyTelemetryRow(UObject* RowObject, const FMDHKTelemetryTableRow& Row);
+	static FString CommandResultText(const FGCSProductionCommandResult& Result);
 	static UUserWidget* ResolveChildWidget(UUserWidget* Root, FName Name);
 	static UUserWidget* ResolveDroneDetail(UUserWidget* MainWidget);
 	static UButton* FindButton(UUserWidget* Root, FName Name);

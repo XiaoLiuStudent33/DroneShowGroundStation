@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "DSPGCSProductionTelemetryProviderSubsystem.h"
+#include "GCSTelemetryTypes.h"
 
 // Presentation-only filtering of the existing #187 telemetry contract.
 namespace GCSTelemetryFilter

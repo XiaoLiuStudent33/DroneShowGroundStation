@@ -1928,6 +1928,13 @@ bool FGCSRouteWorkflowRebindStateTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("One Sync"),SyncCalls,1);
 	TestEqual(TEXT("No Job before Accepted"),StartCalls,0);
 	TestFalse(TEXT("Repeated click rejected"),C->StartAutoStartForTest(Error));
+    const FGCSWorkflowView BeforeDetach = Bridge->GetWorkflowState();
+    TestEqual(TEXT("Application query preserves frozen targets"), BeforeDetach.Routes.Num(), 3);
+    TestTrue(TEXT("Application query keeps preview distinct from execution"),
+        !BeforeDetach.bHasJobSnapshot && !BeforeDetach.Routes[0].bAuthoritative);
+    TestEqual(TEXT("Application query returns confirmation revision"), BeforeDetach.ConfirmedMapping.ConfirmationRevision, int64(7));
+    Bridge->GetWorkflowState(); Bridge->GetWorkflowState();
+    TestEqual(TEXT("Repeated UI queries never resubmit"), SyncCalls, 1);
 	C->DetachView();
 	TestTrue(TEXT("Workflow ticker survives detached view"), C->IsRefreshTickerActiveForTest());
 	TestTrue(TEXT("Confirmed mapping survives detached view"), C->HasConfirmedNpzMappingForTest());

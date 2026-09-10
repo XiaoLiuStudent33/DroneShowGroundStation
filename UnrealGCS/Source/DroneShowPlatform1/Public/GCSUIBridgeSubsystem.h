@@ -10,6 +10,8 @@
 #include "CoreMinimal.h"
 #include "DSPGCSProductionCommandTypes.h"
 #include "DroneData.h"
+#include "GCSTelemetryTypes.h"
+#include "GCSWorkflowTypes.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "GCSUIBridgeSubsystem.generated.h"
 
@@ -56,6 +58,32 @@ public:
 	void BindMainWidget(UUserWidget* MainWidget);
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
+
+    // Vehicle state/selection also remains directly available from FleetManagerSubsystem.
+    EDSPGCSTelemetryLinkState GetConnectionState() const;
+    FGCSProductionCommandResultEvent& GetCommandResultEvent();
+    bool CanExecuteOperatorCommand(EGCSProductionCommandType Type) const;
+    FString ExecuteOperatorCommand(EGCSProductionCommandType Type,
+        const FGCSProductionCommandParameters& Parameters = FGCSProductionCommandParameters{},
+        bool bOperatorConfirmed = false);
+    void SetOperatorControlMode(EGCSGroundStationControlMode Mode);
+    EGCSGroundStationControlMode GetOperatorControlMode() const;
+    FString ExecuteDanceStep();
+    FString EndDanceStep();
+    void StartScheduledMission(int32 Hour, int32 Minute, int32 Second);
+    FGCSWorkflowView GetWorkflowState() const;
+    FGCSWorkflowView GetWorkflowStateForOrigin(const FString& Latitude, const FString& Longitude, const FString& Altitude) const;
+    FGCSMissionView GetMissionState() const;
+    void SelectRouteFile(const FString& Path);
+    void SelectRouteWorkspace(const FString& Path);
+    void CommitRoutePreview(const FString& Latitude, const FString& Longitude, const FString& Altitude);
+    void ApplyUploadConcurrency(const FString& Value);
+    void ExecuteWorkflowAction(EGCSWorkflowAction Action);
+
+    // Stable queries available without creating a Widget.
+    TArray<FMDHKTelemetryTableRow> GetTelemetryTableRows() const;
+    bool CanSendOperatorCommands() const;
+    FGCSProductionCommandResult GetCommandResult() const;
 
 	// Detail presentation interface. The authoritative state remains in
 	// FleetManager; this method only copies one selected snapshot into UMG.

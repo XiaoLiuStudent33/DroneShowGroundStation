@@ -1808,23 +1808,35 @@ void UGCSRouteWorkflowCoordinator::HandleApplyShowOriginGpsClicked()
 
 void UGCSRouteWorkflowCoordinator::HandleRouteBrowseClicked()
 {
+    if (!IsInGameThread() || bCommandInFlight || !GameInstanceRef.IsValid()) return;
+    if (!ComputeCommandGate(GatherCommandGateInputs()).bRouteBrowseEnabled) return;
+    FString Path;
+    bool bSelected = false;
+    {
+        TGuardValue<bool> Guard(bCommandInFlight, true);
+#if WITH_DEV_AUTOMATION_TESTS
+        bSelected = CommandTestHooks.OpenNpzDialog ? CommandTestHooks.OpenNpzDialog(Path) : OpenRuntimeNpzFileDialog(Path);
+#else
+        bSelected = OpenRuntimeNpzFileDialog(Path);
+#endif
+    }
+    if (bSelected) SelectRouteFile(Path);
+    else UpdateCommandControlState();
+}
+
+void UGCSRouteWorkflowCoordinator::SelectRouteFile(const FString& Path)
+{
 	if (!IsInGameThread() || bCommandInFlight || !GameInstanceRef.IsValid()) return;
 	const FGCSRouteWorkflowCommandGate Gate = ComputeCommandGate(GatherCommandGateInputs());
 	if (!Gate.bRouteBrowseEnabled) return;
 
 	enum class EResult : uint8 { Cancelled, Succeeded, Failed };
 	EResult Result = EResult::Cancelled;
-	FString SelectedPath;
+	FString SelectedPath = Path;
 	FString Error;
 	{
 		TGuardValue<bool> Guard(bCommandInFlight, true);
-#if WITH_DEV_AUTOMATION_TESTS
-		const bool bSelected = CommandTestHooks.OpenNpzDialog
-			? CommandTestHooks.OpenNpzDialog(SelectedPath)
-			: OpenRuntimeNpzFileDialog(SelectedPath);
-#else
-		const bool bSelected = OpenRuntimeNpzFileDialog(SelectedPath);
-#endif
+const bool bSelected = true;
 		if (bSelected)
 		{
 			if (!FPaths::GetExtension(SelectedPath).Equals(TEXT("npz"), ESearchCase::IgnoreCase))
@@ -1874,24 +1886,36 @@ void UGCSRouteWorkflowCoordinator::HandleRouteBrowseClicked()
 
 void UGCSRouteWorkflowCoordinator::HandleOutputBrowseClicked()
 {
+    if (!IsInGameThread() || bCommandInFlight || !GameInstanceRef.IsValid()) return;
+    if (!ComputeCommandGate(GatherCommandGateInputs()).bOutputBrowseEnabled) return;
+    FString Path;
+    bool bSelected = false;
+    {
+        TGuardValue<bool> Guard(bCommandInFlight, true);
+#if WITH_DEV_AUTOMATION_TESTS
+        bSelected = CommandTestHooks.OpenFolderDialog ? CommandTestHooks.OpenFolderDialog(Path) : OpenRuntimeFolderDialog(Path);
+#else
+        bSelected = OpenRuntimeFolderDialog(Path);
+#endif
+    }
+    if (bSelected) SelectWorkspace(Path);
+    else UpdateCommandControlState();
+}
+
+void UGCSRouteWorkflowCoordinator::SelectWorkspace(const FString& Path)
+{
 	if (!IsInGameThread() || bCommandInFlight || !GameInstanceRef.IsValid()) return;
 	const FGCSRouteWorkflowCommandGate Gate = ComputeCommandGate(GatherCommandGateInputs());
 	if (!Gate.bOutputBrowseEnabled) return;
 
 	enum class EResult : uint8 { Cancelled, Succeeded, Failed };
 	EResult Result = EResult::Cancelled;
-	FString SelectedRoot;
+	FString SelectedRoot = Path;
 	FString ResolvedRoot;
 	FString Error;
 	{
 		TGuardValue<bool> Guard(bCommandInFlight, true);
-#if WITH_DEV_AUTOMATION_TESTS
-		const bool bSelected = CommandTestHooks.OpenFolderDialog
-			? CommandTestHooks.OpenFolderDialog(SelectedRoot)
-			: OpenRuntimeFolderDialog(SelectedRoot);
-#else
-		const bool bSelected = OpenRuntimeFolderDialog(SelectedRoot);
-#endif
+const bool bSelected = true;
 		if (bSelected)
 		{
 			URouteArtifactWorkspaceSubsystem* Workspace =
@@ -1936,6 +1960,16 @@ void UGCSRouteWorkflowCoordinator::HandleOutputBrowseClicked()
 
 void UGCSRouteWorkflowCoordinator::HandleLoadPreviewClicked()
 {
+    using namespace GCSRouteWorkflowPrivate;
+    const auto* Lat = Get<UEditableTextBox>(ConvertWidgets, TEXT("EDT_OriginLatitude"));
+    const auto* Lon = Get<UEditableTextBox>(ConvertWidgets, TEXT("EDT_OriginLongitude"));
+    const auto* Alt = Get<UEditableTextBox>(ConvertWidgets, TEXT("EDT_OriginAltitude"));
+    LoadPreviewWithOrigin(Lat ? Lat->GetText().ToString() : FString(),
+        Lon ? Lon->GetText().ToString() : FString(), Alt ? Alt->GetText().ToString() : FString());
+}
+
+void UGCSRouteWorkflowCoordinator::LoadPreviewWithOrigin(const FString& LatitudeText, const FString& LongitudeText, const FString& AltitudeText)
+{
 	if (!IsInGameThread() || bCommandInFlight || !GameInstanceRef.IsValid()) return;
 	if (IsAutoStartInFlight())
 	{
@@ -1972,14 +2006,10 @@ void UGCSRouteWorkflowCoordinator::HandleLoadPreviewClicked()
 	double Latitude = 0.0;
 	double Longitude = 0.0;
 	double Altitude = 0.0;
-	using namespace GCSRouteWorkflowPrivate;
-	const UEditableTextBox* LatitudeInput = Get<UEditableTextBox>(ConvertWidgets, TEXT("EDT_OriginLatitude"));
-	const UEditableTextBox* LongitudeInput = Get<UEditableTextBox>(ConvertWidgets, TEXT("EDT_OriginLongitude"));
-	const UEditableTextBox* AltitudeInput = Get<UEditableTextBox>(ConvertWidgets, TEXT("EDT_OriginAltitude"));
 	if (!ParseOriginInputs(
-		LatitudeInput ? LatitudeInput->GetText().ToString() : FString(),
-		LongitudeInput ? LongitudeInput->GetText().ToString() : FString(),
-		AltitudeInput ? AltitudeInput->GetText().ToString() : FString(),
+		LatitudeText,
+		LongitudeText,
+		AltitudeText,
 		Latitude, Longitude, Altitude, Error))
 	{
 		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Preview, Error);
@@ -2809,11 +2839,17 @@ void UGCSRouteWorkflowCoordinator::HandleRetryFailedClicked()
 
 void UGCSRouteWorkflowCoordinator::HandleApplyMaxConcurrencyClicked()
 {
+    const auto* Draft = GCSRouteWorkflowPrivate::Get<UEditableTextBox>(UploadWidgets, TEXT("EDT_MaxConcurrency"));
+    ApplyUploadConcurrency(Draft ? Draft->GetText().ToString() : FString());
+}
+
+void UGCSRouteWorkflowCoordinator::ApplyUploadConcurrency(const FString& Value)
+{
 	if (!IsInGameThread() || !GameInstanceRef.IsValid()) return;
 	if (!ComputeUploadCommandGate(GatherUploadCommandGateInputs()).bApplyMaxEnabled) return;
 	int32 Maximum = 0;
 	FString Error;
-	if (!ReadConcurrencyDraft(Maximum, Error))
+	if (!ParsePositiveConcurrency(Value, Maximum, Error))
 	{
 		SetCommandError(EGCSRouteWorkflowCommandErrorCategory::Upload, Error);
 		return;
@@ -2823,7 +2859,7 @@ void UGCSRouteWorkflowCoordinator::HandleApplyMaxConcurrencyClicked()
 	RefreshReadOnlyState();
 }
 
-FGCSRouteWorkflowCommandGateInputs UGCSRouteWorkflowCoordinator::GatherCommandGateInputs() const
+FGCSRouteWorkflowCommandGateInputs UGCSRouteWorkflowCoordinator::GatherCommandGateInputs(bool bReadViewDraft) const
 {
 #if WITH_DEV_AUTOMATION_TESTS
 	if (CommandGateInputsForTest.IsSet()) return CommandGateInputsForTest.GetValue();
@@ -2854,6 +2890,8 @@ FGCSRouteWorkflowCommandGateInputs UGCSRouteWorkflowCoordinator::GatherCommandGa
 			&& (RecoveryStatus == ERouteArtifactRecoveryStatus::Stable
 				|| RecoveryStatus == ERouteArtifactRecoveryStatus::Recovered);
 	}
+
+	if (!bReadViewDraft) { Inputs.bOriginValid = Inputs.bShowOriginSet; return Inputs; }
 
 	using namespace GCSRouteWorkflowPrivate;
 	const UEditableTextBox* Latitude = Get<UEditableTextBox>(
@@ -3370,28 +3408,7 @@ void UGCSRouteWorkflowCoordinator::RefreshReadOnlyState()
 	else if (AutoStartState != EGCSRouteAutoStartState::Idle)
 		ConsoleState += TEXT(" / Auto: ") + PreJobPresentation;
 	SetText(UploadWidgets,TEXT("TXT_ConsoleValidatedValue"),ConsoleState);
-	FString JobPresentation = Job
-		? FormatUploadJobPresentation(static_cast<uint8>(Job->jobState))
-		: (AutoStartState == EGCSRouteAutoStartState::Idle
-			? TEXT("State: --") : TEXT("State: ") + PreJobPresentation);
-	if (Job && Job->jobState == dspgcs::UploadJobState::Failed &&
-		!Job->firstFailure.safeSummary.empty())
-	{
-		JobPresentation += TEXT(" / ") +
-			WorkflowFromUtf8(Job->firstFailure.safeSummary).Left(320);
-	}
-	const FDSPGCSUploadJobCommandStatus CommandStatus =
-		Upload ? Upload->GetCommandStatus() : FDSPGCSUploadJobCommandStatus{};
-	if ((Job || AutoStartState != EGCSRouteAutoStartState::Completed) &&
-		!CommandStatus.LastSafeDiagnostic.IsEmpty() &&
-		(CommandStatus.bCommandTimedOut || CommandStatus.bHasAuthoritativeFailure ||
-		 CommandStatus.LastCommandResultCode !=
-			 static_cast<int32>(dspgcs::UploadJobErrorCode::None) ||
-		 (CommandStatus.bHasCommandAck && CommandStatus.LastCommandAckStatus ==
-			 static_cast<int32>(dspgcs::UploadJobCommandAckStatus::Rejected))))
-	{
-		JobPresentation += TEXT(" / ") + CommandStatus.LastSafeDiagnostic.Left(320);
-	}
+	const FString JobPresentation = GetUploadStatusPresentation();
 	SetText(UploadWidgets,TEXT("TXT_UploadJobStateValue"),JobPresentation);
 	// Keep the outcome visible in the narrow status cell; details belong in the
 	// tooltip rather than pushing "Start Failed" out of the clipped TextBlock.
@@ -4081,3 +4098,142 @@ uint64 UGCSRouteWorkflowCoordinator::EstimateRouteItemModelBytes(const int32 Ite
 			+ sizeof(TPair<int32, TObjectPtr<UGCSRouteUploadListItem>>));
 }
 #endif
+
+FGCSWorkflowView UGCSRouteWorkflowCoordinator::GetWorkflowView() const
+{
+    FGCSWorkflowView View;
+    View.RouteActions = ComputeCommandGate(GatherCommandGateInputs(false));
+    View.UploadActions = ComputeUploadCommandGate(GatherUploadCommandGateInputs());
+    View.bHasConfirmedMapping = bHasConfirmedNpzMapping;
+    View.ConfirmedMapping = ConfirmedNpzMapping;
+    View.bSelectionLocked = IsCommandSelectionMutationBlocked();
+    View.PreparationState = AutoStartState;
+    View.SelectedRoutePath = SelectedRouteImportFilePath;
+    View.Diagnostic = CommandErrorMessage;
+    View.AppliedConcurrency = AppliedMaxConcurrentTargets;
+    View.UploadJobID = AutoStartSnapshot.UploadJobID;
+    GetAutoStartPresentation(View.Diagnostic);
+    View.UploadStatusText = GetUploadStatusPresentation();
+    if (GameInstanceRef.IsValid())
+        if (const auto* Upload = GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>())
+            if (const auto* Job = Upload->GetStateMirror().GetSnapshot())
+            {
+                View.bHasJobSnapshot = true;
+                View.BytesCompleted = Job->bytesCompleted; View.TotalBytes = Job->totalBytes;
+                View.ElapsedMs = Job->elapsedMs; View.ThroughputBytesPerSecond = Job->throughputBytesPerSecond;
+                View.Matched = Job->matchedCount; View.Vacant = Job->vacantCount; View.Spare = Job->spareCount;
+                View.Waiting = Job->waitingCount; View.Preparing = Job->preparingCount;
+                View.Uploading = Job->uploadingCount; View.RetryWaiting = Job->retryWaitingCount;
+                View.Succeeded = Job->succeededCount; View.Failed = Job->failedCount; View.Cancelled = Job->cancelledCount;
+                const auto& Mirror = Upload->GetStateMirror();
+                View.bRoutesComplete = !Mirror.IsRecoveryRequired() && Mirror.IsRoutePageComplete()
+                    && Mirror.GetRouteStateCount() == static_cast<int32>(Job->matchedCount);
+                if (View.bRoutesComplete)
+                {
+                    TArray<int32> Slots; Mirror.CopySortedRouteSlots(Slots);
+                    for (int32 Slot : Slots)
+                    {
+                        const auto* State = Mirror.FindRoute(Slot);
+                        if (!State) continue;
+                        auto& Row = View.Routes.AddDefaulted_GetRef();
+                        Row.RouteSlotIndex = Slot; Row.bAuthoritative = true;
+                        Row.DroneID = UTF8_TO_TCHAR(State->droneId.c_str());
+                        Row.StateText = FormatRouteState(static_cast<uint8>(State->state));
+                        if (State->state == dspgcs::UploadRouteState::Failed && State->errorCode != dspgcs::RouteUploadErrorCode::None)
+                            Row.StateText += TEXT(" / ") + FormatRouteErrorCode(static_cast<uint16>(State->errorCode));
+                        Row.Diagnostic = State->safeFailureSummary.empty() ? Row.StateText
+                            : FString(UTF8_TO_TCHAR(State->safeFailureSummary.c_str())).Left(512);
+                        Row.BytesCompleted = State->bytesCompleted; Row.TotalBytes = State->totalBytes;
+                        Row.RetryCount = ComputeRetryCount(State->attemptCount);
+                    }
+                }
+                View.UploadJobID = UTF8_TO_TCHAR(Job->uploadJobId.c_str());
+
+            }
+    if (GameInstanceRef.IsValid())
+    {
+        if (const auto* Generator = GameInstanceRef->GetSubsystem<URouteWaypointGenerationSubsystem>())
+        {
+            const auto Progress = Generator->GetProgress();
+            View.bGenerating = Generator->IsGenerationActive();
+            View.GeneratedRoutes = Progress.CompletedRoutes;
+            View.TotalGenerationRoutes = Progress.TotalRoutes;
+            View.GenerationDiagnostic = Progress.FirstFailureDiagnostic;
+        }
+        if (const auto* Workspace = GameInstanceRef->GetSubsystem<URouteArtifactWorkspaceSubsystem>())
+        {
+            View.bArtifactReady = Workspace->GetCurrentStatus() == ERouteArtifactCurrentStatus::Ready;
+            View.ArtifactSetID = Workspace->GetCurrentInfo().ArtifactSetID;
+        }
+    }
+    if (!View.bHasJobSnapshot && AutoStartState != EGCSRouteAutoStartState::Idle)
+        for (const auto& Target : AutoStartSnapshot.Targets)
+        {
+            auto& Row = View.Routes.AddDefaulted_GetRef();
+            Row.RouteSlotIndex = Target.RouteSlotIndex; Row.DroneID = Target.DroneID;
+            Row.StateText = View.UploadStatusText; Row.Diagnostic = View.Diagnostic;
+        }
+    if (!CommandErrorMessage.IsEmpty()) View.Diagnostic = CommandErrorMessage;
+    return View;
+}
+
+void UGCSRouteWorkflowCoordinator::ExecuteWorkflowAction(EGCSWorkflowAction Action)
+{
+    switch (Action)
+    {
+    case EGCSWorkflowAction::CaptureStableGps: HandleCaptureStableGpsClicked(); break;
+    case EGCSWorkflowAction::ConfirmMapping: HandleApplyNpzNumberingClicked(); break;
+    case EGCSWorkflowAction::ClearMapping: HandleClearNpzNumberingClicked(); break;
+    case EGCSWorkflowAction::GenerateWaypoints: HandleGenerateWaypointsClicked(); break;
+    case EGCSWorkflowAction::StartUpload: HandleStartUploadClicked(); break;
+    case EGCSWorkflowAction::PauseUpload: HandlePauseUploadClicked(); break;
+    case EGCSWorkflowAction::ResumeUpload: HandleResumeUploadClicked(); break;
+    case EGCSWorkflowAction::CancelUpload: HandleCancelUploadClicked(); break;
+    case EGCSWorkflowAction::RetryFailed: HandleRetryFailedClicked(); break;
+    }
+}
+
+FString UGCSRouteWorkflowCoordinator::GetUploadStatusPresentation() const
+{
+    using namespace GCSRouteWorkflowPrivate;
+    const auto* Upload = GameInstanceRef.IsValid()
+        ? GameInstanceRef->GetSubsystem<UDSPGCSUploadJobSubsystem>() : nullptr;
+    const auto* Job = Upload ? Upload->GetStateMirror().GetSnapshot() : nullptr;
+    FString PreJobDiagnostic;
+    const FString PreJobPresentation = GetAutoStartPresentation(PreJobDiagnostic);
+	FString JobPresentation = Job
+		? FormatUploadJobPresentation(static_cast<uint8>(Job->jobState))
+		: (AutoStartState == EGCSRouteAutoStartState::Idle
+			? TEXT("State: --") : TEXT("State: ") + PreJobPresentation);
+	if (Job && Job->jobState == dspgcs::UploadJobState::Failed &&
+		!Job->firstFailure.safeSummary.empty())
+	{
+		JobPresentation += TEXT(" / ") +
+			WorkflowFromUtf8(Job->firstFailure.safeSummary).Left(320);
+	}
+	const FDSPGCSUploadJobCommandStatus CommandStatus =
+		Upload ? Upload->GetCommandStatus() : FDSPGCSUploadJobCommandStatus{};
+	if ((Job || AutoStartState != EGCSRouteAutoStartState::Completed) &&
+		!CommandStatus.LastSafeDiagnostic.IsEmpty() &&
+		(CommandStatus.bCommandTimedOut || CommandStatus.bHasAuthoritativeFailure ||
+		 CommandStatus.LastCommandResultCode !=
+			 static_cast<int32>(dspgcs::UploadJobErrorCode::None) ||
+		 (CommandStatus.bHasCommandAck && CommandStatus.LastCommandAckStatus ==
+			 static_cast<int32>(dspgcs::UploadJobCommandAckStatus::Rejected))))
+	{
+		JobPresentation += TEXT(" / ") + CommandStatus.LastSafeDiagnostic.Left(320);
+	}
+	return JobPresentation;
+}
+
+FGCSWorkflowView UGCSRouteWorkflowCoordinator::GetWorkflowViewForOrigin(
+    const FString& Latitude, const FString& Longitude, const FString& Altitude) const
+{
+    FGCSWorkflowView View = GetWorkflowView();
+    auto Inputs = GatherCommandGateInputs(false);
+    double Lat = 0, Lon = 0, Alt = 0;
+    FString Error;
+    Inputs.bOriginValid = ParseOriginInputs(Latitude, Longitude, Altitude, Lat, Lon, Alt, Error);
+    View.RouteActions = ComputeCommandGate(Inputs);
+    return View;
+}

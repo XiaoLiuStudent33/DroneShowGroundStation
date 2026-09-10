@@ -43,6 +43,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone GCS|DSP-GCS Command")
 	FGCSProductionCommandResult GetLastResult() const { return LastResult; }
 
+	/** Existing UI readiness gate, independent of controls. */
+	bool IsReadyForOperatorCommands() const;
+
 	UPROPERTY(BlueprintAssignable, Category = "Drone GCS|DSP-GCS Command")
 	FGCSProductionCommandResultEvent OnCommandResult;
 

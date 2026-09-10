@@ -328,3 +328,11 @@ FString UDSPGCSProductionCommandProviderSubsystem::NextCommandID()
 		FDateTime::UtcNow().ToUnixTimestamp(),
 		++CommandCounter);
 }
+
+
+bool UDSPGCSProductionCommandProviderSubsystem::IsReadyForOperatorCommands() const
+{
+    const auto* Telemetry = Channel.Get();
+    return IsEnabled() && Telemetry && Telemetry->IsEnabled()
+        && Telemetry->IsTelemetryLinkConnected();
+}
