@@ -1090,6 +1090,29 @@ int RunConsolePipelineTests()
                 "fragmented frame or independent endpoint was lost");
         }
 
+        {
+            DroneSessionConfig defaults;
+            defaults.heartbeatTimeoutMs = 40;
+            defaults.receiveOnly = true;
+            DroneManager cleanupManager;
+            MavlinkDiscoveryService cleanupDiscovery(cleanupManager, defaults);
+            SendHeartbeat(cleanupDiscovery, 1, "127.0.0.1");
+            SendHeartbeat(cleanupDiscovery, 1, "192.168.1.145");
+            cleanupManager.RefreshHeartbeatStates(std::chrono::steady_clock::now() + std::chrono::seconds(1));
+            Expect(cleanupManager.GetDroneCount() == 2, "default timeout must preserve offline sessions");
+            Expect(cleanupManager.RemoveOfflineSimulationDrones() == 1, "simulation cleanup must remove only expired loopback session");
+            Expect(cleanupManager.GetDroneCount() == 1 && cleanupManager.FindDrone("Drone001"), "real offline aircraft must survive cleanup");
+            SendHeartbeat(cleanupDiscovery, 1, "127.0.0.1");
+            Expect(cleanupManager.GetDroneCount() == 2, "removed endpoint must register again");
+            Expect(cleanupManager.RemoveOfflineSimulationDrones() == 0, "active simulation must survive cleanup");
+            cleanupManager.RemoveDrone("Drone001");
+            cleanupManager.RefreshHeartbeatStates(std::chrono::steady_clock::now() + std::chrono::seconds(1));
+            Expect(cleanupManager.RemoveOfflineSimulationDrones() == 1 && cleanupManager.GetDroneCount() == 0,
+                "stopped simulation must leave empty fleet");
+            SendHeartbeat(cleanupDiscovery, 1, "127.0.0.1");
+            Expect(cleanupManager.GetDroneCount() == 1 && cleanupManager.FindDrone("Drone003"), "fresh simulation must not reuse identities held by old command or route state");
+        }
+
         DroneSessionConfig sessionDefaults;
         sessionDefaults.heartbeatTimeoutMs = 40;
         sessionDefaults.receiveOnly = true;

@@ -270,6 +270,12 @@ bool AppConfig::Load(
         return false;
     }
 
+    if (!ParseBoolean(values, "clear_offline_simulation", false,
+        config.clearOfflineSimulation, error))
+    {
+        return false;
+    }
+
     if (values.find("route_upload.transport") != values.end())
     {
         error = "Configuration key route_upload.transport was removed; "

@@ -1022,6 +1022,12 @@ int ConsoleGCSApplication::RunProductionMavlink(
                 telemetryProvider.SendUploadJobRouteStateDelta(delta);
         }
 
+        if (appConfig.clearOfflineSimulation)
+        {
+            const auto removed = droneManager.RemoveOfflineSimulationDrones();
+            if (removed != 0)
+                ConsoleUI::AddLog("Simulation cleanup removed=" + std::to_string(removed));
+        }
         const auto snapshotStarted = std::chrono::steady_clock::now();
         if (performanceEnabled)
             performanceWorkMs += std::chrono::duration<double, std::milli>(snapshotStarted - tickFinished).count()

@@ -1,5 +1,7 @@
 # DroneGCS 测试架构与证据边界
 
+2026-09-11 增量：`DroneGCS.UI.Simulation.LoopbackAndLifecycle` 覆盖实际 RightPanel 控件、UDP 四类遥测与独立来源端点、输入校验、重绑、停止/重启及 GameInstance 清理。UE 全套报告 `BuildLogs/Simulation/index.json` 为 252/252 通过（22 项带警告）；增强生命周期定向报告 `BuildLogs/SimulationLifecycle/index.json` 为 1/1 无警告。实际 UE 报文经 Release ConsoleGCS 验证三机上线/超时离线，日志 `BuildLogs/simulation-backend-test.log`。本轮无像素渲染、飞行响应或 20000 架性能验证。详见 [本机无人机模拟](Local_Simulation_CN.md)。
+
 Status: CURRENT SUPPORTING
 Authority: 测试资产、运行入口与证据等级
 Last Updated: 2026-09-09

@@ -168,6 +168,11 @@ bool FDroneFleetVisualizationBridgeTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Fleet growth preserves existing ParticleIndex"), Visualization->GetParticleDroneIDs()[49], FString(TEXT("Drone050")));
 	TestEqual(TEXT("Fleet growth appends Drone101"), Visualization->GetParticleDroneIDs()[100], FString(TEXT("Drone101")));
 
+    TestTrue(TEXT("Stopped simulation empty snapshot accepted"), Fleet->ApplySnapshot(MakeSnapshot(0, 7)));
+    Visualization->RefreshFromFleet();
+    TestEqual(TEXT("Empty snapshot removes all rendered drones"), Visualization->GetVisualizationDroneCount(), 0);
+    TestEqual(TEXT("Empty snapshot clears particle identities"), Visualization->GetParticleDroneIDs().Num(), 0);
+
 	FGCSFleetSnapshot WaitingForOriginSnapshot;
 	WaitingForOriginSnapshot.Header.SessionID = TEXT("FLEET-VIZ-TEST");
 	WaitingForOriginSnapshot.FleetRevision = 7;

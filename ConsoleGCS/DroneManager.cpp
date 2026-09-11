@@ -169,6 +169,23 @@ bool DroneManager::RemoveDrone(const std::string& droneId)
     return true;
 }
 
+std::size_t DroneManager::RemoveOfflineSimulationDrones()
+{
+    // Opt-in simulation profile only. Never delete real network aircraft.
+    std::vector<std::string> expired;
+    for (const auto& droneId : sessionOrder)
+    {
+        const auto* session = FindDrone(droneId);
+        if (session && session->GetConfig().remoteIp == "127.0.0.1" &&
+            !session->GetConfig().mavFtpServiceEnabled &&
+            !session->GetConfig().missionUploadServiceEnabled &&
+            session->GetState() == DroneSessionState::HeartbeatTimeout)
+            expired.push_back(droneId);
+    }
+    for (const auto& droneId : expired) RemoveDrone(droneId);
+    return expired.size();
+}
+
 DroneSession* DroneManager::FindDrone(const std::string& droneId)
 {
     const auto item = sessions.find(droneId);

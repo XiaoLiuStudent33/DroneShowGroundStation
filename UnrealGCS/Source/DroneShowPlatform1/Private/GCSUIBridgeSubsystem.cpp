@@ -1,5 +1,6 @@
 #include "GCSUIBridgeSubsystem.h"
 #include "GCSMapSubsystem.h"
+#include "GCSSimulationSubsystem.h"
 #include "Components/StaticMeshComponent.h"
 #include "GCSInvisiblePawn.h"
 /**
@@ -745,6 +746,7 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	BindReferenceAndMapControls();
 	BindOrbitControls();
  if (auto* Map = GetGameInstance()->GetSubsystem<UGCSMapSubsystem>()) Map->BindUI(RightPanelWidget.Get());
+ if (auto* Sim = GetGameInstance()->GetSubsystem<UGCSSimulationSubsystem>()) Sim->BindUI(RightPanelWidget.Get());
 	BindRoutePlaybackControls();
 	BindFleetPanelButtons();
 	BindHoverTestControls();
@@ -7232,6 +7234,7 @@ void UGCSUIBridgeSubsystem::BindOrbitControls()
 void UGCSUIBridgeSubsystem::UnbindOrbitControls()
 {
  if (GetGameInstance()) if (auto* Map = GetGameInstance()->GetSubsystem<UGCSMapSubsystem>()) Map->UnbindUI();
+ if (GetGameInstance()) if (auto* Sim = GetGameInstance()->GetSubsystem<UGCSSimulationSubsystem>()) Sim->UnbindUI();
  if (UButton* Button = OrbitResetButton.Get())
   Button->OnClicked.RemoveDynamic(this, &UGCSUIBridgeSubsystem::HandleResetOrbitClicked);
  if (UCheckBox* Check = OrbitLockCheckBox.Get())

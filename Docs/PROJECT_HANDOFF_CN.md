@@ -1,5 +1,7 @@
 # DroneGCS 项目交接速览
 
+2026-09-11 最新增量：[本机无人机模拟](Local_Simulation_CN.md)。`UGCSSimulationSubsystem` 绑定现有五个控件并在后台发送静态遥测。启动 `ConsoleGCS/StartLocalSimulation.cmd` 使用 loopback 专用配置，再在 UE 启动仿真。UI 由用户制作，不通过代码生成。该阶段不模拟飞行或上传应答。
+
 Status: CURRENT SUPPORTING
 Last Updated: 2026-09-09
 Baseline: `master` / `f115587` + 2026-09-09 本交接文档更新

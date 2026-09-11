@@ -1,5 +1,7 @@
 # DroneGCS Visualization Architecture
 
+2026-09-11 增量：本机仿真通过 `UGCSSimulationSubsystem` 后台 UDP → ConsoleGCS 发现/遥测 → 既有 DSP-GCS → UE 显示链路接入，不直接向渲染器插入小球。五个已保存 UI 控件由 Bridge 绑定，未创建 Widget；详见 [本机无人机模拟](Local_Simulation_CN.md)。
+
 Status: CURRENT
 Authority: 当前 UE Fleet/Route 可视化架构
 Last Updated: 2026-08-24

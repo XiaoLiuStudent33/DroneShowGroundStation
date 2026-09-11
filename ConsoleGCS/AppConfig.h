@@ -64,6 +64,7 @@ struct AppConfig
         AppConfigDefaults::MavftpGlobalWriteOutstandingCap;
 
     int heartbeatTimeoutMs = AppConfigDefaults::HeartbeatTimeoutMs;
+    bool clearOfflineSimulation = false;
     float takeoffAltitudeLimitMeters = 5.0f;
     float hoverAltitudeLimitMeters = 5.0f;
 

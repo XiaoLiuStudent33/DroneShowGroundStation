@@ -1,5 +1,11 @@
 # DroneGCS Development Status
 
+2026-09-11 排列间距：接入用户创建的 SPN_SimSpacingMeters，默认 2m、范围 0.1–100m；启动时用于行列坐标计算，运行中锁定，停止后可改，UI 重绑保留当前运行间距。编译通过，SimulationSpacing 定向测试 1/1 通过，实际 187 定位报文反算行列间距均为 0.5m（允许 GPS 量化误差 0.02m），覆盖非法数值、控件绑定和启停恢复。
+
+2026-09-11 仿真增量：补发 MDHK_STATUS #187，解决仅发送标准遥测无法产生专用遥测表行的问题；新增电池、电芯、温度、GPS/UTC 等模拟值，继续保留标准遥测。编译通过，Simulation187 定向测试 1/1 通过。间距仍为 2m；bgc2 基准文件和预设球体大小的差异见 Local_Simulation_CN.md。
+
+2026-09-11 更新：已接入用户制作的集群仿真 UI，本机独立 UDP 端点发送静态 MAVLink 遥测，支持数量/端口、开始/停止和退出清理。新增本机后端配置及启动入口，原部署配置不变。UE 全套 252/252 通过，补充生命周期定向测试 1/1 通过；实际报文经 Release ConsoleGCS 验证三机上线及停止后超时离线。范围和使用说明见 [本机无人机模拟](Local_Simulation_CN.md)，尚不执行飞行命令或航线上传。
+
 Status: CURRENT
 Authority: 当前实现状态与开发顺序
 Last Updated: 2026-09-09

@@ -31,6 +31,7 @@ public:
         const DiscoveredDroneIdentity& identity,
         const DroneSessionConfig& sessionDefaults);
     bool RemoveDrone(const std::string& droneId);
+    std::size_t RemoveOfflineSimulationDrones();
 
     DroneSession* FindDrone(const std::string& droneId);
     const DroneSession* FindDrone(const std::string& droneId) const;
