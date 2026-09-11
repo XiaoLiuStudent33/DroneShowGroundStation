@@ -2,10 +2,10 @@
 
 Status: CURRENT
 Authority: 当前 Production 运行链与 Developer Entry Map
-Last Updated: 2026-09-03
-Baseline: `master` / `03825841f81e516731d12df632867be67f72ad57` + 2026-09-03 联合打包工作树
+Last Updated: 2026-09-11
+源码核对基线：统一见 [Development_Status_CN.md](Development_Status_CN.md) 的基线记录，不在本文重复维护。
 
-本文只记录当前源码中已经存在的实现。长期约束见 [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md)，进度见 [Development_Status_CN.md](Development_Status_CN.md)，Route Upload 语义见 [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md)。
+本文依据当前源码维护实际架构，是当前运行链与开发入口的说明。当前状态、版本基线和验证证据统一见 [Development_Status_CN.md](Development_Status_CN.md)。[Architecture_Freeze_CN.md](Architecture_Freeze_CN.md) 是早期制定的冻结约束，保留作设计背景；与当前源码或本文冲突时，不直接用旧条款判定当前实现，差异列入状态入口待核对。Route Upload 专项说明见 [Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md)，其中过期表述同样以当前源码核对结果为准。
 
 ## 1. 系统总览
 
@@ -92,7 +92,9 @@ Fleet snapshot + Route frame 0 + Show Origin
 
 `URouteAssignmentSubsystem` 是 working/frozen Assignment Authority，支持显式 binding、位置匹配、full/degraded freeze policy、one-to-one DroneID/RouteSlot validation、revision 与 source identity。`RouteSlotIndex` 始终是 0-based route identity，不等于 DroneID、SYSID 或 particle index。
 
-`Shared/DroneIdentity/DroneLogicalId.h` 是 Console/UE 共用的 canonical DroneID formatter/parser。E.0 临时规则由 canonical 正整数计算 `RouteSlotIndex = NumericDroneID - 1`；最少三位、超过 999 自然扩展，解析使用 checked integer 与 format round-trip。Console 默认发现编号也复用同一 formatter。
+[共享 DroneLogicalId](../Shared/DroneIdentity/DroneLogicalId.h) 的 TryDroneLogicalIdToRouteSlot 采用非负 canonical 编号，默认 RouteSlotIndex = NumericDroneID（Drone000→0）；保留 checked integer 和 format round-trip。DroneID 与 RouteSlot 仍是不同身份。
+
+[GCSRouteWorkflowCoordinator.inl](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSRouteWorkflowCoordinator.inl) 的 CaptureAutoStartSnapshot：无确认 Mapping 时从命令选择建立目标，按默认编号匹配；存在确认 NPZ Mapping 时由其 Entries 决定目标集合与 RouteSlotIndex，不取后续 UI 勾选作为上传目标。校验 Mapping 新鲜度、数据集/域、在线、endpoint、重复/范围与 Manifest，陈旧 Mapping 拒绝。冻结条款适用冲突见 [当前状态](Development_Status_CN.md)。
 
 ## 5. Artifact Workspace 与 Waypoint
 
@@ -129,7 +131,7 @@ URouteAssignmentSubsystem frozen snapshot
 
 ```text
 GCSRouteWorkflowCoordinator / WBP_GCS_RouteUpload
--> SelectedCommandDroneIDs snapshot
+-> CaptureAutoStartSnapshot：有效确认 Mapping 使用 Entries；无确认 Mapping 使用 SelectedCommandDroneIDs
 -> BuildAndReplaceExplicitWorkingAssignment
 -> Freeze(AllowDegraded)
 -> UDSPGCSFrozenAssignmentSyncSubsystem exact accepted identity
@@ -141,6 +143,8 @@ GCSRouteWorkflowCoordinator / WBP_GCS_RouteUpload
 -> FDSPGCSUploadJobStateMirror
 -> UI state and progress
 ```
+
+存在确认 Mapping 但校验失败或已陈旧时拒绝启动，不回退到命令选择集合。目标 DroneID 与 RouteSlot 来自上述分支确定的快照。
 
 Start 由 `UGCSRouteWorkflowCoordinator` 的 E.0 AutoStart 状态机拥有：`ValidatingMapping -> Freezing -> SyncingConsole -> StartingJob -> Completed/Failed/CancelledAsStale`。快照包含排序后的 Command Selection、Fleet session/revision、每台 endpoint、ArtifactSet/digests 以及 Manifest Route Record path/size/digest；Accepted 后重新捕获并逐项比较。`bJobStartAttempted` 在调用前设置，重复 Tick/ACK/重开 Widget 不会创建第二个 Job。
 
@@ -243,13 +247,9 @@ Quick Test 当前从 `Current/manifest.json` 引导，并与生产链共享 `[ma
 
 生产模板已接入 `[mavftp]`：`segment_items=4000`、request/terminate timeout `750/2500 ms`、retry `3`、per-client write window `16`、global outstanding cap `800`。
 
-## 13. 尚未实现或尚未证明
+## 13. 状态与证据入口
 
-- Production Mission Ready verification 与完整 firmware capability model。
-- 10000-drone chunked/sharded Route Store。
-- Backup Drone Replacement 与 conflict/rejoin workflow。
-- E.2 多机硬件规模验证与调度冻结。
-- 正式发布代码签名、升级覆盖和卸载完整验收。
+实现完成度、未证明范围、人工/硬件验收及后续顺序仅见 [Development_Status_CN.md](Development_Status_CN.md)。本文件描述调用合同，不维护独立发布就绪判断。
 
 ## 14. Developer Entry Map
 
@@ -266,18 +266,13 @@ Quick Test 当前从 `Current/manifest.json` 引导，并与生产链共享 `[ma
 | Production upload | `RouteUploadManager` | `MissionPreparationWorker`、`MAVFTPMissionTransport`、`MavFtpClient` |
 | MAVFTP test chain | `MAVFTPMissionHardwareTest` | `MavFtpClient`、`MissionFtpCompiler`、`MAVFTPMissionTransport` |
 | 联合 payload | `Tools/Launcher/PreparePayload.ps1` | Game Target PreBuildSteps、RuntimeDependencies / NonUFS |
-| 联合启动 | `Tools/Launcher/DroneGCSLauncher.cpp` | `ManagedBackendSession`、安装标记与每用户目录 |
+| 联合启动 | `Tools/Launcher/Launcher.cpp` | `ManagedBackendSession`、安装标记与每用户目录 |
 | 正式安装 | `Tools/Installer/BuildInstaller.ps1` | `DroneGCS.nsi`、Shipping/manifest 校验 |
 | Test entry | `ConsolePipelineTests.cpp` | UE `Private/Tests/` |
 
-## 15. 当前事实标签
+## 15. 架构阶段记录
 
-- Phase 2A～2G：IMPLEMENTED。
-- RouteUploadManager / UI-3C / MAVFTP production vertical slice：IMPLEMENTED。
-- MissionTransport / MissionFtpCompiler / MAVFTP Writer / Hardware Harness / Quick Test：IMPLEMENTED。
-- Production Transport：MAVFTP only。
-- Phase 2I-C.3.D.1-D.3：IMPLEMENTED；D.4 冻结单 Transport 并删除旧选择路径。
-- Mission Ready、timing、RGB 与 mission.dat apply：FIRMWARE UNKNOWN / NOT PROVEN。
+阶段报告保留各自基线；当前进度及 UI Replacement Readiness 与 UI 实际验收的区分见 [Development_Status_CN.md](Development_Status_CN.md)。
 
 ## 16. Console Presentation Authority
 
@@ -301,3 +296,9 @@ NSIS installed shortcut
 `DroneShowPlatform1.Target.cs` 的 Game Target PreBuildSteps 调用 `PreparePayload.ps1`。该脚本编译 Release x64 Console 与 Launcher，只复制 allow-list 中的 EXE、两个配置、README 和三个 VC143 CRT DLL，并生成 SHA-256 manifest；`DroneShowPlatform1.Build.cs` 以 NonUFS loose files 暂存，源码、测试程序、PDB 和开发配置不会进入交付 payload。
 
 安装布局由 `installed-layout.marker` 区分。安装版把可变数据放入 `%LOCALAPPDATA%/DroneGCS`；便携包没有该标记，继续使用包内配置语义。完整控制模式下，Launcher/UE 退出后 Console 保持运行，避免控制后端被意外终止；操作员确认安全后在 Console 按 Ctrl+C 正常释放端口和资源。
+
+## 18. UI 应用入口与本机模拟边界
+
+[UIBridge](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSUIBridgeSubsystem.cpp) 在 Subsystem Initialize 中持有既有 Coordinator，Widget 重绑走视图绑定；业务查询/意图经现有公共 API，Coordinator 的 Mapping/AutoStart/Upload 状态不应依赖短期 Widget 存活。公共接口见 [GCSUIBridgeSubsystem.h](../UnrealGCS/Source/DroneShowPlatform1/Public/GCSUIBridgeSubsystem.h)，保留既有 Fleet/Assignment/Upload Authority。
+
+[仿真 Subsystem](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSSimulationSubsystem.cpp) 使用单工作线程与每机模拟 UDP 端点；它直接包含 Console 的 MDHK dialect。该事实不等于生产 UE 可直接控制真机，其与长期冻结边界的适用关系见状态入口待确认。参数、命令范围、停止/超时清理方法见 [Local_Simulation_CN.md](Local_Simulation_CN.md)。

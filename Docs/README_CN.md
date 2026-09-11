@@ -2,22 +2,22 @@
 
 Status: CURRENT SUPPORTING
 Authority: 文档导航、分类与 Source-of-Truth 索引
-Last Updated: 2026-09-03
+Last Updated: 2026-09-11
 
 ## 1. START HERE
 
-2026-09-09 新增 [架构治理审计与方案（十份文档）](Architecture/00_REPO_OVERVIEW.md)，基线 `a95309d8`。当前事实差异、主要依赖、UI 可替换 API 与分阶段路线图均在该目录；只有审计文档已完成，重构 Phase 0 未开始。
+当前源码基线、实现与四类验证状态、待办和发布就绪仅见 [Development_Status_CN.md](Development_Status_CN.md)。[架构治理审计](Architecture/00_REPO_OVERVIEW.md) 与阶段报告是历史基线资料，不作为当前阶段入口。
 
 推荐阅读顺序：
 
 1. [Architecture_Freeze_CN.md](Architecture_Freeze_CN.md) — 不能违反的长期边界。
 2. [Code_Architecture_CN.md](Code_Architecture_CN.md) — 当前生产代码如何运行。
-3. [Development_Status_CN.md](Development_Status_CN.md) — DONE、NEXT、NOT STARTED、DEFERRED、UNKNOWN。
+3. [Development_Status_CN.md](Development_Status_CN.md) — 唯一当前状态入口：实现、历史自动化、人工验收、真机验证分列。
 4. 当前任务相关专项 Architecture。
 5. [PROJECT_HANDOFF_CN.md](PROJECT_HANDOFF_CN.md) — 快速接手摘要。
 6. `History/` 只作历史证据，不用于判断当前实现状态。
 
-Source of Truth 优先级：当前生产源码、已存在并通过的测试、明确标级的人工/硬件证据、Architecture Freeze、专项 Architecture、History。
+事实判定：源码确定实现，日志确定当时测试结果；人工/硬件证据独立分级。冻结合同不因实现存在就自动视为合规，冲突列入唯一状态入口待确认。
 
 ## 2. CURRENT Authority
 
@@ -44,7 +44,7 @@ Route Upload ListView 的稳定行身份与分页恢复显示合同见 `UI_Archi
 | [PROJECT_HANDOFF_CN.md](PROJECT_HANDOFF_CN.md) | 新会话快速接手与安全边界 |
 | [Test_Architecture_CN.md](Test_Architecture_CN.md) | Console/UE/Hardware 测试入口和证据边界 |
 | [../Tools/Launcher/README.md](../Tools/Launcher/README.md) | 联合软件包、启动/退出、运行数据与开发机打包接入 |
-| [../Tools/Launcher/VALIDATION.md](../Tools/Launcher/VALIDATION.md) | 当前联合包与安装程序验证结果 |
+| [../Tools/Launcher/VALIDATION.md](../Tools/Launcher/VALIDATION.md) | 2026-09-03 旧联合包/安装证据，不代表当前源码覆盖 |
 | [../Tools/Installer/README.md](../Tools/Installer/README.md) | Shipping 输入校验、NSIS 安装构建、分发和验收流程 |
 
 ## 4. History / Archived
@@ -94,7 +94,9 @@ Route Upload ListView 的稳定行身份与分页恢复显示合同见 `UI_Archi
 | Test and evidence boundary | `Test_Architecture_CN.md` |
 | Historical rationale | `History/`；无当前 Authority |
 
-## 7. Inventory Classification
+## 7. 历史索引盘点（2026-09-03）
+
+以下原盘点仅适用于当时基线，不是当前仓库数量；当前状态以 [Development_Status_CN.md](Development_Status_CN.md) 为准。
 
 2026-09-03 审计得到 31 个现存 Markdown；拆分联合包历史验证后为 32 个：
 
@@ -113,8 +115,8 @@ Route Upload ListView 的稳定行身份与分页恢复显示合同见 `UI_Archi
 - 用户确认的硬件观察必须标为 `USER-CONFIRMED`，无日志时不得升级为固定协议结论。
 - History 文件不得作为当前实现 Authority。
 - 仓库 Markdown 使用相对链接，不写本机绝对路径和易漂移行号。
-- 功能完成后同步更新 Code Architecture、对应专项 Architecture、Development Status 与本索引。
+- 架构/用法变化更新对应说明；当前进度、证据与发布判断只更新 Development Status，其他文档维护入口引用。
 
-## 架构治理Phase 0基线
+## 架构治理历史基线索引
 
-[BASELINE索引](Architecture/BASELINE.md) · [构建](Architecture/10_BUILD_BASELINE.md) · [测试](Architecture/11_TEST_BASELINE.md) · [Command](Architecture/12_COMMAND_BASELINE.md) · [Telemetry](Architecture/13_TELEMETRY_BASELINE.md) · [Upload](Architecture/14_UPLOAD_BASELINE.md) · [多机](Architecture/15_MULTI_VEHICLE_BASELINE.md) · [UI](Architecture/16_UI_BEHAVIOR_BASELINE.md)。仅Phase0已执行，Phase1未开始。
+[BASELINE索引](Architecture/BASELINE.md) · [构建](Architecture/10_BUILD_BASELINE.md) · [测试](Architecture/11_TEST_BASELINE.md) · [Command](Architecture/12_COMMAND_BASELINE.md) · [Telemetry](Architecture/13_TELEMETRY_BASELINE.md) · [Upload](Architecture/14_UPLOAD_BASELINE.md) · [多机](Architecture/15_MULTI_VEHICLE_BASELINE.md) · [UI](Architecture/16_UI_BEHAVIOR_BASELINE.md)。这些文件保留当时结论；当前进度统一见 [Development_Status_CN.md](Development_Status_CN.md)，不从历史暂停点推断当前阶段。

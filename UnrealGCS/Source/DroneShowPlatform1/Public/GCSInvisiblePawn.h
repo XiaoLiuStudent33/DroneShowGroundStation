@@ -27,6 +27,10 @@ public:
  UFUNCTION(BlueprintCallable, Category="GCS|View") void PanOrbit(float RightDelta, float UpDelta);
 
  void FitMapBounds(const FBox& Bounds, FVector East, FVector Up);
+ void SetOrthographicView(bool bOrthographic);
+ bool IsOrthographicView() const;
+ // V3 supplies the actual drawer/input geometry; legacy input policy still applies.
+ void SetWorkbenchInputBlocked(bool bBlocked) { bWorkbenchInputBlocked=bBlocked; }
 protected:
  virtual void BeginPlay() override;
  virtual void SetupPlayerInputComponent(UInputComponent* Input) override;
@@ -43,6 +47,7 @@ private:
  float Elevation = 45.0f;
  bool bOriginLocked = true;
  bool bDragging = false;
+ bool bWorkbenchInputBlocked = false;
  bool bMiddleWasDown = false;
  FVector2D LastMouse = FVector2D::ZeroVector;
  void UpdateOrbitCamera();

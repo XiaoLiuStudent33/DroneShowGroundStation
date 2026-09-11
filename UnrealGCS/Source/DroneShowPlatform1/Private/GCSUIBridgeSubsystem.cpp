@@ -72,6 +72,12 @@
 #include "Windows/HideWindowsPlatformTypes.h"
 #endif
 
+static FString GCSViewPath(const UObject* Context, const TCHAR* Path)
+{
+    const bool V3 = Context && Context->GetWorld() && Context->GetWorld()->GetOutermost()->GetName().Contains(TEXT("L_GCS_Workbench_V3"));
+    return V3 ? FString(Path).Replace(TEXT("/Game/UI/"), TEXT("/Game/UI_V3/")) : FString(Path);
+}
+
 namespace
 {
 	constexpr TCHAR UploadDashboardClassPath[] =
@@ -633,6 +639,8 @@ void UGCSUIBridgeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 {
+	// V3 binds fleet/view interfaces directly and must not bind the legacy Widget tree.
+	if (GetWorld() && GetWorld()->GetOutermost()->GetName().Contains(TEXT("L_GCS_Workbench_V3"))) return;
 	if (RouteWorkflowCoordinator) RouteWorkflowCoordinator->DetachView();
 	UnregisterMarqueeInputProcessor();
 	UnbindFleetList();
@@ -680,11 +688,11 @@ void UGCSUIBridgeSubsystem::BindMainWidget(UUserWidget* MainWidget)
 	}
 	CreateNavigationPages();
 	BindNavigationButtons();
-	bFleetPanelRequestedVisible = false;
+	bFleetPanelRequestedVisible = MainWidget && MainWidget->GetClass()->GetPathName().StartsWith(TEXT("/Game/UI_V3/"));
 	bDroneDetailRequestedVisible = false;
 	ApplyNavigationVisibility();
-	FGCSUIWidgetPresenter::SetWidgetVisible(RightPanelWidget, false);
-	FGCSUIWidgetPresenter::SetWidgetVisible(PlaybackWidget, false);
+	FGCSUIWidgetPresenter::SetWidgetVisible(RightPanelWidget, MainWidget && MainWidget->GetClass()->GetPathName().StartsWith(TEXT("/Game/UI_V3/")));
+	FGCSUIWidgetPresenter::SetWidgetVisible(PlaybackWidget, MainWidget && MainWidget->GetClass()->GetPathName().StartsWith(TEXT("/Game/UI_V3/")));
 	UpdateSelectionRectangleVisual(FVector2D::ZeroVector, FVector2D::ZeroVector, false);
 
 	if (UButton* ViewButton =
@@ -964,7 +972,7 @@ bool UGCSUIBridgeSubsystem::CreateUploadDashboardIfNeeded()
 #endif
 	{
 		const TSubclassOf<UUserWidget> DashboardClass =
-			LoadClass<UUserWidget>(nullptr, UploadDashboardClassPath);
+			LoadClass<UUserWidget>(nullptr, *GCSViewPath(this, UploadDashboardClassPath));
 		if (!DashboardClass)
 		{
 			UE_LOG(
@@ -1931,6 +1939,10 @@ void UGCSUIBridgeSubsystem::ResetAdvancedConfirmation()
 
 void UGCSUIBridgeSubsystem::TickAdvancedControls()
 {
+    if (MainWidgetRef.IsValid() && MainWidgetRef->GetClass()->GetPathName().StartsWith(TEXT("/Game/UI_V3/")))
+        if (auto* Status = FindTopBarText(TEXT("Status")))
+            Status->SetText(FText::FromString(CanSendOperatorCommands() ? TEXT("CONTROL LINK  /  READY") : TEXT("CONTROL LINK  /  DISCONNECTED")));
+
 	if (bAdvancedConfirmationArmed &&
 		FPlatformTime::Seconds() > PendingAdvancedConfirmationExpiresAtSeconds)
 	{
@@ -6193,7 +6205,9 @@ void UGCSUIBridgeSubsystem::OpenRouteImport()
 	{
 		UUserWidget* Owner = MainWidgetRef.Get();
 		APlayerController* PlayerController = Owner ? Owner->GetOwningPlayer() : nullptr;
-		const TSubclassOf<UUserWidget> ImportClass = RouteImportWidgetClass;
+		const TSubclassOf<UUserWidget> ImportClass = Owner && Owner->GetClass()->GetPathName().StartsWith(TEXT("/Game/UI_V3/"))
+            ? LoadClass<UUserWidget>(nullptr, TEXT("/Game/UI_V3/WBP_GCS_RouteImport.WBP_GCS_RouteImport_C"))
+            : RouteImportWidgetClass.Get();
 		if (!PlayerController || !ImportClass)
 		{
 			UE_LOG(LogTemp, Error, TEXT("[RoutePreviewUI] Unable to load WBP_GCS_RouteImport."));
@@ -6737,7 +6751,7 @@ void UGCSUIBridgeSubsystem::HandleTelemetryFilterToggleClicked()
 		UUserWidget* Main = MainWidgetRef.Get();
 		if (!Main) return;
 		UClass* FilterClass = LoadClass<UUserWidget>(nullptr,
-			TEXT("/Game/UI/WBP_GCS_TelemetryFilter.WBP_GCS_TelemetryFilter_C"));
+			*GCSViewPath(this, TEXT("/Game/UI/WBP_GCS_TelemetryFilter.WBP_GCS_TelemetryFilter_C")));
 		if (!FilterClass) return;
 		Filter = CreateWidget<UUserWidget>(Main, FilterClass);
 		if (!Filter) return;
@@ -7063,7 +7077,7 @@ UUserWidget* UGCSUIBridgeSubsystem::CreateNavigationPage(
 {
 	UUserWidget* Owner = MainWidgetRef.Get();
 	APlayerController* PlayerController = Owner ? Owner->GetOwningPlayer() : nullptr;
-	const TSubclassOf<UUserWidget> PageClass = LoadClass<UUserWidget>(nullptr, ClassPath);
+	const TSubclassOf<UUserWidget> PageClass = LoadClass<UUserWidget>(nullptr, *GCSViewPath(this, ClassPath));
 
 	if (!PlayerController || !PageClass)
 	{

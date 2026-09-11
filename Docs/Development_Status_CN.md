@@ -1,3 +1,92 @@
+# DroneGCS 当前开发状态
+
+Status: CURRENT — 唯一当前状态入口
+Last Updated: 2026-09-11（P0 文档核对）
+
+## 1. 文档职责与源码核对基线
+
+本文件集中维护当前源码实现、已有验证证据、人工与真机验收、证据缺口及开发顺序。其他文档保留架构合同、接口和使用/测试方法，进度与发布就绪判断统一引用本文件。源码证明实现，既有日志证明当时运行结果；测试源码存在不等于运行通过。
+
+| 基线项 | 本次只读记录 |
+|---|---|
+| 工程 / Git 根目录 | C:\Users\13092\Documents\DroneGCS（可访问，与 Git 根一致） |
+| 分支 / 完整 HEAD | master / 9cf2f5e9ff9307a0d7a2aab42282f380b4feeb4c |
+| 提交时间 / 说明 | 2026-09-11T13:02:37+08:00 / 9/11优化 |
+| 开工工作区 | 干净，与总控参考一致；无已有修改 |
+| 核对范围 | 白名单文档、相关当前源码、已有报告及日志；仅修改白名单 Markdown |
+| 收尾工作区观察 | 2026-09-11T13:37:11+08:00：除八份本轮 Markdown 外，出现一份已有 uasset 修改和一份未跟踪 umap；本轮未写入这些资源，来源未确认，原样保留，详见第 4 节。 |
+| 运行边界 | 本轮没有构建、重跑测试、启动程序或真机操作，不产生新的运行 PASS |
+| 版本含义 | HEAD 是源码核对版本；旧安装包 1.0.0 不能作为当前源码已交付版本 |
+
+本轮 P0 文档变更等待总控审查，不提交、不推送、不进入 P1。以下历史自动化均不自动绑定本次 HEAD；没有完整工作树指纹的报告，其精确源码覆盖仍待验证。
+
+## 2. 当前实现与验证状态矩阵
+
+实现状态使用“已实现 / 部分实现 / 未实现 / 待验证”；证据编号见后表。“文档记载，原始证据未核实”不升级为现场确认。
+
+| 功能 | 实现状态及源码定位 | 历史自动化（本轮均未重跑） | 人工验收 | 真机验证 |
+|---|---|---|---|---|
+| 架构治理、应用入口、UI 生命周期 | 已实现：阶段 A/B/C 对应入口存在；[UIBridge](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSUIBridgeSubsystem.cpp) Initialize 持有 Coordinator，GetWorkflowState 等高层入口；[公共合同](../UnrealGCS/Source/DroneShowPlatform1/Public/GCSUIBridgeSubsystem.h)。不据此宣布全架构合规 | E1：Phase 0、Phase 1、A/B/C 和 Final 有历史完成记录；Final 是 UI Replacement Readiness | 待验收：UI 重做及实际交互/视觉不属于 Readiness；旧 FleetPanel 现场通过仅为历史文档记载，原始证据未核实 | 不适用（结构接入）；实际命令效果另列 |
+| Fleet、遥测与命令 | 已实现：[DroneManager](../ConsoleGCS/DroneManager.cpp) endpoint 索引；[UIBridge 公共合同](../UnrealGCS/Source/DroneShowPlatform1/Public/GCSUIBridgeSubsystem.h) 独立查询、选择与命令；[FlightControl](../ConsoleGCS/FlightControl.cpp) StartHoverMission 工作流 | E1：当时 Console/UE 回归；结构测试不能证明物理动作 | 待验收：当前 UI→Console→模拟端→遥测/结果完整闭环 | 待验证：relay-1 ACK 与断电差异见 E6；ACK 不证明物理完成 |
+| DroneID / RouteSlot / NPZ Mapping | 已实现：[DroneLogicalId.h](../Shared/DroneIdentity/DroneLogicalId.h) TryDroneLogicalIdToRouteSlot 默认 RouteSlotIndex = NumericDroneID，允许 Drone000→0；[Coordinator](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSRouteWorkflowCoordinator.inl) CaptureAutoStartSnapshot 在确认 Mapping 存在时采用 Entries 的目标和 Slot，校验数据集、域、在线、endpoint、重复和范围 | E1：阶段基线与 Mapping/rebind 用例仅证明对应夹具 | 待验收：确认后更改勾选、重绑和上传目标提示 | 待验证：真实多机目标、持久身份与上传一致性 |
+| Artifact / Freeze / MAVFTP 上传 | 已实现：[RouteUploadManager](../ConsoleGCS/RouteUploadManager.cpp) StartPrepared / CreateConfiguredMissionTransport 生产工厂仅创建 MAVFTP，使用冻结配置与 Session；[Coordinator](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSRouteWorkflowCoordinator.inl) AutoStart / Mapping 链 | E1：受测事务、并发、隔离、fake wire；历史 9100/4000 见 E6 | 待验收：当前源码完整 UI 上传工作流 | 待验证：历史上传不能证明多机规模、任务完整执行、时序或 RGB waypoint |
+| 本机遥测 / RGB | 已实现：[仿真源码](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSSimulationSubsystem.cpp) FGCSSimulationWorker::Run：固定 XY、随机演示或受控高度，五类报文、RGB 持久回报；[默认参数](../UnrealGCS/Source/DroneShowPlatform1/Public/GCSSimulationSubsystem.h) 0.5m、100 架、10001 端口；输入上限 20000 | E2：基础全套及间距、187、动态等定向报告，不是 20K 验收 | 待验收：列表/详情/遥测表/场景一致及完整 RGB 点击链 | 不适用（本机模拟） |
+| 本机飞行指令 | 部分实现：[仿真源码](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSSimulationSubsystem.cpp) Run 支持 SET_MODE 0/4/5/6/9、普通 ARM/DISARM、GUIDED 起飞、LOITER、RTL/LAND 及 COMMAND_LONG ACK；仅有限状态与竖直高度变化 | E2：Commands 2/2、Flight 3/3；不替代 UI 端到端路径 | 待验收：模式→解锁→起飞→悬停→降落→上锁及拒绝提示 | 不适用（模拟 ACK）；真实执行另验 |
+| 仿真停止 / 缩量 / 退出清理 | 已实现：[仿真源码](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSSimulationSubsystem.cpp) StopSimulation / Deinitialize 释放线程和端点；[主循环](../ConsoleGCS/ConsoleGCSApplication.cpp) 开关调用 [RemoveOfflineSimulationDrones](../ConsoleGCS/DroneManager.cpp) | E3：UE 4/4，三端点停止后删除日志、Console 回归；不含实际异常退出画面 | 待验收：停止/缩量、PIE、正常/异常 UE 退出后的快照及界面清空 | 不适用（专用 loopback 条件）；生产机不能套用删除语义 |
+| 性能 / 20K | 部分实现：[Console 主循环](../ConsoleGCS/ConsoleGCSApplication.cpp) 分段收包/发布、[DroneManager](../ConsoleGCS/DroneManager.cpp) Session 调度、[DSP 分批合同](../Shared/DSPGCSProtocol/DSPGCSCommandBatching.h)；联合负载能力待验证 | E4：Console 独立采样与 DSP wire 有限窗口通过，保留先前失败及观察器错误 | 待验收：UE 实际操作、持续负载、批量命令和上传联合场景；现场间歇离线不能宣布彻底解决 | 待验证：不属于硬件规模证据 |
+| 环绕 / 地图 / 贴地 / 坐标轴 | 已实现：[Visualization](../UnrealGCS/Source/DroneShowPlatform1/Private/DroneFleetVisualizationActor.cpp) ConvertRouteToMapDisplay 与 Live 显示高度 clamp；[Pawn](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSInvisiblePawn.cpp) 环绕；[UIBridge](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSUIBridgeSubsystem.cpp) 地图/坐标轴接线 | E5：坐标逻辑、资产初始化和自动化；NullRHI 不证明像素无遮挡 | 待验收：鼠标、地图透明度/双面、负高度贴地、坐标轴无遮挡与重绑 | 不适用（显示）；原始遥测/NPZ/上传不因贴地改写 |
+| 联合启动 / 安装交付 | 已实现：机制见 [Launcher.cpp](../Tools/Launcher/Launcher.cpp)、[PreparePayload.ps1](../Tools/Launcher/PreparePayload.ps1)；当前 HEAD 新候选包覆盖待验证 | E6：旧 V3 / 1.0.0 文档记录，原始构建证据未完全核实，不能绑定新源码 | 已有明确记录：2026-09-03 安装启动用户确认，但仅文档记录、仓库无异机日志；当前候选包待验收 | 待验证：安装成功不覆盖飞行、上传或固件 |
+
+### 2.1 历史证据索引与适用范围
+
+| 编号 | 日期、当时基线和来源 | 覆盖、结果与限制 |
+|---|---|---|
+| E1 | 2026-09-09～10：[Phase 0](Architecture/BASELINE.md)（a95309d8）、[Phase 1](Architecture/17_PHASE1_REPORT.md)（b3da56f）、[A 结果](../BuildLogs/ArchitectureStageA-20260910/stage-a-results.json)（阶段记录 b5f9a6d）、[B](Architecture/STAGE_B_REPORT.md)（4820a11）、[C](Architecture/STAGE_C_REPORT.md)（e063c78）、[Final 原始汇总](../BuildLogs/UIReplacementFinal-20260910/final-results.json)（e063c78 + 当时未提交 Stage C 工作树） | 各报告仅完成限定阶段。Final JSON：UE 225 success + 22 warnings + Synthetic 1，failed/notRun=0；Console 六组 exit 0，Launcher 32。三项生命周期 commandSubmitLogCount=0，不是真实命令演练。Phase 0 首轮 3 项配置失败、B 首轮夹具失败、既有 Cesium/MSVC 等警告保留。READY WITH NON-BLOCKING TECH DEBT 不等于 UI 重做、真机或视觉完成。 |
+| E2 | 2026-09-11（JSON 日期，未给完整 Git 基线）：[Simulation](../BuildLogs/Simulation/index.json)、[Lifecycle](../BuildLogs/SimulationLifecycle/index.json)、[Spacing](../BuildLogs/SimulationSpacing/index.json)、[187](../BuildLogs/Simulation187/index.json)、[Dynamic](../BuildLogs/SimulationDynamic/index.json)、[Blender](../BuildLogs/SimulationBlender/index.json)、[Commands](../BuildLogs/SimulationCommands/index.json)、[Flight](../BuildLogs/SimulationFlight/index.json) | 已读 JSON：基础 230 success + 22 warnings；生命周期/间距/187/动态/Blender 各 1 success；命令 2、飞行 3 success；均 failed/notRun=0。后续定向增量不是基础全套重跑；早期水平漂移、2m 默认值属于当时行为。 |
+| E3 | 2026-09-11（阶段日期；日志未给完整 Git 基线）：[Cleanup](../BuildLogs/SimulationCleanup/index.json)、[三机集成日志](../BuildLogs/simulation-cleanup-integration.log)、[Console 回归日志](../BuildLogs/simulation-cleanup-regression.log) | JSON 四项 success、0 warning/failure/notRun：Commands、FlightLifecycle、LoopbackAndLifecycle、Fleet Niagara CountOrderAndOfflineStability；集成日志明记 UE 报文夹具→Console 三机上线、停止后删除；回归末尾 suite passed。不是 20K 或异常进程退出实际 UI 验收。 |
+| E4 | 2026-09-10：[性能报告](Architecture/20K_CONSOLE_PERFORMANCE_CN.md)，起始 c5d3dfe，含后续工作树增量；[180 秒汇总](../BuildLogs/Scale20K/cooperative-results.json)、[90 秒 wire 汇总](../BuildLogs/Scale20K/publish-log-wire-results-v2.json) | 180 秒预热后 161 窗口最低在线 20000，max receive gap 382.791ms；无 UE 命令、无上传 Job。wire：289 完整快照、285 个 20K 快照、最大间隔 610.493ms、0 解码错误、0 次 >2s。隔离监听器不等于 UE；当前 HEAD 与当时二进制绑定未核实。报告保留现场失败及首版观察器字节序错误，有界日志非无损事件审计。 |
+| E5 | 2026-09-10（JSON 无完整 Git 基线）：[DisplayGround](../BuildLogs/DisplayGround/index.json)、[AxesMeshV4](../BuildLogs/AxesMeshV4/index.json)、[MapControls](../BuildLogs/MapControls/index.json) | 贴地 2 success、轴 1 success；地图全套 229 success + 22 warnings；均 failed/notRun=0。坐标/资产初始化/保存控件不证明像素或操作体验；更早 MapOrbit 负高度仍在地下的结论仅属历史。 |
+| E6 | 2026-09-03：[交付记录](../Tools/Launcher/VALIDATION.md)，03825841f81e516731d12df632867be67f72ad57 + 当时打包工作树；硬件上传及 2026-09-09 relay 观察见本文件历史原文 | 旧包 Smoke 32、NSIS/构建、异机安装启动：文档记载，原始证据未核实；仓库无异机日志。硬件记录 9100 Artifact / 9101 Wire、4000 容量三段、Count/Home/First/Last PASS、8829ms；1000～6000 成功与 7000 NAK 2 非通用上限。relay-1：8 架中 6 架断电，Drone001/007 ACK ACCEPTED 但未断电。不能扩大到多机上传规模、任务完整执行或 RGB/固件时序。 |
+
+## 3. 已确认的边界和限制
+
+- DroneID 与 RouteSlot 是不同身份。默认数字匹配只是建立显式 Assignment 的规则；确认 NPZ Mapping 覆盖目标集合和 Slot 选择，陈旧 Mapping 拒绝而非隐式回退。
+- 仿真单工作线程、每机独立 loopback 端点。演示模式固定 XY、逐机逐轮从 −1000～6000mm 采样（共享 mt19937 连续随机流）；标准与 #187 共用当轮高度。首次普通解锁转为地面受控状态；GUIDED 且 armed 才接受有限 0 < height <= 100m 起飞；约 1m/s 升降，LOITER 保持，RTL/LAND 只下降，落地后显式上锁。没有自动航线/MAVFTP 上传应答、完整动力学或故障注入；其他 COMMAND_LONG 返回 UNSUPPORTED。
+- 停止/缩量需先停止再重启；正常 GameInstance 结束释放线程/套接字。异常退出只能从心跳停止机制推断后端将进入超时检查，实际异常退出链待验收。
+- [仿真配置](../ConsoleGCS/gcs-config-simulation.ini) 开启 clear_offline_simulation=true，监听 127.0.0.1:10001、心跳阈值 3000ms，启用本机命令、关闭上传；[AppConfig](../ConsoleGCS/AppConfig.cpp) 默认清理 false。删除还要求 IP 恰为 127.0.0.1、MAVFTP/MissionUpload service 都关闭、HeartbeatTimeout。没有独立模拟器认证身份；不应泛化为生产机清理。删除经后续完整快照传播，3 秒不是完整 UI 清空的硬实时承诺。
+- [普通配置](../ConsoleGCS/gcs-config.ini) 使用 192.168.1.254，与仿真 profile 分开；普通离线 Session 保留语义不变。删除仿真机不等于结束承担控制职责的 Console 进程。
+- 地图贴地只对显示转换使用 max(0, height)，保留地图法线和球心半径偏移；原始 GPS、NPZ ENU、读数、绝对转换、上传数据不改写。Live 显示基准不是实测地面；像素、遮挡和鼠标必须人工验证。
+- 20000 输入上限、Console 独立采样、DSP wire、UE 联合规模、多机硬件是不同范围，不能互相替代。
+- All Write ACKed != Mission Ready；命令 ACK、任务写入/抽样完整性、任务完整执行、物理动作分别验收。
+
+## 4. 待验证问题及证据缺口
+
+1. P1：仿真完整 UI 控制闭环；模式/armed/RGB 在列表、详情、遥测表与场景的一致性；停止/缩量/PIE/正常与异常退出；重绑、地图、相机视觉。
+2. P2：UE＋Console 持续联合规模、批量操作与上传；现场间歇离线可追溯复验；当前源码候选 Shipping/Installer、异机、升级、卸载、签名与归档。
+3. 后续硬件：E.2 多机上传、Mission 时序、RGB waypoint、time-control/custom MAV_CMD_USER、任务完整性；Drone001/007 继电器/断电差异。上传或 ACK 不代替物理观察。
+4. Command result loss / callback re-entry：Final 列为技术债；[性能报告](Architecture/20K_CONSOLE_PERFORMANCE_CN.md) 后续记录非 final 结果保留修正，不能笼统沿用“全部未修复”，也不能宣布全部关闭；当前分支与重入行为待专项核对/验证。
+5. 冻结边界待总控判断：[Architecture Freeze](Architecture_Freeze_CN.md) 保留“不得自动按相同数字匹配”，但当前源码确有默认数字匹配；本轮不改变规则或宣布合规。UE 仿真直接包含 MAVLink dialect、持有模拟端 socket，其与生产边界的适用关系待确认；[FlightControl::StartHoverMission](../ConsoleGCS/FlightControl.cpp) 存在每活动 Session 工作线程，不能由视觉规则推断后端合规。
+6. 白名单外：[Route_Upload_Architecture_CN.md](Route_Upload_Architecture_CN.md) 仍有减一映射/仅勾选集合；[Visualization_Architecture_CN.md](Visualization_Architecture_CN.md) 仍写“1000 drones 当前稳定目标”；[Tools/Launcher/VALIDATION.md](../Tools/Launcher/VALIDATION.md) 仍标 CURRENT EVIDENCE。建议后续限定文档任务纠正映射、区分规模目标/验收及旧包范围，并引用本入口；本轮未改。
+7. 历史报告“Phase 1 NOT STARTED”“未 commit/push”等保留为当时事实。缺完整基线指纹、异机日志或真机原始报告的条目不能绑定当前 HEAD；未找到证据不代表功能未实现。
+8. 10000-drone Route Store 分片、备用机补点/冲突预测/重入、跨 Console 重启稳定身份沿用历史延后记录，当前实现细节与验收待验证，不借 P0 提前设计。
+
+9. 施工期间新增的白名单外工作区差异（本轮未写入、未回退、来源未确认）：[已有外部 Actor 资产](../UnrealGCS/Content/__ExternalActors__/Maps/DroneShowPlatform1/C/PX/4077M44FS9TIRU9LAV3ZHH.uasset) 为 tracked modified；[NewWorld.umap](../UnrealGCS/Content/Maps/NewWorld.umap) 为 untracked。开工状态干净，收尾不再是纯文档工作区；总控需独立确认资源差异归属，本次 P0 文档统计不包含资源。
+## 5. 下一阶段顺序
+
+P0 文档和版本基线（本次整理，待总控审查）
+→ P1 仿真完整交互闭环、UI 生命周期与视觉验收
+→ P2 UE＋Console 联合规模验证、新版交付候选包
+→ 后续多机硬件上传与固件验证。
+
+历史架构 Phase 0/Phase 1/A/B/C 与这里 P0/P1/P2 不同。本轮交付后停止。
+
+## 6. 历史记录（原始结论保留）
+
+以下原文仅适用于各自当时基线；“当前”“本轮”“未 commit/push”“未进入下一阶段”和旧参数均为历史措辞。当前状态以本文件第 2 节状态矩阵为准，历史命令不构成本轮执行授权。
+
+<details>
+<summary>展开 P0 开工前原文（完整保留，不作为当前状态入口）</summary>
+
 # DroneGCS Development Status
 
 2026-09-11 排列间距：接入用户创建的 SPN_SimSpacingMeters，默认 2m、范围 0.1–100m；启动时用于行列坐标计算，运行中锁定，停止后可改，UI 重绑保留当前运行间距。编译通过，SimulationSpacing 定向测试 1/1 通过，实际 187 定位报文反算行列间距均为 0.5m（允许 GPS 量化误差 0.02m），覆盖非法数值、控件绑定和启停恢复。
@@ -320,3 +409,5 @@ C++ 在蓝图初始化后，沿 North x East 得到的地图上方向，将低�
 完成 PNG/JPG 导入、双面材质、透明度、物理宽度、东/北偏移、旋转、重置和整图取景，并自动同步已保存 UI 的数值。底图编辑与无人机/NPZ 场景基准分离，设置按关卡保存。导入限制 32MB、4096x4096，保存原图片路径。未实现在线地图源切换。
 
 Development Editor 编译通过；DroneGCS 全套 251/251 通过（229 success + 22 warnings），BuildLogs/MapControls/index.json。用户 UI 布局保留，未操作真机或提交推送。实际渲染验收待重启 UE。
+
+</details>

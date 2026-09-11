@@ -3,7 +3,7 @@
 无人机表演地面站生产项目。
 
 Status: CURRENT
-Last Updated: 2026-09-03
+Last Updated: 2026-09-11
 
 ## 系统边界
 
@@ -21,25 +21,9 @@ ConsoleGCS
 ArduPilot / APM
 ```
 
-## 当前状态
+## 当前状态入口
 
-Route Upload 框架已实现，包括 Live + Route Overlay、RouteAssignment、Artifact Workspace、Waypoint 生成与验证、Frozen Assignment、DSP Upload Job、Console `RouteUploadManager` 和 Mission Transport 抽象。
-
-当前生产上传链已冻结为：
-
-```text
-RouteUploadManager
--> MAVFTPMissionTransport
--> DroneSession endpoint-bound MavFtpClient
--> shared MAVLink sender/socket
--> ArduPilot
-```
-
-旧的标准 MAVLink Mission 上传 Transport 已退休并从生产源码、配置、CLI 与工程项删除。MAVFTP 失败会明确失败，不存在协议回退。
-
-9100 Artifact Items / 9101 Wire Mission Items 的三段真实生产上传已通过 Count/Home/First/Last 验证，Job ElapsedMs=8829。真实 Mission execution timing 与 RGB waypoint 执行仍属于固件验证边界。
-
-第一版可安装交付链已经完成：UE 5.5 Shipping 前端、可见 Console 后端、生产配置和运行库由联合启动器统一启动，并通过 NSIS 生成 `DroneGCS-Setup-1.0.0-x64.exe`。安装后的程序不读取开发机源码，也不要求 Visual Studio、UE 编辑器或 PowerShell。2026-09-03 的另一台电脑安装与启动结果为 `USER-CONFIRMED PASS`；该证据不自动等同于全部飞行、航线上传和固件行为验收。
+当前源码基线、实现状态、已有验证、人工/真机验收、待办和发布就绪判断仅维护于 [Development_Status_CN.md](Docs/Development_Status_CN.md)。旧安装包、架构阶段和测试结果不得作为当前 HEAD 的完整验收结论。
 
 ## 文档阅读顺序
 

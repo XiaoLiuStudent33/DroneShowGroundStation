@@ -12,9 +12,16 @@
 
 #include "Blueprint/UserWidget.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "Engine/GameInstance.h"
 #include "GCSUIBridgeSubsystem.h"
+#include "GCSLoginSubsystem.h"
+#include "GCSLoginWidget.h"
+#include "GCSMockWorkbench.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#include "GCSInvisiblePawn.h"
 #include "Modules/ModuleManager.h"
 #include "TimerManager.h"
 #include "UObject/UObjectIterator.h"
@@ -69,11 +76,63 @@ private:
 		{
 			return;
 		}
+		UGameInstance* Instance = World->GetGameInstance();
+		UGCSLoginSubsystem* Login = Instance ? Instance->GetSubsystem<UGCSLoginSubsystem>() : nullptr;
+		const bool bMock = World->GetOutermost()->GetName().Contains(TEXT("L_GCS_Workbench_V3"));
+		bool bMockCapture = false;
+#if WITH_DEV_AUTOMATION_TESTS
+        bMockCapture = bMock && FParse::Param(FCommandLine::Get(), TEXT("GCSMockCapture"));
+#endif
+		if ((!Login || !Login->IsAuthenticated()) && !bMockCapture)
+		{
+			for (TObjectIterator<UGCSLoginWidget> It; It; ++It)
+				if (It->GetWorld() == World && It->IsInViewport()) return;
+			UGCSLoginWidget* Widget = CreateWidget<UGCSLoginWidget>(PlayerController);
+			if (Widget)
+			{
+				Widget->AddToViewport(1000);
+				PlayerController->bShowMouseCursor = true;
+				FInputModeUIOnly Input;
+				Input.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+				PlayerController->SetInputMode(Input);
+			}
+			return;
+		}
 		ConfigureGroundStationInput(PlayerController);
+		// Reframe after the destination map has completed actor initialization.
+		if (AGCSInvisiblePawn* Pawn = Cast<AGCSInvisiblePawn>(PlayerController->GetPawn()))
+		{
+			Pawn->ResetOrbitView();
+		}
+
+
+        if (bMock)
+        {
+            // V3 uses its own fleet/view adapter; do not bind legacy Widget events.
+            for (TActorIterator<AActor> It(World); It; ++It)
+                if (It->GetClass()->GetName().StartsWith(TEXT("BP_GCS_CoordinateAxes"))) It->SetActorHiddenInGame(true);
+            for (TObjectIterator<UGCSMockWorkbench> It; It; ++It)
+                if (It->GetWorld() == World && It->IsInViewport()) return;
+            TArray<UUserWidget*> Previous;
+            for (TObjectIterator<UUserWidget> It; It; ++It)
+                if (It->GetWorld() == World && It->IsInViewport()) Previous.Add(*It);
+            for (UUserWidget* View : Previous) View->RemoveFromParent();
+            if (auto* Mock = CreateWidget<UGCSMockWorkbench>(PlayerController))
+            {
+                Mock->AddToViewport(100);
+                FInputModeGameAndUI Input;
+                Input.SetWidgetToFocus(Mock->TakeWidget());
+                Input.SetHideCursorDuringCapture(false);
+                PlayerController->SetInputMode(Input);
+            }
+            return;
+        }
 
 		const TSubclassOf<UUserWidget> MainWidgetClass = LoadClass<UUserWidget>(
 			nullptr,
-			TEXT("/Game/UI/WBP_GCS_Main_V2.WBP_GCS_Main_V2_C"));
+			World->GetOutermost()->GetName().Contains(TEXT("L_GCS_Workbench_V3"))
+            ? TEXT("/Game/UI_V3/WBP_GCS_Main_V2.WBP_GCS_Main_V2_C")
+            : TEXT("/Game/UI/WBP_GCS_Main_V2.WBP_GCS_Main_V2_C"));
 		if (!MainWidgetClass)
 		{
 			UE_LOG(LogTemp, Error, TEXT("Unable to load editable GCS UI: /Game/UI/WBP_GCS_Main_V2"));

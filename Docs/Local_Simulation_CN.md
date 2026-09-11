@@ -1,3 +1,53 @@
+# 本机无人机模拟使用说明
+
+Status: CURRENT SUPPORTING
+Last Updated: 2026-09-11
+
+本文件维护操作方法与协议适用范围。**当前实现、历史测试、人工验收、真机状态及下一阶段仅见 [唯一状态入口](Development_Status_CN.md)**。以下为使用说明，本轮 P0 未执行其中任何启动或操作。
+
+## 使用方法
+
+1. 使用仿真环境前先结束占用同一 DSP/MAVLink 端口的后端。运行 [StartLocalSimulation.cmd](../ConsoleGCS/StartLocalSimulation.cmd)，它从自身目录调用既有 Release 后端与 [gcs-config-simulation.ini](../ConsoleGCS/gcs-config-simulation.ini)，不自动构建。
+2. 在 UE 运行场景中展开集群仿真。默认目标端口 10001、数量 100、行列中心间距 **0.5m**；端口/数量必须为整数，范围分别为 1–65535 / 1–20000；间距允许 0.1–100m。20000 仅为输入上限，验收规模见状态入口。
+3. 点击开始。端口、数量和间距在运行中锁定；调整数量或间距先停止，再修改重启。UI 重绑保留运行参数，不因面板重建重新创建仿真。
+4. 点击停止释放工作线程及来源端点；正常结束 PIE/GameInstance 也调用清理。后端仍须完成超时判定及快照发布，列表/场景不保证立即清空；异常退出场景的验证范围见状态入口。
+
+只向本机 127.0.0.1 发送；改目标端口时同步匹配后端配置。状态文字“已发送”为本地 UDP 计数，不是后端在线、ACK 或命令执行确认。配置只在后端启动时读取，修改配置后需重新启动后端。
+
+## 参数、遥测与命令合同
+
+源码入口：[GCSSimulationSubsystem.h](../UnrealGCS/Source/DroneShowPlatform1/Public/GCSSimulationSubsystem.h) 与 [GCSSimulationSubsystem.cpp](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSSimulationSubsystem.cpp) 的 BindUI、StartSimulation、StopSimulation、Deinitialize、FGCSSimulationWorker::Run。
+
+- 控件绑定包括 TXT_SimStatus、SPN_SimTelemetryPort、SPN_SimDroneCount、SPN_SimSpacingMeters、BTN_StartSimulation、BTN_StopSimulation；布局由保存的 UI 资源提供。
+- 单后台线程，每架机独立 UDP 来源端口；SYSID/COMPID 都为 1，Console 按 IP+端口区分。来源端口从 20000 寻找至 65535，跳过目标端口；不能满足全部数量时整体失败并释放端点。
+- 约每机 1Hz 发送 HEARTBEAT、GPS_RAW_INT、GLOBAL_POSITION_INT、SYS_STATUS、MDHK_STATUS #187。初始 XY 为按间距排列的方阵；使用场景 CesiumGeoreference，缺失则使用源码默认场地坐标。
+- 非受控演示状态下 XY 固定，各机各轮从 −1000～6000mm 采样高度；一个共享 mt19937 连续随机流，不是每架独立随机流。标准与 #187 共用当轮高度，AMSL = 30m + 相对高度。电量每 30 秒降 1%、最低 20%，温度/电芯随时间波动，均为模拟数据；valid_flags 保留 0，不伪造硬件/固件标识。
+- 只处理来自配置后端 IP+端口的命令。LED_CONTROL #186 支持广播或 1/1 目标、instance/pattern=255、三字节 RGB，颜色持续通过 #187 回报，停止重建恢复默认青色。
+- SET_MODE 仅处理 custom-mode 标志及 0/4/5/6/9：进入受控状态，终止爬升、负高度归零；0/4/5 保持，6/9 下降。SET_MODE 不应表述为所有模式均支持。
+- COMMAND_LONG 普通解锁/上锁要求 param2=0；从未解锁到解锁时高度清零，普通上锁要求高度不大于零。GUIDED 且已解锁才接受有限 0 < 起飞高度 <= 100m，约 1m/s 接近目标后保持；LOITER/悬停停止升降；RTL/LAND 约 1m/s 下降，落地后显式上锁。
+- RTL 的 XY 已在各自 HOME，没有水平返航。未解锁起飞、无效高度、空中普通上锁返回拒绝；其他 COMMAND_LONG 返回 UNSUPPORTED。没有自动航线执行、MAVFTP 上传应答、完整飞行动力学或故障注入。
+
+## 后端清理与生产配置差别
+
+[ConsoleGCSApplication.cpp](../ConsoleGCS/ConsoleGCSApplication.cpp) 在 clear_offline_simulation 开启时调用 [DroneManager::RemoveOfflineSimulationDrones](../ConsoleGCS/DroneManager.cpp)。删除须同时满足：
+
+- remoteIp 恰为 127.0.0.1；
+- mavFtpServiceEnabled 与 missionUploadServiceEnabled 均关闭；
+- Session 状态为 HeartbeatTimeout。
+
+仿真 profile 开启此清理、3000ms 心跳阈值、本机命令和 DSP，关闭上传。普通配置不启用此清理（[AppConfig.cpp](../ConsoleGCS/AppConfig.cpp) 默认 false），不能把仿真清理等同普通生产 Offline 行为。没有独立模拟器认证标记，清理依赖上述配置/端点条件。
+
+停止、缩量后不再发送的旧端点及 UE 退出后的端点经过超时删除，再由完整快照传播到 UE；“约 3 秒”是心跳阈值，不是界面完成清空的硬时限。删除模拟 Session 不等于终止 Console 后端。正常/异常退出、重启后 DroneID 与界面一致性验收见状态入口。
+
+仿真报文供现有发现/遥测链消费；地图贴地仅影响渲染，不改写 NPZ、上传数据或真实飞机原始遥测。UE 内直接使用 MAVLink dialect/模拟 socket 与长期生产边界的适用关系仍列于状态入口待确认。
+
+## 历史记录（原始结论保留）
+
+以下原文仅适用于当时基线；“当前”“本轮”、旧参数、PASS 和“未 commit/push”等不是本轮工作区或验收结论。当前状态统一见 [Development_Status_CN.md](Development_Status_CN.md) 的状态矩阵。历史命令不构成本轮执行授权。
+
+<details>
+<summary>展开 P0 开工前原文（完整保留，不作为当前状态入口）</summary>
+
 # 本机无人机模拟
 
 2026-09-11：第一版提供协议遥测仿真，复用现有 ConsoleGCS 发现和 UE 遥测显示链路。
@@ -49,3 +99,5 @@ Blender 类似效果增量：取消同步水平漂移，独立随机高度。平
 ## 2026-09-11 仿真退出清理
 
 默认排列间距为 0.5 米。使用 StartLocalSimulation.cmd 启动更新后的后端，仿真配置 clear_offline_simulation=true。点击停止仿真、结束 PIE、关闭 UE（包括异常退出）后，模拟端停止心跳，后端在约 3 秒心跳超时后删除失联的本机模拟机；下一批全量快照同步清空 UE 列表、遥测表与场景。缩小仿真数量时旧端点同样被清理。普通配置默认关闭清理，非 127.0.0.1 的真实无人机不会被此功能删除。更新后需重启后端使配置生效。
+
+</details>

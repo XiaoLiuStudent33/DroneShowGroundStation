@@ -2,7 +2,7 @@
 
 Status: CURRENT
 Authority: 项目最高长期架构约束
-Last Updated: 2026-09-03
+Last Updated: 2026-09-11（事实适用范围核对；未重新冻结边界）
 Applies To: `ConsoleGCS`、`UnrealGCS`、`Shared`、Route domain、联合启动与安装交付
 Supersedes: 早期阶段性架构建议中的冲突内容
 
@@ -13,7 +13,7 @@ Supersedes: 早期阶段性架构建议中的冲突内容
 Source of Truth 优先级：
 
 1. 当前 Production 源码。
-2. 已存在并通过的自动化测试代码。
+2. 已有自动化运行日志及当时基线；测试代码只说明断言范围，不独立证明运行通过。
 3. 用户提供的本地审计和人工验证结果；必须标明证据等级。
 4. 本文件仍成立的冻结原则。
 5. 当前专项 Architecture 文档。
@@ -39,8 +39,8 @@ Source of Truth 优先级：
 - Fleet network identity 固定为 `Remote IP + UDP Source Port`。
 - MAVLink SYSID/COMPID 是协议元数据和 ACK/target 字段，不是 Fleet unique identity。
 - `DroneManager -> DroneSession` 是 Console Session ownership。
-- Offline 只改变在线状态，不删除 Session、DroneID、最后快照或稳定顺序。
-- 相同 endpoint 恢复后继续复用原 Session/DroneID。
+- 普通生产配置下 Offline 只改变在线状态，不删除 Session、DroneID、最后快照或稳定顺序。既有仿真清理例外：AppConfig 默认关闭 clear_offline_simulation；开启后仅删除 IP 为 127.0.0.1、MAVFTP/MissionUpload service 均关闭且 HeartbeatTimeout 的 Session。源码为 [DroneManager::RemoveOfflineSimulationDrones](../ConsoleGCS/DroneManager.cpp) 与 [应用循环](../ConsoleGCS/ConsoleGCSApplication.cpp)，不是普通生产机删除规则。
+- 未删除的相同 endpoint 恢复后继续复用原 Session/DroneID；不能对已被专用仿真清理删除的对象承诺同一身份。
 - 当前 DroneID 在 Console 进程生命周期内稳定；Console 重启后的持久化身份尚未保证。
 - RouteSlot 是航线槽位身份，不是 Drone、DroneID、SYSID 或 particle index。
 
@@ -100,7 +100,7 @@ FleetManager / RoutePreview
 - per-drone Widget/TextRender
 - per-drone Tick/Timer/Thread
 
-1000 drones 是当前稳定基线。10000 drones 是探索性/未来扩展路径，必须先测量 memory、UDP、parse、session、DSP、UE apply 和 Niagara，再决定优化。
+规模边界仍须以 memory、UDP、parse、session、DSP、UE apply 和 Niagara 分项测量决定优化。既有 1000/10000 规模表述不作为当前验收结论，Console 20K 采样也不扩大 UE 或硬件承诺；当前证据与范围见 [Development_Status_CN.md](Development_Status_CN.md)。
 
 ## 6. Production / Developer 边界
 
@@ -116,7 +116,7 @@ FleetManager / RoutePreview
 
 ## 7. Route Domain 冻结方向
 
-### 7.1 IMPLEMENTED
+### 7.1 既有 Route 调用合同
 
 - `URoutePreviewSubsystem` 是 Route Preview Authority。
 - `FRoutePreviewData` 保留原始 Local ENU，RouteSlot 为 0-based preview identity。
@@ -130,7 +130,7 @@ FleetManager / RoutePreview
 - 当前 Production Route Upload Transport 唯一固定为 `MAVFTPMissionTransport`。
 - `MavFtpClient`、FTP ingress、`MissionFtpCompiler`、`MAVFTPMissionTransport`、Hardware Harness 与 Quick Test 已实现并完成生产接线。
 
-### 7.2 FROZEN DIRECTION / NEXT
+### 7.2 冻结方向
 
 - Waypoint 生成必须使用 `Route Local ENU + Show Origin`，禁止从 UE World Position 反推 GPS。
 - RouteAssignment 必须保持独立 UE Route-domain Authority，不能藏在 FleetManager。
@@ -167,7 +167,7 @@ UE Route Workflow
 - Preview SampleRate 不等于飞控 Mission execution rate。
 - Legacy RGB `param1/param2/param3` 不是标准 `MAV_CMD_NAV_WAYPOINT` 语义，属于定制固件兼容行为。
 - `All Write ACKed != Mission Ready`。
-- 9100/4000 三段生产上传的 Count/Home/First/Last verification 已通过；真实 Mission execution timing、RGB 执行、time-control 与 custom MAV_CMD_USER 仍为 Firmware Unknown。
+- 9100/4000 历史上传、Mission timing、RGB、time-control 与 custom MAV_CMD_USER 的证据和未知项统一见 [Development_Status_CN.md](Development_Status_CN.md)。历史上传结果不构成当前源码或任意固件的完整验收。
 
 ## 9. 配置与网络
 
@@ -195,3 +195,12 @@ UE Route Workflow
 4. 当前任务相关专项 Architecture。
 5. Audit。
 6. `History/`。
+
+## 12. 既有实现与冻结条款的待确认关系
+
+本次仅纠正源码事实及适用范围，不变更上述冻结合同，不宣布整个架构合规。
+
+- 第 7.2 节“不得自动按相同数字匹配”原条款保留；[DroneLogicalId.h](../Shared/DroneIdentity/DroneLogicalId.h) 的 TryDroneLogicalIdToRouteSlot 当前默认数字匹配，且 [Coordinator](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSRouteWorkflowCoordinator.inl) 的 CaptureAutoStartSnapshot 优先采用确认 NPZ Mapping 的 Entries。不能把实际默认规则描述为 DroneID 与 RouteSlot 是同一身份；条款与实现的关系待验证/总控确认。
+- 第 5 节为 Visualization 热路径合同。[FlightControl::StartHoverMission](../ConsoleGCS/FlightControl.cpp) 另有每活动 Session 工作线程；本文未据此扩大或豁免既有线程约束，后端适用关系待确认。
+- [GCSSimulationSubsystem.cpp](../UnrealGCS/Source/DroneShowPlatform1/Private/GCSSimulationSubsystem.cpp) 在 UE 内使用 MAVLink dialect 与本机模拟端点；用途为本机模拟，不据此改写生产通信 Authority。其与第 2/6/9 节边界的适用关系待确认。
+- 当前核对基线、验证结果、证据缺口及下一阶段仅维护在 [Development_Status_CN.md](Development_Status_CN.md)。

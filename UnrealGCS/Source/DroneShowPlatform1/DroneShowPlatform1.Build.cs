@@ -101,6 +101,7 @@ public class DroneShowPlatform1 : ModuleRules
 			"CesiumRuntime",
 			"EngineSettings", "ImageWrapper"
 		});
+		if (Target.bBuildEditor) PrivateDependencyModuleNames.AddRange(new string[] { "UnrealEd", "UMGEditor", "Kismet" });
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
 			PublicSystemLibraries.AddRange(new string[]

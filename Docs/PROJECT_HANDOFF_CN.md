@@ -1,5 +1,39 @@
 # DroneGCS 项目交接速览
 
+Status: CURRENT SUPPORTING
+Last Updated: 2026-09-11
+
+本文件保留接手导航与操作边界。**当前源码基线、实现状态、验证证据、待办和开发顺序只在 [Development_Status_CN.md](Development_Status_CN.md) 维护。** 本文件历史记录中的基线与暂停点不代表当前工作区。
+
+## 阅读顺序
+
+1. [唯一当前状态入口](Development_Status_CN.md)：先核对源码与证据适用范围。
+2. [Architecture Freeze](Architecture_Freeze_CN.md)：长期冻结合同及待确认冲突。
+3. [代码架构](Code_Architecture_CN.md)：模块、调用链和开发入口。
+4. [文档索引](README_CN.md)、[仿真使用](Local_Simulation_CN.md)、[测试方法](Test_Architecture_CN.md)。
+5. [架构治理历史](Architecture/BASELINE.md)、[阶段 C](Architecture/STAGE_C_REPORT.md) 与独立历史报告只作当时证据。
+
+## 接手边界
+
+- UE 负责显示和操作工作流；Console 负责生产 MAVLink、网络、Session、真实命令和上传；两者经 DSP-GCS localhost UDP 通信。
+- Fleet 身份为 Remote IP + UDP Source Port；SYSID 不是 Fleet 唯一身份。RouteSlot 是独立航线槽位，默认映射和确认 NPZ Mapping 的合同见代码架构。
+- Fleet 详情选择与命令选择分离；不以 Niagara ID、当前页、控件标签或默认编号替代业务 Authority。
+- 复用既有 Fleet、RouteAssignment、冻结事务、Mission segment plan、endpoint/shared socket；不恢复协议 fallback。
+- 命令 ACK、写入 ACK、Mission Ready、任务执行与物理动作分别取证；旧安装启动不能替代当前功能验收。
+- 正式交付入口是联合 Launcher；完整控制后端的退出条件遵守 [交付使用说明](../Tools/Launcher/README.md)。本机仿真 Session 清理不等于生产后端退出。
+- 仓库中的硬件 Harness、诊断/测试命令仅为文档方法，不自动授权执行。本次 P0 只修改限定 Markdown，交付后等待总控审查。
+
+当前进度和后续顺序不在此复制，统一见状态入口。
+
+## 历史记录（原始结论保留）
+
+以下原文仅适用于当时基线；“当前”“本轮”、旧参数、PASS 和“未 commit/push”等不是本轮工作区或验收结论。当前状态统一见 [Development_Status_CN.md](Development_Status_CN.md) 的状态矩阵。历史命令不构成本轮执行授权。
+
+<details>
+<summary>展开 P0 开工前原文（完整保留，不作为当前状态入口）</summary>
+
+# DroneGCS 项目交接速览
+
 2026-09-11 最新增量：[本机无人机模拟](Local_Simulation_CN.md)。`UGCSSimulationSubsystem` 绑定现有五个控件并在后台发送静态遥测。启动 `ConsoleGCS/StartLocalSimulation.cmd` 使用 loopback 专用配置，再在 UE 启动仿真。UI 由用户制作，不通过代码生成。该阶段不模拟飞行或上传应答。
 
 Status: CURRENT SUPPORTING
@@ -246,3 +280,5 @@ C++ 在蓝图初始化后，沿 North x East 得到的地图上方向，将低�
 用户已完成并保存 RightPanel UI；C++ 自动绑定导入地图、查看整张地图、透明度、宽度、东/北偏移、旋转及重置控件，无需另连蓝图。新增 GCSMapSubsystem 与 M_GCS_RuntimeMap 专用双面材质。原始遥测、NPZ、上传路径保持不变，底图调整独立于机群显示基准。本地设置在 Saved/MapSettings；导入图片需保留原路径。当前是本地贴图功能，在线地图源仍待后续实现。
 
 Development Editor 编译成功；全套 251 项测试通过（229 成功、22 带警告、0 失败）。报告 BuildLogs/MapControls/index.json。用户已关闭 UE；重启后验收实际鼠标、透明度及地图背面画面，NullRHI 不验证像素。
+
+</details>

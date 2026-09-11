@@ -139,6 +139,16 @@ void AGCSInvisiblePawn::PanOrbit(float RightDelta, float UpDelta)
 
 void AGCSInvisiblePawn::UpdateOrbitCamera()
 {
+ OrbitCamera->OrthoWidth=2.f*Distance*FMath::Tan(FMath::DegreesToRadians(OrbitCamera->FieldOfView*.5f));
+ if(IsOrthographicView())
+ {
+  // The orbit component can be far from its pawn root; automatic target-plane
+  // correction would clip a Cesium-local fleet. Clip relative to the actual camera.
+  OrbitCamera->SetAutoCalculateOrthoPlanes(false);
+  OrbitCamera->SetUpdateOrthoPlanes(false);
+  OrbitCamera->SetOrthoNearClipPlane(1.f);
+  OrbitCamera->SetOrthoFarClipPlane(FMath::Max(100000.f,float(Distance*4.0)));
+ }
  const FVector Side = FVector::CrossProduct(LocalUp, LocalEast).GetSafeNormal();
  const double A = FMath::DegreesToRadians(Yaw), B = FMath::DegreesToRadians(Elevation);
  const FVector Outward = (LocalEast * FMath::Cos(A) + Side * FMath::Sin(A)) * FMath::Cos(B) + LocalUp * FMath::Sin(B);
@@ -155,6 +165,7 @@ bool AGCSInvisiblePawn::IsSceneInputAllowed() const
  if (!PC || PC->GetViewTarget() != this || PC->IsLookInputIgnored()
   || PC->IsInputKeyDown(EKeys::LeftMouseButton) || !FSlateApplication::IsInitialized() || !FApp::HasFocus()) return false;
  if (bDragging) return true; // UI hit testing only decides who owns the gesture at press.
+ if (bWorkbenchInputBlocked) return false;
  const auto* GI = GetGameInstance();
  const auto* Bridge = GI ? GI->GetSubsystem<UGCSUIBridgeSubsystem>() : nullptr;
  return Bridge && !Bridge->IsPointerOverBlockingGCSUI(FSlateApplication::Get().GetCursorPos());
@@ -204,4 +215,14 @@ void AGCSInvisiblePawn::FitMapBounds(const FBox& Bounds, FVector East, FVector U
  Distance=FMath::Max(100.0,Bounds.GetExtent().Size()*1.15/FMath::Sin(FMath::Min(Horizontal,Vertical)));
  Yaw=-45; Elevation=45; bOriginLocked=false;
  SetOrbitBasis(Bounds.GetCenter(),East,Up);
+}
+
+void AGCSInvisiblePawn::SetOrthographicView(bool bOrthographic)
+{
+ OrbitCamera->SetProjectionMode(bOrthographic?ECameraProjectionMode::Orthographic:ECameraProjectionMode::Perspective);
+ UpdateOrbitCamera();
+}
+bool AGCSInvisiblePawn::IsOrthographicView() const
+{
+ return OrbitCamera->ProjectionMode==ECameraProjectionMode::Orthographic;
 }

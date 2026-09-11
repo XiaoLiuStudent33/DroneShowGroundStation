@@ -1,5 +1,41 @@
 # DroneGCS 测试架构与证据边界
 
+Status: CURRENT SUPPORTING
+Last Updated: 2026-09-11
+
+本文件维护测试资产、方法和证据等级；**当前基线、实现、已有结果、人工/真机状态与待办统一见 [Development_Status_CN.md](Development_Status_CN.md)**。本轮 P0 不执行下述程序、构建或脚本。
+
+## 测试资产与范围
+
+| 类型 | 入口 | 可证明范围 |
+|---|---|---|
+| Production | [Console 工程](../ConsoleGCS/DroneGCS.vcxproj) / UE Module | 实际生产实现；不能依赖回归源码 |
+| Console 回归 | [ConsoleGCSTests 工程](../ConsoleGCS/ConsoleGCSTests.vcxproj) | Session/Command、Artifact/Mission、DSP、MAVFTP；按夹具区分内存与 loopback |
+| UE 自动化 | [Private/Tests](../UnrealGCS/Source/DroneShowPlatform1/Private/Tests/) | DroneGCS.* 注册项；保存资产合同、状态/坐标和生命周期，不自动覆盖像素 |
+| DSP 手工工具 | [DSPGCSAcceptance 工程](../ConsoleGCS/DSPGCSAcceptance.vcxproj) | 隔离 loopback 联合接入，不是硬件飞行证据 |
+| 联合交付 | [Launcher Smoke](../Tools/Launcher/tests/Smoke.ps1)、[Installer 构建](../Tools/Installer/BuildInstaller.ps1) | 进程、目录、配置、打包与安装产物；不代表全部业务验收 |
+| 硬件 Harness | 显式 mavftp-test / 专用 Hardware Harness | 真实写入，须独立授权和现场条件；不属于普通回归 |
+
+## 方法与判定
+
+- Console 完整入口为 ConsoleGCSTests.exe；专项包括 --mission-tests、--mission-upload-tests、--upload-job-tests、--mavftp-probe-tests、--mavftp-concurrency-tests、--drone-id-tests、--console-render-tests、--disarm-tests。具体夹具与运行配方见 [历史测试基线](Architecture/11_TEST_BASELINE.md)；执行前须核对当前配置和隔离条件，不能直接复制旧禁用 Provider 配方。
+- UE 检查逐项 success、success-with-warnings、failed、notRun 和预期测试数量，不能只看进程 exit=0。真实 NPZ fixture、Synthetic、NullRHI、人工 PIE 分别记录。
+- 仿真夹具入口为 [GCSSimulationTests.cpp](../UnrealGCS/Source/DroneShowPlatform1/Private/Tests/GCSSimulationTests.cpp)，覆盖报文、命令、飞行状态、绑定与生命周期。有限状态回归不等于飞行动力学、像素验收或 20K 联合压力测试。
+- Console endpoint/ACK 隔离使用受控 sender / fake wire；检查相同 SYSID、不同 endpoint，不能把软件 ACK 或 fake 成功升级成真机执行。
+- 新报告记录日期、完整 HEAD、已有工作树修改、命令/配置、覆盖和排除项、警告、失败与修正后结果。首轮失败不删除；未运行条目标记待验证。
+- 只读检查源码只能确认实现；历史日志只证明当时运行。没有原始报告时写“文档记载，原始证据未核实”；没有证据不推断未实现。
+- Console 独立规模、DSP wire、UE 联合操作、人工视觉、旧包异机启动、硬件上传/ACK/任务/物理动作分别取证，互不替代。
+- 历史结果在下方完整保留以追溯，不维护第二份当前测试通过清单。
+
+## 历史记录（原始结论保留）
+
+以下原文仅适用于当时基线；“当前”“本轮”、旧参数、PASS 和“未 commit/push”等不是本轮工作区或验收结论。当前状态统一见 [Development_Status_CN.md](Development_Status_CN.md) 的状态矩阵。历史命令不构成本轮执行授权。
+
+<details>
+<summary>展开 P0 开工前原文（完整保留，不作为当前状态入口）</summary>
+
+# DroneGCS 测试架构与证据边界
+
 2026-09-11 增量：`DroneGCS.UI.Simulation.LoopbackAndLifecycle` 覆盖实际 RightPanel 控件、UDP 四类遥测与独立来源端点、输入校验、重绑、停止/重启及 GameInstance 清理。UE 全套报告 `BuildLogs/Simulation/index.json` 为 252/252 通过（22 项带警告）；增强生命周期定向报告 `BuildLogs/SimulationLifecycle/index.json` 为 1/1 无警告。实际 UE 报文经 Release ConsoleGCS 验证三机上线/超时离线，日志 `BuildLogs/simulation-backend-test.log`。本轮无像素渲染、飞行响应或 20000 架性能验证。详见 [本机无人机模拟](Local_Simulation_CN.md)。
 
 Status: CURRENT SUPPORTING
@@ -269,3 +305,5 @@ C++ 在蓝图初始化后，沿 North x East 得到的地图上方向，将低�
 新增 DroneGCS.UI.Map.ControlsAndPersistence：实例化实际地图蓝图及 RightPanel，检查功能控件命名/类型与事件绑定、解绑、透明度材质参数、物理宽度和偏移、冻结场景基准、非法宽度拒绝、本地设置恢复、异步 PNG 导入及重置保留贴图。测试使用独立 Automation 临时目录，不覆盖用户地图设置。
 
 Development Editor 构建通过，完整 DroneGCS 测试 251/251 通过：229 success、22 succeededWithWarnings、0 failed。报告 BuildLogs/MapControls/index.json，日志 BuildLogs/map-controls-tests.log。NullRHI 验证逻辑和资产绑定，双面、透明度与鼠标取景像素效果仍需运行时人工验收。
+
+</details>
