@@ -1,0 +1,9 @@
+{
+  "theme": "Wing",
+  "width": 1280,
+  "height": 800,
+  "fps": 24,
+  "frames": 192,
+  "duration": 8,
+  "seamless_endpoint": true
+}

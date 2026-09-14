@@ -14,6 +14,12 @@ public:
     bool IsBusy() const { return bBusy; }
     void SignIn(FString Username, FString Password, FString Confirmation,
         TFunction<void(bool, FString)> Completion);
+    // Actions: 1 register, 2 recover password, 3 enroll recovery using existing password.
+    void ManageAccount(int32 Action,FString Username,FString Password,FString Confirmation,FString Recovery,
+        TFunction<void(bool,FString,FString)> Completion);
+    static FString ResolveAccountPath(const FString& Base,const FString& Username);
+    static bool ProcessAccountAction(const FString& Base,int32 Action,const FString& Username,const FString& Password,
+        const FString& Confirmation,const FString& Recovery,FString& Error,FString& NewRecovery);
     void EnterStation();
     static FString AccountPath();
     // Shared by the worker and isolated automation tests. Never logs credentials.
@@ -22,6 +28,7 @@ public:
 private:
 #if WITH_DEV_AUTOMATION_TESTS
     friend struct FGCSLoginSmoke;
+    friend struct FGCSLoginAccountSmoke;
     FString TestAccountPath;
 #endif
     FString StoragePath() const;

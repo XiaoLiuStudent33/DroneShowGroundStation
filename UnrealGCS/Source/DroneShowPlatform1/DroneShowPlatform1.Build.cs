@@ -18,7 +18,7 @@ public class DroneShowPlatform1 : ModuleRules
 			"EnhancedInput",
 			"UMG",
 			"Slate",
-			"SlateCore",
+			"SlateCore", "ApplicationCore",
 			"Niagara"
 		});
 
@@ -99,7 +99,7 @@ public class DroneShowPlatform1 : ModuleRules
 			"Sockets",
 			"Networking",
 			"CesiumRuntime",
-			"EngineSettings", "ImageWrapper"
+			"EngineSettings", "ImageWrapper", "MediaAssets"
 		});
 		if (Target.bBuildEditor) PrivateDependencyModuleNames.AddRange(new string[] { "UnrealEd", "UMGEditor", "Kismet" });
 		if (Target.Platform == UnrealTargetPlatform.Win64)
@@ -113,6 +113,8 @@ public class DroneShowPlatform1 : ModuleRules
 			});
 		}
 		AddEngineThirdPartyPrivateStaticDependencies(Target, "zlib");
+        foreach (string Theme in new string[] { "Saturn", "Wing", "Tide" })
+            RuntimeDependencies.Add("$(ProjectDir)/Content/Movies/Login/" + Theme + ".mp4", StagedFileType.NonUFS);
 
 		if (Target.Platform == UnrealTargetPlatform.Win64 && Target.Type == TargetType.Game)
 		{
@@ -133,7 +135,7 @@ public class DroneShowPlatform1 : ModuleRules
 		}
 
 		// Uncomment if you are using Slate UI
-		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
+		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore", "ApplicationCore" });
 		
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");

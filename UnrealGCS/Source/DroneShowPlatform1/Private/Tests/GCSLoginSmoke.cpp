@@ -36,7 +36,7 @@ struct FGCSLoginSmoke
         auto State = MakeShared<FState>();
         if (InitialWorld) State->Instance = InitialWorld->GetGameInstance();
         State->Path = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Automation"), FGuid::NewGuid().ToString() + TEXT("-smoke.dat"));
-        State->Password = FGuid::NewGuid().ToString();
+        State->Password = FGuid::NewGuid().ToString().Left(18);
         FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([State](float)
         {
             const FString ResultPath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Automation/Login-smoke-result.txt"));
@@ -72,6 +72,7 @@ struct FGCSLoginSmoke
                     It->UsernameBox->SetText(FText::FromString(TEXT("smoke-operator")));
                     It->PasswordBox->SetText(FText::FromString(State->Password));
                     if (It->ConfirmationBox) It->ConfirmationBox->SetText(FText::FromString(State->Password));
+                    It->AccountMode=0;
                     It->Submit();
                     State->Submitted = true;
                     break;

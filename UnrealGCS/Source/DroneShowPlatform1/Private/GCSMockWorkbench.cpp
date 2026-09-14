@@ -29,8 +29,8 @@ namespace
 {
 FLinearColor C(uint32 Hex)
 { return FLinearColor::FromSRGBColor(FColor((Hex>>16)&255,(Hex>>8)&255,Hex&255)); }
-const FLinearColor Ink=C(0xd6e0ec), Muted=C(0x8e9fb2), Blue=C(0x66adfa);
-const FLinearColor ChromeColor=C(0x15202d), Panel=C(0x1a2736), Edge=C(0x3a526a);
+const FLinearColor Ink=C(0xd6e0ec), Muted=C(0x8e9fb2), WorkbenchBlue=C(0x66adfa);
+const FLinearColor ChromeColor=C(0x15202d), WorkbenchPanel=C(0x1a2736), Edge=C(0x3a526a);
 
 class SMockWorkbench final : public SCompoundWidget
 {
@@ -163,11 +163,11 @@ public:
         auto Button=[&](float X,float Y,float W,float H,const FString& S,bool Active=false,bool Dim=false)
         {
             const bool Over=Hover.X>=X && Hover.X<=X+W && Hover.Y>=Y && Hover.Y<=Y+H;
-            Rect(X,Y,W,H,Active?C(0x203b57):Over?C(0x2b4158):C(0x202f40),6,Active||Over?Blue:Edge);
+            Rect(X,Y,W,H,Active?C(0x203b57):Over?C(0x2b4158):C(0x202f40),6,Active||Over?WorkbenchBlue:Edge);
             const auto Font=FCoreStyle::GetDefaultFontStyle("Regular",14);
             const auto Size=FSlateApplication::Get().GetRenderer()->GetFontMeasureService()->Measure(S,Font);
-            Text(X+(W-Size.X)*.5,Y+(H-Size.Y)*.5,S,14,Dim?Muted:Active?Blue:Ink);
-            if(Active) Line(X+6,Y+H-2,X+W-6,Y+H-2,Blue,2);
+            Text(X+(W-Size.X)*.5,Y+(H-Size.Y)*.5,S,14,Dim?Muted:Active?WorkbenchBlue:Ink);
+            if(Active) Line(X+6,Y+H-2,X+W-6,Y+H-2,WorkbenchBlue,2);
         };
         FLinearColor SceneTint=C(0x102338);SceneTint.A=.25f;Rect(0,54,View.Width,836+EH,SceneTint,0,SceneTint);
         if(ViewController.IsValid())
@@ -208,14 +208,14 @@ public:
                 const auto Positions=V->GetDronePositions(); FVector2D Point=FVector2D::ZeroVector; FDroneData Data;
                 if(Positions.IsValidIndex(I) && Model->Fleet()->GetDroneByID(Model->DetailID(),Data) && DroneGPS::IsValid(Data) && Project(Positions[I],Point))
                 {
-                    Line(Point.X-12,Point.Y-12,Point.X+12,Point.Y-12,Blue,2);Line(Point.X-12,Point.Y+12,Point.X+12,Point.Y+12,Blue,2);
-                    Line(Point.X-12,Point.Y-12,Point.X-12,Point.Y+12,Blue,2);Line(Point.X+12,Point.Y-12,Point.X+12,Point.Y+12,Blue,2);
+                    Line(Point.X-12,Point.Y-12,Point.X+12,Point.Y-12,WorkbenchBlue,2);Line(Point.X-12,Point.Y+12,Point.X+12,Point.Y+12,WorkbenchBlue,2);
+                    Line(Point.X-12,Point.Y-12,Point.X-12,Point.Y+12,WorkbenchBlue,2);Line(Point.X+12,Point.Y-12,Point.X+12,Point.Y+12,WorkbenchBlue,2);
                 }
             }
             Out.PopClip();
         }
         // Opaque chrome surrounds the live UE viewport. No scene texture is baked into UI.
-        Rect(0,0,View.Width,54,ChromeColor,0); Text(23,12,TEXT("DRONE"),20,Ink,true);Text(113,12,TEXT("GCS"),20,Blue,true);
+        Rect(0,0,View.Width,54,ChromeColor,0); Text(23,12,TEXT("DRONE"),20,Ink,true);Text(113,12,TEXT("GCS"),20,WorkbenchBlue,true);
         Line(186,16,186,38);Text(206,17,TEXT("无人机表演地面站"),17);Text(806+EW*.5f,17,TEXT("工作台"),18);
         Rect(1495+EW,22,12,12,Model->Connected()?C(0x59c875):C(0xf15e65),6,Model->Connected()?C(0x59c875):C(0xf15e65));Text(1514+EW,17,Model->Connected()?TEXT("已连接"):TEXT("未连接"),14);Line(1590+EW,16,1590+EW,38);Rect(1624+EW,19,18,18,ChromeColor,9,Muted);Rect(1630+EW,25,6,6,ChromeColor,3,Muted);for(int I=0;I<8;++I){float A=I*PI/4;Line(1633+EW+FMath::Cos(A)*10,28+FMath::Sin(A)*10,1633+EW+FMath::Cos(A)*14,28+FMath::Sin(A)*14,Muted,2);}
         Rect(0,890+EH,View.Width,50,ChromeColor,0);Rect(23,910+EH,12,12,Model->Connected()?C(0x59c875):C(0xf15e65),6,Model->Connected()?C(0x59c875):C(0xf15e65));Text(48,903+EH,Model->LinkText(),13,Muted);
@@ -224,7 +224,7 @@ public:
         const float LX=6+L, RX=1306+R+EW;
         // Clip sliding drawer bodies; handles remain accessible at either screen edge.
         Out.PushClip(FSlateClippingZone(D.ToPaintGeometry(FVector2D(View.Width,834+EH),FSlateLayoutTransform(FVector2D(0,55)))));
-        Rect(LX,57,355,830+EH,Panel,10);
+        Rect(LX,57,355,830+EH,WorkbenchPanel,10);
         Rect(LX+10,69,335,46,ChromeColor,7);
         const TCHAR* LeftNames[]={TEXT("机群"),TEXT("日志"),TEXT("筛选")};
         for(int I=0;I<3;++I) Button(LX+10+I*112,69,111,46,LeftNames[I],LeftTab==I);
@@ -242,7 +242,7 @@ public:
             Text(LX+14,429,TEXT("筛选条件"),15,Ink,true);Rect(LX+14,465,328,47,ChromeColor);Text(LX+28,478,TEXT("RTK 定位              等于     固定解"),13,Muted);
             Text(LX+14,850+EH,TEXT("筛选控件仅作样式展示"),12,Muted);
         }
-        Rect(RX,57,360,830+EH,Panel,10);Rect(RX+14,69,332,46,ChromeColor);
+        Rect(RX,57,360,830+EH,WorkbenchPanel,10);Rect(RX+14,69,332,46,ChromeColor);
         const TCHAR* RightNames[]={TEXT("视图"),TEXT("控制"),TEXT("参数")};
         for(int I=0;I<3;++I)Button(RX+14+I*111,69,110,46,RightNames[I],RightTab==I);
         if(RightTab==1)
@@ -283,7 +283,7 @@ public:
         Out.PopClip();
         Button(LX+355,408+EH*.5f,23,56,bLeft?TEXT("‹"):TEXT("›"));Button(RX-23,408+EH*.5f,23,56,bRight?TEXT("›"):TEXT("‹"));
         const float ToolX=381+L;
-        Button(ToolX,69,98,46,TEXT("    定位"));Rect(ToolX+19,84,14,14,ChromeColor,7,Blue);Line(ToolX+26,80,ToolX+26,102,Blue);Line(ToolX+15,91,ToolX+37,91,Blue);Button(ToolX+113,69,100,46,TEXT("▶  播放"),bPlayback);
+        Button(ToolX,69,98,46,TEXT("    定位"));Rect(ToolX+19,84,14,14,ChromeColor,7,WorkbenchBlue);Line(ToolX+26,80,ToolX+26,102,WorkbenchBlue);Line(ToolX+15,91,ToolX+37,91,WorkbenchBlue);Button(ToolX+113,69,100,46,TEXT("▶  播放"),bPlayback);
         const float MidLeft=381+L,MidRight=1288+R+EW,MidWidth=MidRight-MidLeft;
         // Screen-space world orientation, independent of map scale and camera distance.
         // Read the actual view rather than control rotation: the orbit camera has its own rotation.
@@ -328,12 +328,12 @@ public:
         if(P>0)
         {
             const float Y=888+EH-P*112;
-            Rect(MidLeft,Y,MidWidth,112,Panel);Text(MidLeft+18,Y+12,TEXT("轨迹播放预览"),14,Ink,true);
+            Rect(MidLeft,Y,MidWidth,112,WorkbenchPanel);Text(MidLeft+18,Y+12,TEXT("轨迹播放预览"),14,Ink,true);
             Button(MidLeft+18,Y+43,42,31,TEXT("▶"));Button(MidLeft+68,Y+43,42,31,TEXT("Ⅱ"));Text(MidLeft+128,Y+49,TEXT("00:00 / --:--"),13,Muted);
-            Line(MidLeft+18,Y+91,MidRight-18,Y+91,Edge,3);Rect(MidLeft+18,Y+86,10,10,Blue,5,Blue);
+            Line(MidLeft+18,Y+91,MidRight-18,Y+91,Edge,3);Rect(MidLeft+18,Y+86,10,10,WorkbenchBlue,5,WorkbenchBlue);
         }
         Button((MidLeft+MidRight)*.5-83,862+EH-P*112,166,28,bPlayback?TEXT("v  收起播放"):TEXT("^  展开播放"));
-        if(!Notice.IsEmpty()) {Rect(MidLeft+15,808+EH-P*112,FMath::Min(MidWidth-30,530.f),37,ChromeColor);Text(MidLeft+29,816+EH-P*112,Notice,12,Blue);}
+        if(!Notice.IsEmpty()) {Rect(MidLeft+15,808+EH-P*112,FMath::Min(MidWidth-30,530.f),37,ChromeColor);Text(MidLeft+29,816+EH-P*112,Notice,12,WorkbenchBlue);}
         return SCompoundWidget::OnPaint(Args,G,Clip,Out,Layer+4,Style,Enabled);
     }
 private:
